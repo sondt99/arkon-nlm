@@ -16,7 +16,7 @@ x-backend: &backend
       condition: service_healthy
   volumes:
     - ./temp_uploads:/app/temp_uploads
-    - F:/arkon-data/notebooklm-session:/data/notebooklm-session
+    - ${DATA_PATH:-./data}/notebooklm-session:/data/notebooklm-session
 
 services:
   # ── Infrastructure ────────────────────────────────────────────
@@ -30,7 +30,7 @@ services:
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-arkon_secret}
       POSTGRES_DB: ${POSTGRES_DB:-arkon}
     volumes:
-      - F:/arkon-data/postgres:/var/lib/postgresql/data
+      - ${DATA_PATH:-./data}/postgres:/var/lib/postgresql/data
     # ports:
     #   - "5432:5432"
     healthcheck:
@@ -45,7 +45,7 @@ services:
     restart: always
     command: redis-server --save 60 1 --loglevel warning --requirepass ${REDIS_PASSWORD:-arkon_secret}
     volumes:
-      - F:/arkon-data/redis:/data
+      - ${DATA_PATH:-./data}/redis:/data
     # ports:
     #   - "6379:6379"
     healthcheck:
@@ -63,7 +63,7 @@ services:
       MINIO_ROOT_USER: ${MINIO_ACCESS_KEY:-minioadmin}
       MINIO_ROOT_PASSWORD: ${MINIO_SECRET_KEY:-minioadmin123}
     volumes:
-      - F:/arkon-data/minio:/data
+      - ${DATA_PATH:-./data}/minio:/data
     ports:
       - "9002:9000"
       - "9003:9001"
@@ -123,4 +123,8 @@ services:
       api:
         condition: service_healthy
 
-# Data stored on F:\arkon-data\ (bind mounts — no named volumes needed)
+# Data stored under DATA_PATH (default: ./data relative to this file).
+# Override in .env.docker:
+#   Windows : DATA_PATH=F:/arkon-data
+#   Linux   : DATA_PATH=/opt/arkon-data
+#   Default : DATA_PATH=./data  (works everywhere, no config needed)

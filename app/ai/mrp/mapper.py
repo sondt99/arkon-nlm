@@ -29,8 +29,8 @@ from app.utils.progress import ProgressTracker
 # Constants
 # ---------------------------------------------------------------------------
 
-CHUNK_TARGET_CHARS = 5_000
-OVERLAP_CHARS = 300
+CHUNK_TARGET_CHARS = 20_000
+OVERLAP_CHARS = 1_000
 MAX_MAP_CONCURRENCY = 6
 EXTRACT_TIMEOUT = 120  # seconds per extraction call
 OVERLAP_SEPARATOR = "[…context from previous section…]\n"
@@ -60,9 +60,9 @@ class DocumentChunk:
 def classify_strategy(full_text: str, outline_json: Optional[list]) -> str:
     """Return 'single_pass', 'standard', or 'hierarchical' based on text length."""
     n = len(full_text)
-    if n < 8_000:
+    if n < 30_000:
         return "single_pass"
-    elif n <= 50_000:
+    elif n <= 200_000:
         return "standard"
     else:
         return "hierarchical"

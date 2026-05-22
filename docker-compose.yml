@@ -16,6 +16,7 @@ x-backend: &backend
       condition: service_healthy
   volumes:
     - ./temp_uploads:/app/temp_uploads
+    - F:/arkon-data/notebooklm-session:/data/notebooklm-session
 
 services:
   # ── Infrastructure ────────────────────────────────────────────
@@ -29,7 +30,7 @@ services:
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-arkon_secret}
       POSTGRES_DB: ${POSTGRES_DB:-arkon}
     volumes:
-      - postgres_data:/var/lib/postgresql/data
+      - F:/arkon-data/postgres:/var/lib/postgresql/data
     # ports:
     #   - "5432:5432"
     healthcheck:
@@ -44,7 +45,7 @@ services:
     restart: always
     command: redis-server --save 60 1 --loglevel warning --requirepass ${REDIS_PASSWORD:-arkon_secret}
     volumes:
-      - redis_data:/data
+      - F:/arkon-data/redis:/data
     # ports:
     #   - "6379:6379"
     healthcheck:
@@ -62,7 +63,7 @@ services:
       MINIO_ROOT_USER: ${MINIO_ACCESS_KEY:-minioadmin}
       MINIO_ROOT_PASSWORD: ${MINIO_SECRET_KEY:-minioadmin123}
     volumes:
-      - minio_data:/data
+      - F:/arkon-data/minio:/data
     ports:
       - "9002:9000"
       - "9003:9001"
@@ -109,20 +110,17 @@ services:
       context: ./frontend
       dockerfile: Dockerfile
       args:
-        NEXT_PUBLIC_API_URL: ${NEXT_PUBLIC_API_URL:-http://localhost:5055}
+        NEXT_PUBLIC_API_URL: ${NEXT_PUBLIC_API_URL}
+        INTERNAL_API_URL: http://api:5055
     image: arkon-frontend:latest
     container_name: arkon_frontend
     restart: always
     ports:
       - "3119:3000"
     environment:
-      - NEXT_PUBLIC_API_URL=${NEXT_PUBLIC_API_URL:-http://localhost:5055}
       - INTERNAL_API_URL=http://api:5055
     depends_on:
       api:
         condition: service_healthy
 
-volumes:
-  postgres_data:
-  redis_data:
-  minio_data:
+# Data stored on F:\arkon-data\ (bind mounts — no named volumes needed)

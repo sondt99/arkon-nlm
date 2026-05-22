@@ -454,6 +454,224 @@ async def delete_skill_task(ctx: dict, skill_id: str):
             raise
 
 
+async def notebooklm_generate_task(ctx: dict, artifact_db_id: str):
+    """
+    arq task: call NotebookLM to generate an artifact, poll until done, update DB.
+
+    Triggered by POST /api/notebooklm/notebooks/{id}/artifacts.
+    On completion sets NotebookLMArtifact.status="completed" and stores artifact_id + download_url.
+    """
+    import uuid as _uuid
+
+    from app.database import async_session_factory
+    from app.database.models import NotebookLMArtifact, NotebookLMNotebook
+
+    art_id = _uuid.UUID(artifact_db_id)
+
+    async with async_session_factory() as session:
+        artifact = await session.get(NotebookLMArtifact, art_id)
+        if not artifact:
+            logger.warning(f"NLM generate: artifact {artifact_db_id} not found")
+            return
+
+        notebook = await session.get(NotebookLMNotebook, artifact.notebook_ref_id)
+        if not notebook:
+            logger.warning(f"NLM generate: notebook not found for artifact {artifact_db_id}")
+            artifact.status = "failed"
+            artifact.error_message = "Notebook record not found"
+            await session.commit()
+            return
+
+        notebook_nlm_id = notebook.notebook_id
+        artifact_type = artifact.artifact_type
+        report_format = artifact.report_format
+
+        try:
+            from notebooklm import NotebookLMClient
+            from notebooklm.rpc import ReportFormat
+
+            from app.config import settings
+            from pathlib import Path
+
+            storage_path = Path(settings.notebooklm_storage_path) if settings.notebooklm_storage_path else None
+            async with await NotebookLMClient.from_storage(path=storage_path) as client:
+                # Dispatch generation by type
+                if artifact_type == "audio":
+                    gen = await client.artifacts.generate_audio(notebook_nlm_id)
+                elif artifact_type == "video":
+                    gen = await client.artifacts.generate_video(notebook_nlm_id)
+                elif artifact_type == "report":
+                    fmt_map = {
+                        "briefing_doc": ReportFormat.BRIEFING_DOC,
+                        "study_guide": ReportFormat.STUDY_GUIDE,
+                        "blog_post": ReportFormat.BLOG_POST,
+                    }
+                    fmt = fmt_map.get(report_format or "", ReportFormat.BRIEFING_DOC)
+                    gen = await client.artifacts.generate_report(notebook_nlm_id, report_format=fmt)
+                elif artifact_type == "quiz":
+                    gen = await client.artifacts.generate_quiz(notebook_nlm_id)
+                elif artifact_type == "flashcards":
+                    gen = await client.artifacts.generate_flashcards(notebook_nlm_id)
+                elif artifact_type == "slide_deck":
+                    gen = await client.artifacts.generate_slide_deck(notebook_nlm_id)
+                elif artifact_type == "infographic":
+                    gen = await client.artifacts.generate_infographic(notebook_nlm_id)
+                elif artifact_type == "data_table":
+                    gen = await client.artifacts.generate_data_table(notebook_nlm_id)
+                else:
+                    raise ValueError(f"Unknown artifact type: {artifact_type}")
+
+                # Persist the task_id immediately
+                artifact.task_id = gen.task_id
+                artifact.status = "processing"
+                await session.commit()
+
+                # Poll until done (up to 1 hour)
+                final = await client.artifacts.wait_for_completion(
+                    notebook_nlm_id, gen.task_id, timeout=3600.0, poll_interval=10.0
+                )
+
+                if final.is_complete:
+                    artifact.status = "completed"
+                    artifact.artifact_id = final.task_id  # stable artifact ID after completion
+                    artifact.download_url = final.url
+                else:
+                    artifact.status = "failed"
+                    artifact.error_message = final.error or "Generation failed"
+
+                await session.commit()
+                logger.success(f"NLM artifact {artifact_db_id} generation {artifact.status}")
+
+        except Exception as e:
+            logger.error(f"NLM generate task failed for {artifact_db_id}: {e}")
+            async with async_session_factory() as err_session:
+                art = await err_session.get(NotebookLMArtifact, art_id)
+                if art:
+                    art.status = "failed"
+                    art.error_message = str(e)[:500]
+                    await err_session.commit()
+            raise
+
+
+async def notebooklm_ingest_artifact_task(ctx: dict, artifact_db_id: str):
+    """
+    arq task: extract text from a completed NLM artifact and ingest it into Arkon wiki.
+
+    Creates a new Source record and enqueues the MRP pipeline.
+    For binary artifacts (audio, video), downloads to MinIO and creates a file source.
+    """
+    import uuid as _uuid
+
+    from app.database import async_session_factory
+    from app.database.models import NotebookLMArtifact, NotebookLMNotebook, Source
+
+    art_id = _uuid.UUID(artifact_db_id)
+
+    async with async_session_factory() as session:
+        artifact = await session.get(NotebookLMArtifact, art_id)
+        if not artifact:
+            logger.warning(f"NLM ingest: artifact {artifact_db_id} not found")
+            return
+
+        notebook = await session.get(NotebookLMNotebook, artifact.notebook_ref_id)
+        if not notebook:
+            return
+
+        notebook_nlm_id = notebook.notebook_id
+        artifact_nlm_id = artifact.artifact_id
+        artifact_type = artifact.artifact_type
+
+        if not artifact_nlm_id:
+            logger.warning(f"NLM ingest: artifact {artifact_db_id} has no artifact_id")
+            return
+
+        title = artifact.title or f"{artifact_type.replace('_', ' ').title()} — {notebook.title}"
+
+        try:
+            from app.services.notebooklm_service import (
+                BINARY_ARTIFACT_TYPES,
+                TEXT_ARTIFACT_TYPES,
+                ARTIFACT_EXT,
+                ARTIFACT_MIME,
+                get_artifact_bytes,
+                get_artifact_text,
+            )
+
+            if artifact_type in TEXT_ARTIFACT_TYPES:
+                # --- Text artifact: create Source with full_text, skip file step ---
+                text = await get_artifact_text(
+                    notebook_nlm_id, artifact_nlm_id, artifact_type, artifact.report_format
+                )
+                if not text:
+                    logger.warning(f"NLM ingest: could not extract text for {artifact_db_id}")
+                    return
+
+                source = Source(
+                    title=title,
+                    source_type="text",
+                    full_text=text,
+                    status="processing",
+                    progress=55,
+                    progress_message="Queuing wiki compilation...",
+                    scope_type=notebook.source.scope_type if notebook.source else "global",
+                    scope_id=notebook.source.scope_id if notebook.source else None,
+                    knowledge_type_id=notebook.source.knowledge_type_id if notebook.source else None,
+                    contributed_by_employee_id=notebook.created_by_employee_id,
+                )
+                session.add(source)
+                await session.flush()
+
+                artifact.ingest_source_id = source.id
+                await session.commit()
+
+                pool = await get_arq_pool()
+                await pool.enqueue_job("ingest_map_reduce_task", str(source.id))
+                logger.success(f"NLM ingest: text source {source.id} queued for MRP")
+
+            elif artifact_type in BINARY_ARTIFACT_TYPES:
+                # --- Binary artifact: download → MinIO → file source ---
+                from app.services.storage_service import storage_service
+
+                data = await get_artifact_bytes(notebook_nlm_id, artifact_nlm_id, artifact_type)
+                if not data:
+                    logger.warning(f"NLM ingest: could not download binary artifact {artifact_db_id}")
+                    return
+
+                ext = ARTIFACT_EXT.get(artifact_type, "bin")
+                mime = ARTIFACT_MIME.get(artifact_type, "application/octet-stream")
+                file_name = f"{title}.{ext}".replace("/", "-")
+                minio_key = f"notebooklm/{artifact_db_id}/{file_name}"
+
+                storage_service.upload_file(minio_key, data, mime)
+                artifact.minio_key = minio_key
+
+                source = Source(
+                    title=title,
+                    source_type="file",
+                    file_name=file_name,
+                    minio_key=minio_key,
+                    file_size=len(data),
+                    status="processing",
+                    progress=0,
+                    scope_type=notebook.source.scope_type if notebook.source else "global",
+                    scope_id=notebook.source.scope_id if notebook.source else None,
+                    contributed_by_employee_id=notebook.created_by_employee_id,
+                )
+                session.add(source)
+                await session.flush()
+
+                artifact.ingest_source_id = source.id
+                await session.commit()
+
+                pool = await get_arq_pool()
+                await pool.enqueue_job("ingest_file_task", str(source.id))
+                logger.success(f"NLM ingest: binary source {source.id} queued for file ingestion")
+
+        except Exception as e:
+            logger.error(f"NLM ingest task failed for {artifact_db_id}: {e}")
+            raise
+
+
 async def cleanup_temp_uploads_cron(ctx: dict):
     """
     Cronjob: Quét và dọn các file rác trong temp_uploads do server crash để lại (cũ hơn 1 giờ).
@@ -476,6 +694,28 @@ async def cleanup_temp_uploads_cron(ctx: dict):
                     logger.info(f"Cronjob: Cleaned up orphaned temp file {filename}")
                 except Exception as e:
                     logger.debug(f"Cronjob: Failed to clean {filename}: {e}")
+
+
+async def notebooklm_refresh_session_cron(ctx: dict):
+    """Cron: refresh NotebookLM session cookies every 30 minutes to keep the session alive."""
+    from app.services.notebooklm_service import _storage_path
+
+    storage = _storage_path()
+    if storage is None:
+        return
+
+    state_file = storage / "storage_state.json"
+    if not state_file.exists():
+        logger.debug("NLM refresh cron: no session file, skipping")
+        return
+
+    try:
+        from notebooklm import NotebookLMClient
+        async with await NotebookLMClient.from_storage(path=state_file) as client:
+            await client.refresh_auth()
+        logger.info("NLM session refreshed successfully")
+    except Exception as e:
+        logger.warning(f"NLM session refresh failed: {e}")
 
 
 # ---------------------------------------------------------------------------
@@ -625,7 +865,7 @@ async def reembed_all_pages_task(ctx: dict, job_id: str) -> None:
 # MRP arq tasks
 # ---------------------------------------------------------------------------
 
-async def ingest_map_reduce_task(ctx: dict, source_id: str):
+async def ingest_map_reduce_task(ctx: dict, source_id: str, auto_approve: bool = False):
     """
     arq task: Phase 0-2 of MRP pipeline (Triage + MAP + REDUCE).
 
@@ -675,6 +915,7 @@ async def ingest_map_reduce_task(ctx: dict, source_id: str):
                 kt_slug=kt_slug,
                 kt_name=kt_name,
                 kt_desc=kt_desc,
+                auto_approve=auto_approve,
             )
 
             if result.get("status") == "plan_ready":
@@ -887,6 +1128,8 @@ class WorkerSettings:
         ingest_map_reduce_task,
         ingest_refine_task,
         reembed_all_pages_task,
+        arq_func(notebooklm_generate_task, timeout=3600),
+        notebooklm_ingest_artifact_task,
     ]
     redis_settings = _get_redis_settings()
     max_jobs = settings.worker_max_jobs
@@ -894,6 +1137,9 @@ class WorkerSettings:
     max_tries = 3
     retry_delay = 10
     health_check_interval = 30
+    cron_jobs = [
+        cron(notebooklm_refresh_session_cron, minute={0, 30}),
+    ]
 
     @staticmethod
     async def on_startup(ctx: dict):

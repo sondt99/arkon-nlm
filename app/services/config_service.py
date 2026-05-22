@@ -29,7 +29,9 @@ def _is_sensitive(key: str) -> bool:
     """A key is sensitive if it stores raw credentials/API keys."""
     return (
         key in {"embedding_api_key", "llm_api_key", "vision_api_key"}
-        or key.startswith("embedding_api_key__")  # per-provider keys
+        or key.startswith("embedding_api_key__")
+        or key.startswith("llm_api_key__")
+        or key.startswith("vision_api_key__")
     )
 
 
@@ -57,19 +59,38 @@ ALL_CONFIG_KEYS = [
     ACTIVE_EMBEDDING_MODEL_KEY,  # canonical spec_id, e.g. "openai/text-embedding-3-small"
     "embedding_api_key__google",
     "embedding_api_key__openai",
+    "embedding_api_key__anthropic",
+    "embedding_api_key__ollama",
+    "embedding_api_key__ninerouter",
     "embedding_base_url",        # optional, custom endpoint (Ollama, Azure, proxy)
 
     # --- LLM provider (for summarization, webhook gateway) ---
-    "llm_provider",             # "google" | "openai" | "anthropic" | "ollama"
-    "llm_model_id",             # e.g. "gpt-4o-mini", "claude-sonnet-4-20250514"
-    "llm_api_key",              # Provider API key
-    "llm_base_url",             # Custom endpoint
+    "llm_provider",              # "google" | "openai" | "anthropic" | "ollama" | "ninerouter"
+    "llm_model_id",              # e.g. "gpt-4o-mini", "claude-sonnet-4-20250514"
+    "llm_api_key",               # Legacy single key (kept for backwards compat)
+    "llm_api_key__google",
+    "llm_api_key__openai",
+    "llm_api_key__anthropic",
+    "llm_api_key__ollama",
+    "llm_api_key__ninerouter",
+    "llm_base_url",              # Custom endpoint
 
     # --- Vision provider (for image analysis during ingestion) ---
-    "vision_provider",          # "google" | "openai" | None
-    "vision_model_id",          # e.g. "gemini-2.0-flash", "gpt-4o"
-    "vision_api_key",           # Provider API key (or empty = same as embedding)
-    "vision_base_url",          # Custom endpoint
+    "vision_provider",           # "google" | "openai" | "ninerouter"
+    "vision_model_id",           # e.g. "gemini-2.0-flash", "gpt-4o"
+    "vision_api_key",            # Legacy single key (kept for backwards compat)
+    "vision_api_key__google",
+    "vision_api_key__openai",
+    "vision_api_key__anthropic",
+    "vision_api_key__ollama",
+    "vision_api_key__ninerouter",
+    "vision_base_url",           # Custom endpoint
+
+    # --- Custom embedding spec (set when user switches to a non-catalog model) ---
+    "embedding_custom_spec_id",
+    "embedding_custom_model_id",
+    "embedding_custom_dimension",
+    "embedding_custom_provider",
 
     # --- System ---
     "session_timeout_minutes",

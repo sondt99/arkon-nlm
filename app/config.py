@@ -67,6 +67,16 @@ class Settings(BaseSettings):
         description="If True, compilation plans are auto-approved without human review",
     )
 
+    # --- NotebookLM Integration ---
+    notebooklm_storage_path: str = Field(
+        default="",
+        description=(
+            "Path to the notebooklm-py session storage directory "
+            "(contains cookies/config). Defaults to OS default (~/.config/notebooklm or %%APPDATA%%\\notebooklm). "
+            "Set to an absolute path when running in Docker so sessions persist across restarts."
+        ),
+    )
+
     model_config = {"env_file": ".env", "env_file_encoding": "utf-8", "extra": "ignore"}
 
     @property

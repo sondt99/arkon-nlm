@@ -80,6 +80,38 @@ EMBEDDING_CATALOG: dict[str, EmbeddingModelSpec] = {
         cost_per_1m_tokens=0.13,
         notes="Highest quality OpenAI embedding. ~6.5x cost of 3-small.",
     ),
+    # --- Ollama (local) ---
+    "ollama/nomic-embed-text": EmbeddingModelSpec(
+        id="ollama/nomic-embed-text",
+        provider="ollama",
+        model_id="nomic-embed-text",
+        dimension=768,
+        max_input_tokens=8192,
+        label="Ollama — nomic-embed-text (768d, local)",
+        cost_per_1m_tokens=0.0,
+        notes="Local model via Ollama. Set Base URL = http://host.docker.internal:11434/v1",
+    ),
+    # --- 9Router (OpenAI-compatible proxy) ---
+    "ninerouter/text-embedding-3-small": EmbeddingModelSpec(
+        id="ninerouter/text-embedding-3-small",
+        provider="ninerouter",
+        model_id="openai/text-embedding-3-small",
+        dimension=1536,
+        max_input_tokens=8191,
+        label="9Router → text-embedding-3-small (1536d)",
+        cost_per_1m_tokens=None,
+        notes="Via 9Router proxy. Set Base URL to your 9Router endpoint.",
+    ),
+    "ninerouter/text-embedding-3-large": EmbeddingModelSpec(
+        id="ninerouter/text-embedding-3-large",
+        provider="ninerouter",
+        model_id="openai/text-embedding-3-large",
+        dimension=3072,
+        max_input_tokens=8191,
+        label="9Router → text-embedding-3-large (3072d)",
+        cost_per_1m_tokens=None,
+        notes="Via 9Router proxy. Set Base URL to your 9Router endpoint.",
+    ),
 }
 
 

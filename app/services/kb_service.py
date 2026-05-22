@@ -13,6 +13,7 @@ import uuid
 from typing import Optional
 
 from loguru import logger
+from sqlalchemy import delete
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.ai.registry import ProviderRegistry
@@ -92,6 +93,12 @@ async def ingest_source(
                         )
                     except Exception as e:
                         logger.warning(f"Failed to analyze image {img.minio_key}: {e}")
+
+            # Clear stale rows from any previous ingest attempt before inserting.
+            await session.execute(
+                delete(SourceImage).where(SourceImage.source_id == source_id)
+            )
+            await session.flush()
 
             # Persist source_images rows so wiki content_md can reference by uuid.
             for img in images:
@@ -209,6 +216,11 @@ def _inline_image_markers(pages_data: list[dict], images: list[ImageInfo]) -> No
         page["content"] = (page.get("content") or "") + f"\n\n{joined}\n"
 
 
+def _clean_text(text: str) -> str:
+    """Strip characters PostgreSQL UTF-8 cannot store (null bytes, lone surrogates)."""
+    return (text or "").replace("\x00", "")
+
+
 async def _extract_text_from_file(file_data: bytes, file_name: str) -> list[dict]:
     """Extract text from a binary file, returning per-page records."""
     ext = file_name.rsplit(".", 1)[-1].lower() if "." in file_name else ""
@@ -218,8 +230,23 @@ async def _extract_text_from_file(file_data: bytes, file_name: str) -> list[dict
         import fitz
         doc = fitz.open(stream=file_data, filetype="pdf")
         for i, page in enumerate(doc):  # type: ignore[arg-type]
-            pages_data.append({"content": (page.get_text() or "").strip(), "page_number": i + 1})
+            pages_data.append({"content": _clean_text(page.get_text() or "").strip(), "page_number": i + 1})
         doc.close()
+
+        # If no text extracted (image-based PDF), fall back to Tesseract OCR
+        if not any(p.get("content") for p in pages_data):
+            try:
+                ocr_pages: list[dict] = []
+                doc = fitz.open(stream=file_data, filetype="pdf")
+                for i, page in enumerate(doc):  # type: ignore[arg-type]
+                    tp = page.get_textpage_ocr(flags=0, language="vie+eng", dpi=150, full=True)
+                    text = _clean_text(page.get_text(textpage=tp) or "").strip()
+                    ocr_pages.append({"content": text, "page_number": i + 1})
+                doc.close()
+                pages_data = ocr_pages
+            except Exception as ocr_err:
+                logger.warning(f"PDF OCR fallback failed: {ocr_err}")
+
         return pages_data
 
     if ext == "docx":
@@ -228,12 +255,12 @@ async def _extract_text_from_file(file_data: bytes, file_name: str) -> list[dict
         import mammoth
         try:
             result = mammoth.extract_raw_text(io.BytesIO(file_data))
-            return [{"content": result.value or "", "page_number": 1}]
+            return [{"content": _clean_text(result.value or ""), "page_number": 1}]
         except Exception:
             pass  # fall through to content_core
 
     if ext in ("txt", "md", "csv"):
-        return [{"content": file_data.decode("utf-8", errors="ignore"), "page_number": 1}]
+        return [{"content": _clean_text(file_data.decode("utf-8", errors="ignore")), "page_number": 1}]
 
     # Other formats (doc, xlsx, pptx, ...): write to a temp file and let
     # content-core extract via file path. Passing raw bytes as "content"
@@ -252,14 +279,11 @@ async def _extract_text_from_file(file_data: bytes, file_name: str) -> list[dict
                 "file_path": tmp_path,
                 "output_format": "markdown",
             })
-            return [{"content": result.content or "", "page_number": 1}]
+            return [{"content": _clean_text(result.content or ""), "page_number": 1}]
         finally:
             os.unlink(tmp_path)
     except Exception as e:
         logger.warning(f"content-core extraction failed for .{ext}: {e}")
-        # Binary formats must not be decoded as UTF-8 — that produces garbage
-        # with null bytes that PostgreSQL rejects. Return empty so the caller
-        # can surface a clear "no text content" error instead of crashing.
         return [{"content": "", "page_number": 1}]
 
 
@@ -268,10 +292,10 @@ async def _extract_text_from_url(url: str) -> list[dict]:
     try:
         from content_core.content.extraction import extract_content
         result = await extract_content({"url": url, "output_format": "markdown"})
-        return [{"content": result.content or "", "page_number": 1}]
+        return [{"content": _clean_text(result.content or ""), "page_number": 1}]
     except Exception as e:
         logger.warning(f"URL extraction failed for {url}: {e}")
         import httpx
         async with httpx.AsyncClient() as client:
             resp = await client.get(url, follow_redirects=True, timeout=30)
-            return [{"content": resp.text, "page_number": 1}]
+            return [{"content": _clean_text(resp.text), "page_number": 1}]

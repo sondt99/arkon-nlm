@@ -15,7 +15,7 @@ from typing import Optional
 
 import bcrypt
 import jwt
-from fastapi import Depends, HTTPException, status
+from fastapi import Depends, HTTPException, Query, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -143,6 +143,30 @@ async def get_current_user(
         if sys_role:
             employee.custom_role = sys_role
 
+    return employee
+
+
+async def get_current_user_image(
+    credentials: Optional[HTTPAuthorizationCredentials] = Depends(security),
+    token: Optional[str] = Query(None),
+    db: AsyncSession = Depends(get_db),
+) -> Employee:
+    """Like get_current_user but also accepts JWT from ?token= query param.
+    Used for image proxy endpoints where <img> tags cannot send auth headers."""
+    raw = credentials.credentials if credentials else token
+    if not raw:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Not authenticated")
+    payload = decode_access_token(raw)
+    if not payload:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid or expired token")
+    result = await db.execute(
+        select(Employee)
+        .options(selectinload(Employee.department), selectinload(Employee.custom_role))
+        .where(Employee.id == uuid.UUID(payload["sub"]))
+    )
+    employee = result.scalar_one_or_none()
+    if not employee or not employee.is_active:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Account not found or deactivated")
     return employee
 
 

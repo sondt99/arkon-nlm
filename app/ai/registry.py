@@ -44,7 +44,7 @@ def _get_embedding_class(provider: ProviderType) -> type[EmbeddingProvider]:
     if provider == ProviderType.GOOGLE:
         from app.ai.providers.google import GoogleEmbedding
         return GoogleEmbedding
-    elif provider == ProviderType.OPENAI:
+    elif provider in (ProviderType.OPENAI, ProviderType.OLLAMA, ProviderType.NINEROUTER):
         from app.ai.providers.openai_provider import OpenAIEmbedding
         return OpenAIEmbedding
     raise ValueError(f"Unsupported embedding provider: {provider}")
@@ -54,7 +54,7 @@ def _get_llm_class(provider: ProviderType) -> type[LLMProvider]:
     if provider == ProviderType.GOOGLE:
         from app.ai.providers.google import GoogleLLM
         return GoogleLLM
-    elif provider == ProviderType.OPENAI:
+    elif provider in (ProviderType.OPENAI, ProviderType.OLLAMA, ProviderType.NINEROUTER):
         from app.ai.providers.openai_provider import OpenAILLM
         return OpenAILLM
     elif provider == ProviderType.ANTHROPIC:
@@ -67,9 +67,12 @@ def _get_vision_class(provider: ProviderType) -> type[VisionProvider]:
     if provider == ProviderType.GOOGLE:
         from app.ai.providers.google import GoogleVision
         return GoogleVision
-    elif provider == ProviderType.OPENAI:
+    elif provider in (ProviderType.OPENAI, ProviderType.OLLAMA, ProviderType.NINEROUTER):
         from app.ai.providers.openai_provider import OpenAIVision
         return OpenAIVision
+    elif provider == ProviderType.ANTHROPIC:
+        from app.ai.providers.anthropic_provider import AnthropicVision
+        return AnthropicVision
     raise ValueError(f"Unsupported vision provider: {provider}")
 
 
@@ -200,7 +203,30 @@ class ProviderRegistry:
                 "No active embedding model. Pick one in Settings → Embedding."
             )
 
-        spec = get_spec(spec_id)  # raises UnknownEmbeddingModel if catalog miss
+        try:
+            spec = get_spec(spec_id)
+        except Exception:
+            # Custom model — reconstruct from stored config
+            custom_id = await svc.get("embedding_custom_spec_id")
+            if custom_id != spec_id:
+                raise
+            raw_model_id = await svc.get("embedding_custom_model_id") or spec_id.split("/", 1)[-1]
+            dim_str = await svc.get("embedding_custom_dimension")
+            provider_str = await svc.get("embedding_custom_provider") or spec_id.split("/")[0]
+            if not dim_str:
+                raise ValueError(
+                    f"Custom embedding model '{spec_id}' has no dimension configured."
+                )
+            from app.ai.embedding_catalog import EmbeddingModelSpec
+            spec = EmbeddingModelSpec(
+                id=spec_id,
+                provider=provider_str,
+                model_id=raw_model_id,
+                dimension=int(dim_str),
+                max_input_tokens=8191,
+                label=f"Custom — {raw_model_id} ({dim_str}d)",
+                cost_per_1m_tokens=None,
+            )
         api_key = (
             await svc.get(embedding_api_key_for(spec.provider))
             or await svc.get("embedding_api_key")  # legacy fallback
@@ -227,7 +253,12 @@ class ProviderRegistry:
 
         provider_str = await svc.get(f"{capability}_provider")
         model_id = await svc.get(f"{capability}_model_id")
-        api_key = await svc.get(f"{capability}_api_key")
+        # Per-provider key takes precedence over the legacy single key
+        api_key = (
+            await svc.get(f"{capability}_api_key__{provider_str}")
+            or await svc.get(f"{capability}_api_key")
+            or ""
+        )
         base_url = await svc.get(f"{capability}_base_url")
         dimensions_str = await svc.get(f"{capability}_dimensions")
 
@@ -241,6 +272,7 @@ class ProviderRegistry:
             provider=ProviderType(provider_str),
             api_key=api_key or "",
             model_id=model_id,
+            # 9router needs its own base URL; Ollama gets its from llm_base_url
             base_url=base_url,
             dimensions=int(dimensions_str) if dimensions_str else None,
             extra={},
@@ -273,13 +305,31 @@ SUPPORTED_PROVIDERS = {
             "claude-4.7-opus", "claude-4.6-sonnet",
             "claude-sonnet-4-20250514", "claude-haiku-4-20250514",
         ]},
+        {"id": "ollama", "name": "Ollama", "models": [
+            "qwen2.5:14b", "qwen2.5:7b", "llama3.1:8b", "mistral:7b",
+        ]},
+        {"id": "ninerouter", "name": "9Router", "models": [
+            "google/gemini-2.5-pro", "google/gemini-2.5-flash",
+            "anthropic/claude-sonnet-4-6", "anthropic/claude-haiku-4-5",
+            "openai/gpt-4o", "openai/gpt-4o-mini",
+            "meta-llama/llama-3.3-70b-instruct",
+        ]},
     ],
     "vision": [
         {"id": "google", "name": "Google Gemini", "models": [
-            "gemini-3.1-flash", "gemini-3.0-flash", "gemini-2.5-flash",
+            "gemini-2.5-flash", "gemini-2.0-flash", "gemini-1.5-pro",
         ]},
         {"id": "openai", "name": "OpenAI", "models": [
-            "gpt-5.4", "gpt-4o", "gpt-4o-mini",
+            "gpt-4o", "gpt-4o-mini",
+        ]},
+        {"id": "anthropic", "name": "Anthropic", "models": [
+            "claude-sonnet-4-20250514", "claude-haiku-4-20250514",
+        ]},
+        {"id": "ollama", "name": "Ollama", "models": [
+            "llava:7b", "llava:13b", "llava-llama3", "moondream",
+        ]},
+        {"id": "ninerouter", "name": "9Router", "models": [
+            "google/gemini-2.5-flash", "openai/gpt-4o", "anthropic/claude-sonnet-4-6",
         ]},
     ],
 }

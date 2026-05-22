@@ -155,3 +155,55 @@ async def list_providers():
     """Get supported providers and models for each capability."""
     from app.ai.registry import SUPPORTED_PROVIDERS
     return SUPPORTED_PROVIDERS
+
+
+# ---------------------------------------------------------------------------
+# Fetch model list from an OpenAI-compatible /v1/models endpoint
+# ---------------------------------------------------------------------------
+
+class FetchModelsBody(BaseModel):
+    base_url: str
+    api_key: str = ""
+
+
+class FetchModelsResult(BaseModel):
+    models: list[str]
+
+
+@router.post("/settings/fetch-models", response_model=FetchModelsResult)
+async def fetch_models_from_url(
+    body: FetchModelsBody,
+    _user: Employee = require_permission("org:settings:manage"),
+):
+    """Fetch model list from any OpenAI-compatible /v1/models endpoint."""
+    import httpx
+    from fastapi import HTTPException
+
+    url = body.base_url.rstrip("/") + "/models"
+    headers: dict[str, str] = {}
+    if body.api_key:
+        headers["Authorization"] = f"Bearer {body.api_key}"
+
+    try:
+        async with httpx.AsyncClient(timeout=10.0, verify=False) as client:
+            resp = await client.get(url, headers=headers)
+            resp.raise_for_status()
+            data = resp.json()
+
+        models = sorted([
+            m["id"] for m in data.get("data", [])
+            if isinstance(m, dict) and "id" in m
+        ])
+        return FetchModelsResult(models=models)
+
+    except httpx.HTTPStatusError as e:
+        raise HTTPException(
+            status_code=400,
+            detail=f"API returned {e.response.status_code}: {e.response.text[:300]}",
+        )
+    except httpx.ConnectError:
+        raise HTTPException(status_code=400, detail=f"Cannot connect to {url}")
+    except httpx.TimeoutException:
+        raise HTTPException(status_code=400, detail=f"Connection timed out: {url}")
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=f"Failed to fetch models: {e}")

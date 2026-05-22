@@ -79,6 +79,9 @@ class EmbeddingStatusOut(BaseModel):
 
 class EmbeddingSwitchBody(BaseModel):
     model_spec_id: str
+    # Required when model_spec_id is not in the catalog (custom model)
+    dimension: Optional[int] = None
+    model_id: Optional[str] = None   # raw API model ID (may differ from spec_id path)
 
 
 class EmbeddingSwitchOut(BaseModel):
@@ -200,8 +203,39 @@ async def switch_embedding_model(
 
     try:
         spec = get_spec(body.model_spec_id)
-    except UnknownEmbeddingModel as e:
-        raise HTTPException(status_code=400, detail=str(e))
+    except UnknownEmbeddingModel:
+        if body.dimension is None:
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    f"Model '{body.model_spec_id}' is not in the catalog. "
+                    "Provide 'dimension' to use a custom model."
+                ),
+            )
+        supported = (768, 1536, 3072)
+        if body.dimension not in supported:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Unsupported dimension {body.dimension}. Choose from {supported}.",
+            )
+        provider = body.model_spec_id.split("/")[0]
+        raw_model_id = body.model_id or "/".join(body.model_spec_id.split("/")[1:])
+        spec = EmbeddingModelSpec(
+            id=body.model_spec_id,
+            provider=provider,
+            model_id=raw_model_id,
+            dimension=body.dimension,
+            max_input_tokens=8191,
+            label=f"Custom — {raw_model_id} ({body.dimension}d)",
+            cost_per_1m_tokens=None,
+        )
+        # Persist custom spec info so the registry can reconstruct it later
+        from app.services.config_service import ConfigService
+        csvc = ConfigService(db)
+        await csvc.set("embedding_custom_spec_id", body.model_spec_id)
+        await csvc.set("embedding_custom_model_id", raw_model_id)
+        await csvc.set("embedding_custom_dimension", str(body.dimension))
+        await csvc.set("embedding_custom_provider", provider)
 
     # Refuse if a job is already in flight — frontend should cancel first.
     in_flight = await _get_current_job(db)

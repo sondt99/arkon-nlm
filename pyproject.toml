@@ -42,6 +42,8 @@ dependencies = [
     # Worker queue
     "arq>=0.26",
     "redis[hiredis]>=5.0",
+    # NotebookLM integration
+    "notebooklm-py[markdown]>=0.4.1",
     # Security
     "cryptography>=44.0",
     "mammoth>=1.12.0",

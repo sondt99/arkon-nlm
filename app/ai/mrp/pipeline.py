@@ -252,6 +252,7 @@ async def run_mrp_pipeline(
     kt_slug: Optional[str],
     kt_name: Optional[str],
     kt_desc: Optional[str],
+    auto_approve: bool = False,
 ) -> dict:
     """
     Orchestrate Phase 0 (Triage) → Phase 1 (MAP) → Phase 2 (REDUCE).
@@ -273,7 +274,7 @@ async def run_mrp_pipeline(
         plan = await _load_plan(session, source_id)
         if plan and plan.status in ("pending_review", "approved"):
             logger.info(f"MRP: source={source_id} already at plan_review, skipping MAP+REDUCE")
-            if plan.status == "approved" or settings.mrp_auto_approve_plan:
+            if plan.status == "approved" or settings.mrp_auto_approve_plan or auto_approve:
                 return await _auto_trigger_refine(source_id, plan)
             return {"status": "plan_ready", "plan_id": str(plan.id)}
 
@@ -321,7 +322,7 @@ async def run_mrp_pipeline(
 
     await tracker.update(80, "Compilation plan ready")
 
-    if settings.mrp_auto_approve_plan:
+    if settings.mrp_auto_approve_plan or auto_approve:
         return await _auto_trigger_refine(source_id, plan)
 
     return {"status": "plan_ready", "plan_id": str(plan.id)}

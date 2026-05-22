@@ -25,6 +25,7 @@ class ProviderType(str, Enum):
     OLLAMA = "ollama"
     VOYAGE = "voyage"
     COHERE = "cohere"
+    NINEROUTER = "ninerouter"  # OpenAI-compatible AI routing proxy
 
 
 # ---------------------------------------------------------------------------

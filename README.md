@@ -49,6 +49,16 @@ Create a workspace → add members from any department → attach documents. Eac
 - Scoped wiki and document management
 - Contributors propose wiki edits; editors review and approve
 
+### NotebookLM Integration
+Connect Arkon to Google NotebookLM to generate rich study guides, quizzes, flashcards, reports, audio overviews, and more from any knowledge source.
+
+- Create and manage NotebookLM notebooks directly from Arkon
+- Generate artifacts: audio podcast, video, quiz, flashcards, report, slide deck, infographic, data table
+- Preview all artifact types inline — quiz interactive, flashcard flip, report rendered, audio/video playback
+- Chat with any notebook using NotebookLM's AI
+- Import artifact content back into the Arkon wiki with one click
+- Server-side session management with automatic 30-minute keepalive (no browser required)
+
 ### AI Skills
 Upload custom agent packages and make them available to employees through Claude. Skills are versioned, department-scoped, and distributed via MCP.
 
@@ -142,6 +152,7 @@ Add this to `claude_desktop_config.json` and restart Claude Desktop. The employe
 - [x] AI Skills - versioned, department-scoped agent packages
 - [x] Full RBAC - department permissions + workspace membership roles
 - [x] Audit log
+- [x] NotebookLM integration - notebook management, artifact generation, wiki import
 - [ ] Arkon CLI - one-command employee setup
 - [ ] Notification system for draft review requests
 - [ ] Usage analytics dashboard

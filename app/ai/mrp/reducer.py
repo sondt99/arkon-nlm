@@ -486,8 +486,8 @@ async def run_planning_call(
     sorted_entities = sorted(canonical_entities, key=lambda x: x.get("mention_count", 0), reverse=True)
     sorted_concepts = sorted(canonical_concepts, key=lambda x: x.get("mention_count", 0), reverse=True)
 
-    entities_summary = "\n".join(_fmt_entity(e) for e in sorted_entities[:100]) or "  (none)"
-    concepts_summary = "\n".join(_fmt_concept(c) for c in sorted_concepts[:100]) or "  (none)"
+    entities_summary = "\n".join(_fmt_entity(e) for e in sorted_entities[:30]) or "  (none)"
+    concepts_summary = "\n".join(_fmt_concept(c) for c in sorted_concepts[:30]) or "  (none)"
 
     kb_lines = []
     for name, rec in reconciliation.items():

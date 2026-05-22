@@ -1,6 +1,7 @@
 "use client";
 
 import React from "react";
+import { useRouter } from "next/navigation";
 import { api } from "@/lib/api";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -55,11 +56,32 @@ export function KnowledgeTable({
   search,
   onSearch,
 }: Props) {
+  const router = useRouter();
   const [actionError, setActionError] = React.useState<string | null>(null);
   const [editSource, setEditSource] = React.useState<Source | null>(null);
   const [reviewPlanSource, setReviewPlanSource] = React.useState<Source | null>(null);
   const [retryingIds, setRetryingIds] = React.useState<Set<string>>(new Set());
+  const [nlmSendingIds, setNlmSendingIds] = React.useState<Set<string>>(new Set());
   const [searchInput, setSearchInput] = React.useState(search);
+
+  const handleSendToNotebookLM = async (source: Source) => {
+    setNlmSendingIds((prev) => new Set(prev).add(source.id));
+    setActionError(null);
+    try {
+      await api("/api/notebooklm/notebooks", {
+        method: "POST",
+        body: {
+          title: source.title || source.file_name || "Untitled",
+          source_id: source.id,
+        },
+      });
+      router.push("/notebooklm");
+    } catch (err) {
+      setActionError(err instanceof Error ? err.message : "Failed to send to NotebookLM");
+    } finally {
+      setNlmSendingIds((prev) => { const s = new Set(prev); s.delete(source.id); return s; });
+    }
+  };
 
   const handleDelete = async (id: string) => {
     if (!confirm("Delete this document? This cannot be undone.")) return;
@@ -267,6 +289,20 @@ export function KnowledgeTable({
                           <span className="material-symbols-outlined mr-2" style={{ fontSize: 16 }}>edit</span>
                           Edit
                         </DropdownMenuItem>
+                        {source.status === "ready" && (
+                          <DropdownMenuItem
+                            onClick={() => handleSendToNotebookLM(source)}
+                            disabled={nlmSendingIds.has(source.id)}
+                          >
+                            <span
+                              className={`material-symbols-outlined mr-2 text-blue-500 ${nlmSendingIds.has(source.id) ? "animate-spin" : ""}`}
+                              style={{ fontSize: 16 }}
+                            >
+                              {nlmSendingIds.has(source.id) ? "progress_activity" : "book_2"}
+                            </span>
+                            {nlmSendingIds.has(source.id) ? "Sending…" : "Send to NotebookLM"}
+                          </DropdownMenuItem>
+                        )}
                         {source.status === "plan_ready" && (
                           <DropdownMenuItem onClick={() => setReviewPlanSource(source)}>
                             <span className="material-symbols-outlined mr-2 text-blue-500" style={{ fontSize: 16 }}>

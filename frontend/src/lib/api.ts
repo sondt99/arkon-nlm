@@ -24,7 +24,7 @@ class ApiError extends Error {
   }
 }
 
-function getToken(): string | null {
+export function getToken(): string | null {
   if (typeof window === "undefined") return null;
   return localStorage.getItem("arkon_token");
 }
@@ -94,19 +94,25 @@ export async function api<T = unknown>(
 
 /**
  * Upload a file via multipart/form-data.
+ * Bypasses the Next.js proxy (which has a 10MB body limit) by calling the
+ * API directly using the current page's hostname and the API port.
  */
 export async function apiUpload<T = unknown>(
   path: string,
   formData: FormData,
   timeoutMs = 120_000
 ): Promise<T> {
+  const uploadBase = typeof window !== "undefined"
+    ? `${window.location.protocol}//${window.location.hostname}:5055`
+    : "http://localhost:5055";
+
   const token = getToken();
   const controller = new AbortController();
   const timerId = setTimeout(() => controller.abort(), timeoutMs);
 
   let res: Response;
   try {
-    res = await fetch(`${API_BASE}${path}`, {
+    res = await fetch(`${uploadBase}${path}`, {
       method: "POST",
       signal: controller.signal,
       headers: {

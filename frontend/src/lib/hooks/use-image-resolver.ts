@@ -2,7 +2,7 @@
 
 import { useEffect, useRef, useState } from "react";
 
-import { api } from "@/lib/api";
+import { api, getToken } from "@/lib/api";
 
 export type ImageResolverState = {
   resolved: Record<string, string>;
@@ -52,8 +52,13 @@ export function useImageResolver(ids: string[]): ImageResolverState {
     })
       .then((res) => {
         if (myReq !== reqId.current) return;
+        const token = getToken();
+        const withToken: Record<string, string> = {};
+        for (const [id, url] of Object.entries(res.resolved || {})) {
+          withToken[id] = token ? `${url}?token=${encodeURIComponent(token)}` : url;
+        }
         setState({
-          resolved: res.resolved || {},
+          resolved: withToken,
           denied: new Set(res.denied || []),
           loading: false,
         });

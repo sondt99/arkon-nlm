@@ -12,7 +12,7 @@ function genId(): string {
 }
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import { api } from "@/lib/api";
+import { api, ApiError } from "@/lib/api";
 import { PageHeader } from "@/components/shared/page-header";
 import { Button } from "@/components/ui/button";
 import {
@@ -1475,6 +1475,10 @@ function ChatTab({ notebookId, notebookTitle }: { notebookId: string; notebookTi
 
 /* ─── Main page ──────────────────────────────────────────────────────────── */
 
+function isSessionExpired(e: unknown): boolean {
+  return e instanceof ApiError && e.status === 401;
+}
+
 type Tab = "sources" | "studio" | "chat";
 
 export default function NotebookLMPage() {
@@ -1551,8 +1555,8 @@ export default function NotebookLMPage() {
       const data = await api<NLMNotebookNative[]>("/api/notebooklm/nlm/notebooks");
       setNotebooks(data);
       if (data.length > 0 && !selectedId) setSelectedId(data[0].id);
-    } catch {
-      // ignore auth failures
+    } catch (e: unknown) {
+      if (isSessionExpired(e)) setAuthOk(false);
     } finally {
       setLoading(false);
     }
@@ -1580,8 +1584,9 @@ export default function NotebookLMPage() {
     try {
       const data = await api<NLMSourceNative[]>(`/api/notebooklm/nlm/notebooks/${nbId}/sources`);
       setSources(data);
-    } catch {
-      setSources([]);
+    } catch (e: unknown) {
+      if (isSessionExpired(e)) setAuthOk(false);
+      else setSources([]);
     } finally {
       setSourcesLoading(false);
     }
@@ -1593,8 +1598,9 @@ export default function NotebookLMPage() {
     try {
       const data = await api<NLMArtifactNative[]>(`/api/notebooklm/nlm/notebooks/${nbId}/artifacts`);
       setArtifacts(data);
-    } catch {
-      if (!silent) setArtifacts([]);
+    } catch (e: unknown) {
+      if (isSessionExpired(e)) setAuthOk(false);
+      else if (!silent) setArtifacts([]);
     } finally {
       if (!silent) setArtifactsLoading(false);
     }

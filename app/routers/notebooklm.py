@@ -688,6 +688,15 @@ class NLMChatAsk(BaseModel):
 
 
 def _nlm_error(e: Exception) -> HTTPException:
+    try:
+        from notebooklm.exceptions import AuthError
+        if isinstance(e, AuthError):
+            return HTTPException(
+                status_code=401,
+                detail="NotebookLM session expired. Re-import cookies to reconnect.",
+            )
+    except ImportError:
+        pass
     return HTTPException(status_code=502, detail=f"NotebookLM API error: {e}")
 
 

@@ -271,6 +271,41 @@ async def get_source(
     )
 
 
+@router.get("/sources/{source_id}/wiki-pages")
+async def get_source_wiki_pages(
+    source_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+    user: Employee = Depends(get_current_user),
+):
+    """Return wiki pages that were compiled from this source."""
+    source = await db.get(Source, source_id)
+    if not source:
+        raise HTTPException(status_code=404, detail="Source not found")
+
+    from app.services.permission_engine import can_access_document
+    if not await can_access_document(db, user, source, "read"):
+        raise HTTPException(403, "Access denied")
+
+    rows = (await db.execute(
+        select(WikiPage.id, WikiPage.slug, WikiPage.title, WikiPage.page_type,
+               WikiPage.summary, WikiPage.updated_at)
+        .where(WikiPage.source_ids.any(source_id))
+        .order_by(WikiPage.title)
+    )).all()
+
+    return [
+        {
+            "id": str(r.id),
+            "slug": r.slug,
+            "title": r.title,
+            "page_type": r.page_type,
+            "summary": r.summary or "",
+            "updated_at": r.updated_at.isoformat() if r.updated_at else None,
+        }
+        for r in rows
+    ]
+
+
 @router.get("/sources/{source_id}/progress")
 async def get_source_progress(
     source_id: uuid.UUID,

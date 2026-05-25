@@ -29,6 +29,7 @@ import { fileIcons, getFileExt } from "./utils";
 import { StatusDot } from "./status-dot";
 import { EditSourceDialog } from "./edit-source-dialog";
 import { PlanReviewDialog } from "./plan-review-dialog";
+import { SourceWikiPagesDialog } from "./source-wiki-pages-dialog";
 
 type Props = {
   sources: Source[];
@@ -67,6 +68,7 @@ export function KnowledgeTable({
   const [reviewPlanSource, setReviewPlanSource] = React.useState<Source | null>(null);
   const [retryingIds, setRetryingIds] = React.useState<Set<string>>(new Set());
   const [nlmSendingIds, setNlmSendingIds] = React.useState<Set<string>>(new Set());
+  const [wikiPagesSource, setWikiPagesSource] = React.useState<Source | null>(null);
   const [searchInput, setSearchInput] = React.useState(search);
 
   const handleSendToNotebookLM = async (source: Source) => {
@@ -287,9 +289,14 @@ export function KnowledgeTable({
                   {/* Wiki page count */}
                   <TableCell>
                     {(source.wiki_page_count ?? 0) > 0 ? (
-                      <span className="text-xs text-foreground tabular-nums">
+                      <button
+                        type="button"
+                        onClick={() => setWikiPagesSource(source)}
+                        className="text-xs text-primary tabular-nums hover:underline underline-offset-2"
+                        title="Xem wiki pages"
+                      >
                         {source.wiki_page_count}
-                      </span>
+                      </button>
                     ) : (
                       <span className="text-xs text-muted-foreground/50">—</span>
                     )}
@@ -329,6 +336,12 @@ export function KnowledgeTable({
                           <span className="material-symbols-outlined mr-2" style={{ fontSize: 16 }}>edit</span>
                           Edit
                         </DropdownMenuItem>
+                        {(source.wiki_page_count ?? 0) > 0 && (
+                          <DropdownMenuItem onClick={() => setWikiPagesSource(source)}>
+                            <span className="material-symbols-outlined mr-2 text-primary" style={{ fontSize: 16 }}>auto_stories</span>
+                            Xem Wiki ({source.wiki_page_count})
+                          </DropdownMenuItem>
+                        )}
                         {source.status === "ready" && (
                           <DropdownMenuItem
                             onClick={() => handleSendToNotebookLM(source)}
@@ -451,6 +464,13 @@ export function KnowledgeTable({
           source={reviewPlanSource}
           onClose={() => setReviewPlanSource(null)}
           onDone={() => { setReviewPlanSource(null); onRefresh(); }}
+        />
+      )}
+
+      {wikiPagesSource && (
+        <SourceWikiPagesDialog
+          source={wikiPagesSource}
+          onClose={() => setWikiPagesSource(null)}
         />
       )}
     </div>

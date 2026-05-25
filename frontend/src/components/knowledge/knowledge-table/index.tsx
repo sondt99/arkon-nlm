@@ -67,7 +67,6 @@ export function KnowledgeTable({
   const [reviewPlanSource, setReviewPlanSource] = React.useState<Source | null>(null);
   const [retryingIds, setRetryingIds] = React.useState<Set<string>>(new Set());
   const [nlmSendingIds, setNlmSendingIds] = React.useState<Set<string>>(new Set());
-  const [deletingId, setDeletingId] = React.useState<string | null>(null);
   const [searchInput, setSearchInput] = React.useState(search);
 
   const handleSendToNotebookLM = async (source: Source) => {
@@ -89,7 +88,7 @@ export function KnowledgeTable({
     }
   };
 
-  const handleDeleteConfirm = async (id: string) => {
+  const handleDelete = async (id: string) => {
     setActionError(null);
     try {
       await api(`/api/sources/${id}`, { method: "DELETE" });
@@ -97,8 +96,6 @@ export function KnowledgeTable({
       onRefresh();
     } catch (err) {
       setActionError(err instanceof Error ? err.message : "Failed to delete");
-    } finally {
-      setDeletingId(null);
     }
   };
 
@@ -366,31 +363,13 @@ export function KnowledgeTable({
                           </DropdownMenuItem>
                         )}
                         <DropdownMenuSeparator />
-                        {deletingId === source.id ? (
-                          <div className="px-2 py-1.5 flex items-center gap-2">
-                            <span className="text-xs text-destructive flex-1">Xóa tài liệu này?</span>
-                            <button
-                              className="text-xs text-muted-foreground hover:text-foreground px-1"
-                              onClick={() => setDeletingId(null)}
-                            >
-                              Hủy
-                            </button>
-                            <button
-                              className="text-xs text-destructive font-medium hover:underline px-1"
-                              onClick={() => handleDeleteConfirm(source.id)}
-                            >
-                              Xóa
-                            </button>
-                          </div>
-                        ) : (
-                          <DropdownMenuItem
-                            onClick={() => setDeletingId(source.id)}
-                            className="text-destructive"
-                          >
-                            <span className="material-symbols-outlined mr-2" style={{ fontSize: 16 }}>delete</span>
-                            Delete
-                          </DropdownMenuItem>
-                        )}
+                        <DropdownMenuItem
+                          onClick={() => handleDelete(source.id)}
+                          className="text-destructive"
+                        >
+                          <span className="material-symbols-outlined mr-2" style={{ fontSize: 16 }}>delete</span>
+                          Delete
+                        </DropdownMenuItem>
                       </DropdownMenuContent>
                     </DropdownMenu>
                   </TableCell>

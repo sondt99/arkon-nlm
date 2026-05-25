@@ -29,7 +29,7 @@ export function EditSourceDialog({
   types: KnowledgeType[];
   departments: Department[];
   onClose: () => void;
-  onSaved: () => void;
+  onSaved: (updated: Partial<Source>) => void;
 }) {
   const [title, setTitle] = React.useState(source.title);
   const [typeId, setTypeId] = React.useState(source.knowledge_type_id || "");
@@ -71,7 +71,16 @@ export function EditSourceDialog({
           scope_id: scopeType === "global" ? null : (scopeId || null),
         },
       });
-      onSaved();
+      const matchedType = types.find((t) => t.id === typeId);
+      onSaved({
+        title: title || source.title,
+        knowledge_type_id: typeId || undefined,
+        knowledge_type_name: matchedType?.name,
+        knowledge_type_color: matchedType?.color,
+        department_ids: selectedDepts,
+        scope_type: scopeType,
+        scope_id: scopeType === "global" ? undefined : (scopeId || undefined),
+      });
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to save");
     } finally {

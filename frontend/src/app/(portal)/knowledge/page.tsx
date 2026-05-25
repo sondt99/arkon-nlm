@@ -205,6 +205,15 @@ export default function KnowledgePage() {
                 departments={departments}
                 loading={loading}
                 onRefresh={() => loadSources(false, page, search)}
+                onDeleteSource={(id) => {
+                  setSources((prev) => prev.filter((s) => s.id !== id));
+                  setTotal((t) => Math.max(0, t - 1));
+                }}
+                onUpdateSource={(updated) =>
+                  setSources((prev) =>
+                    prev.map((s) => (s.id === updated.id ? { ...s, ...updated } : s))
+                  )
+                }
                 page={page}
                 totalPages={totalPages}
                 total={total}

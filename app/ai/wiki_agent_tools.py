@@ -17,6 +17,19 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.database.models import Source, SourceImage
 from app.services import wiki_service
 
+
+async def load_source_images(session: AsyncSession, source_id: uuid.UUID) -> list[dict]:
+    """Return image metadata rows ordered by image_index."""
+    result = await session.execute(
+        select(SourceImage.id, SourceImage.caption, SourceImage.page_number, SourceImage.image_index)
+        .where(SourceImage.source_id == source_id)
+        .order_by(SourceImage.image_index)
+    )
+    out = []
+    for img_id, caption, page_number, _ in result.all():
+        out.append({"id": str(img_id), "caption": caption or "", "page": page_number})
+    return out
+
 _IMAGE_MARKER_RE = re.compile(r"!\[[^\]]*\]\(image://([0-9a-fA-F-]{36})\)")
 
 
@@ -92,6 +105,19 @@ TOOL_SCHEMAS = [
                 },
                 "required": ["query"],
             },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "list_source_images",
+            "description": (
+                "List every image extracted from this source document with its UUID, caption, "
+                "and page number. Returns ready-to-paste markdown markers. "
+                "The initial message already includes this inventory — call this only if "
+                "you need to refresh the list mid-session."
+            ),
+            "parameters": {"type": "object", "properties": {}, "required": []},
         },
     },
     {
@@ -380,6 +406,24 @@ def build_tool_handlers(
             "excerpt": excerpt,
         }
 
+    # --- list_source_images ---
+
+    async def list_source_images() -> dict:
+        rows = await load_source_images(session, source.id)
+        images = []
+        for row in rows:
+            entry: dict = {"marker": f"![{row['caption']}](image://{row['id']})"}
+            if row["page"] is not None:
+                entry["page"] = row["page"]
+            if row["caption"]:
+                entry["caption"] = row["caption"]
+            images.append(entry)
+        return {
+            "count": len(images),
+            "images": images,
+            "usage": "Copy each marker verbatim into the wiki section that discusses the same subject.",
+        }
+
     # --- create_page ---
 
     async def create_page(
@@ -480,6 +524,7 @@ def build_tool_handlers(
         "read_wiki_index": read_wiki_index,
         "read_wiki_page": read_wiki_page,
         "search_wiki": search_wiki,
+        "list_source_images": list_source_images,
         "read_source_excerpt": read_source_excerpt,
         "create_page": create_page,
         "update_page": update_page,

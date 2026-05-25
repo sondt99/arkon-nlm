@@ -19,7 +19,7 @@ from app.ai.agent_protocol import (
     tool_results_message,
 )
 from app.ai.registry import ProviderRegistry
-from app.ai.wiki_agent_tools import TOOL_SCHEMAS, AgentState, build_tool_handlers
+from app.ai.wiki_agent_tools import TOOL_SCHEMAS, AgentState, build_tool_handlers, load_source_images
 from app.ai.wiki_analyzer import analyze_source, format_analysis_section
 from app.database.models import Source
 from app.services import wiki_service
@@ -158,19 +158,21 @@ Why good: legal references (Điều 5, Nghị định 136/2020), specific number
 6 tháng/lần), procedure ordering, wikilinks throughout.
 
 # Image markers
-The source text may contain image references in this exact form:
+The initial message includes an **"## Available images"** section listing every image
+extracted from this document as a ready-to-paste markdown marker:
     ![caption](image://<uuid>)
 
+If the source has images, **use them**. Do not leave images unplaced without a reason.
+
 Rules:
-- PRESERVE these markers verbatim — do not rename, rewrite, or invent UUIDs.
-- PLACE each marker in the wiki page where it's most contextually relevant
-  (next to the section that discusses the same thing). Move them between
-  paragraphs/sections as needed — that's the point.
-- DROP a marker if no page meaningfully discusses it (decorative/irrelevant).
-- A single marker should appear in AT MOST ONE wiki page.
-- Keep markers on their own line for readability.
-- The caption inside `![ ]` may be edited for clarity, but the
-  `(image://<uuid>)` part must stay byte-for-byte identical.
+- COPY markers verbatim — the `(image://<uuid>)` part must be byte-for-byte identical.
+- PLACE each marker on its own line in the section that discusses the same subject.
+  A diagram belongs under the procedure it illustrates; a photo belongs next to the
+  entity it depicts.
+- You may rewrite the caption inside `![ ]` for clarity in context.
+- Each marker must appear in AT MOST ONE wiki page.
+- DROP a marker only if no page covers the subject (truly decorative/irrelevant).
+- Call `list_source_images` if you need to refresh the image inventory mid-session.
 
 # Decision rules
 - Prefer UPDATE over CREATE when the wiki already has a relevant page. Merge new facts
@@ -208,6 +210,9 @@ These represent expert domain input. When updating such a page:
 3. For each candidate you plan to update, call `read_wiki_page` to see existing content.
 4. If the source is long, call `read_source_excerpt` to read beyond the initial 30k chars.
 5. Call `create_page` or `update_page` for each operation (full content, not a diff).
+   — Distribute image markers from the "Available images" inventory across the pages
+     where they are most contextually relevant. Every image should end up in exactly
+     one page unless it is clearly decorative.
 6. Call `append_log` once with a one-line summary.
 7. Call `finish` with a brief report. This must be your last tool call.
 
@@ -228,7 +233,7 @@ Compile the following source document into the wiki.
 ## Knowledge type context
 {kt_context}
 
-{analysis_section}
+{image_section}{analysis_section}
 ## Source content (first {excerpt_chars} chars — use read_source_excerpt for more)
 {source_excerpt}
 """
@@ -312,9 +317,24 @@ async def compile_source_with_agent(
     if len(full_text) > INITIAL_EXCERPT_CHARS:
         excerpt += f"\n\n[…{len(full_text) - INITIAL_EXCERPT_CHARS} more chars — use read_source_excerpt…]"
 
+    # Build image inventory — give the agent all image UUIDs upfront so it doesn't
+    # have to hunt through the source text to discover them.
+    image_rows = await load_source_images(session, source.id)
+    if image_rows:
+        img_lines = [
+            f"## Available images ({len(image_rows)} total — place each in at most one wiki page)\n"
+        ]
+        for row in image_rows:
+            page_note = f"  ← page {row['page']}" if row["page"] is not None else ""
+            img_lines.append(f"![{row['caption']}](image://{row['id']}){page_note}")
+        image_section = "\n".join(img_lines) + "\n\n"
+    else:
+        image_section = ""
+
     initial_msg = INITIAL_USER_TEMPLATE.format(
         title=source.title or source.file_name or str(source.id),
         kt_context=_format_kt_context(kt_name, kt_desc),
+        image_section=image_section,
         analysis_section=analysis_section,
         excerpt_chars=INITIAL_EXCERPT_CHARS,
         source_excerpt=excerpt,

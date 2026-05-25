@@ -50,18 +50,26 @@ async def run_commit_phase(
     """
     from app.ai.mrp.merger import merge_page_content
     from app.database.models import Source, SourceCompilationPlan
+    from app.database.models import SourceImage
     from app.services import wiki_service
     from app.services.embedding_storage import (
         compute_content_hash,
         embedding_input_text,
         upsert_page_embedding,
     )
+    from app.ai.wiki_agent_tools import _strip_invalid_image_markers, _IMAGE_MARKER_RE  # noqa: F401
 
     scope_type = source.scope_type or "global"
     scope_id = source.scope_id
 
     pages_created = 0
     pages_updated = 0
+
+    # Load valid image UUIDs for this source once so we can strip hallucinated UUIDs.
+    _img_rows = (await session.execute(
+        select(SourceImage.id).where(SourceImage.source_id == source.id)
+    )).scalars().all()
+    _valid_image_ids: set[str] = {str(r).lower() for r in _img_rows}
 
     # Provision LLM for merge operations
     from app.ai.registry import ProviderRegistry
@@ -94,7 +102,7 @@ async def run_commit_phase(
                         slug=pr.slug,
                         title=pr.title,
                         page_type=pr.page_type,
-                        content_md=pr.content_md,
+                        content_md=_strip_invalid_image_markers(pr.content_md, _valid_image_ids),
                         summary=pr.summary,
                         knowledge_type_slugs=[kt_slug] if kt_slug else [],
                         source_ids=[source.id],
@@ -108,7 +116,7 @@ async def run_commit_phase(
                 existing_page = await wiki_service.get_page_by_slug(
                     session, pr.slug, scope_type=scope_type, scope_id=scope_id,
                 )
-                final_content = pr.content_md
+                final_content = _strip_invalid_image_markers(pr.content_md, _valid_image_ids)
 
                 if existing_page and existing_page.content_md and merge_llm:
                     # Check if content comes from a different source
@@ -117,12 +125,13 @@ async def run_commit_phase(
 
                     if is_new_source and len(existing_page.content_md.strip()) > 100:
                         # Merge: existing page has substantial content from other sources
-                        final_content = await merge_page_content(
+                        merged = await merge_page_content(
                             merge_llm,
                             existing_page.content_md,
                             pr.content_md,
                             pr.slug,
                         )
+                        final_content = _strip_invalid_image_markers(merged, _valid_image_ids)
 
                 page = await wiki_service.apply_update(
                     session,
@@ -142,7 +151,7 @@ async def run_commit_phase(
                         slug=pr.slug,
                         title=pr.title,
                         page_type=pr.page_type,
-                        content_md=pr.content_md,
+                        content_md=_strip_invalid_image_markers(pr.content_md, _valid_image_ids),
                         summary=pr.summary,
                         knowledge_type_slugs=[kt_slug] if kt_slug else [],
                         source_ids=[source.id],

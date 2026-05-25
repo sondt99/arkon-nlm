@@ -37,6 +37,211 @@ type PlanResponse = {
   review_note: string | null;
 };
 
+const PAGE_TYPES = ["entity", "concept", "topic", "source"];
+
+function EditForm({
+  page,
+  onSave,
+  onCancel,
+}: {
+  page: PlanPage;
+  onSave: (updated: PlanPage) => void;
+  onCancel: () => void;
+}) {
+  const [draft, setDraft] = React.useState<PlanPage>({ ...page });
+  const [entityInput, setEntityInput] = React.useState(
+    (page.entity_names ?? []).join(", ")
+  );
+
+  const handleSave = () => {
+    const names = entityInput
+      .split(",")
+      .map((s) => s.trim())
+      .filter(Boolean);
+    onSave({ ...draft, entity_names: names });
+  };
+
+  return (
+    <div className="flex flex-col gap-3 p-3 rounded-lg border border-primary/40 bg-primary/5">
+      <div className="grid grid-cols-2 gap-2">
+        <div className="flex flex-col gap-1">
+          <label className="text-[10px] text-muted-foreground font-medium uppercase tracking-wide">
+            Title
+          </label>
+          <input
+            className="text-sm rounded-md border border-border bg-background px-2 py-1.5 focus:outline-none focus:ring-2 focus:ring-primary/30 focus:border-primary/50"
+            value={draft.title}
+            onChange={(e) => setDraft((d) => ({ ...d, title: e.target.value }))}
+          />
+        </div>
+        <div className="flex flex-col gap-1">
+          <label className="text-[10px] text-muted-foreground font-medium uppercase tracking-wide">
+            Slug
+          </label>
+          <input
+            className="text-sm rounded-md border border-border bg-background px-2 py-1.5 font-mono focus:outline-none focus:ring-2 focus:ring-primary/30 focus:border-primary/50"
+            value={draft.slug}
+            onChange={(e) => setDraft((d) => ({ ...d, slug: e.target.value }))}
+          />
+        </div>
+      </div>
+
+      <div className="grid grid-cols-3 gap-2">
+        <div className="flex flex-col gap-1">
+          <label className="text-[10px] text-muted-foreground font-medium uppercase tracking-wide">
+            Action
+          </label>
+          <select
+            className="text-sm rounded-md border border-border bg-background px-2 py-1.5 focus:outline-none focus:ring-2 focus:ring-primary/30"
+            value={draft.action}
+            onChange={(e) =>
+              setDraft((d) => ({
+                ...d,
+                action: e.target.value as "CREATE" | "UPDATE",
+              }))
+            }
+          >
+            <option value="CREATE">CREATE</option>
+            <option value="UPDATE">UPDATE</option>
+          </select>
+        </div>
+        <div className="flex flex-col gap-1">
+          <label className="text-[10px] text-muted-foreground font-medium uppercase tracking-wide">
+            Type
+          </label>
+          <select
+            className="text-sm rounded-md border border-border bg-background px-2 py-1.5 focus:outline-none focus:ring-2 focus:ring-primary/30"
+            value={draft.page_type}
+            onChange={(e) =>
+              setDraft((d) => ({ ...d, page_type: e.target.value }))
+            }
+          >
+            {PAGE_TYPES.map((t) => (
+              <option key={t} value={t}>
+                {t}
+              </option>
+            ))}
+          </select>
+        </div>
+        <div className="flex flex-col gap-1">
+          <label className="text-[10px] text-muted-foreground font-medium uppercase tracking-wide">
+            Priority
+          </label>
+          <input
+            type="number"
+            min={1}
+            className="text-sm rounded-md border border-border bg-background px-2 py-1.5 focus:outline-none focus:ring-2 focus:ring-primary/30"
+            value={draft.priority ?? ""}
+            onChange={(e) =>
+              setDraft((d) => ({
+                ...d,
+                priority: e.target.value ? Number(e.target.value) : undefined,
+              }))
+            }
+          />
+        </div>
+      </div>
+
+      <div className="flex flex-col gap-1">
+        <label className="text-[10px] text-muted-foreground font-medium uppercase tracking-wide">
+          Entities / Topics covered{" "}
+          <span className="normal-case font-normal">(comma-separated)</span>
+        </label>
+        <input
+          className="text-sm rounded-md border border-border bg-background px-2 py-1.5 focus:outline-none focus:ring-2 focus:ring-primary/30"
+          value={entityInput}
+          onChange={(e) => setEntityInput(e.target.value)}
+          placeholder="entity A, entity B, ..."
+        />
+      </div>
+
+      <div className="flex items-center justify-end gap-2">
+        <Button variant="ghost" size="sm" onClick={onCancel}>
+          Cancel
+        </Button>
+        <Button size="sm" onClick={handleSave}>
+          <span className="material-symbols-outlined" style={{ fontSize: 15 }}>
+            check
+          </span>
+          Save
+        </Button>
+      </div>
+    </div>
+  );
+}
+
+function PlanPageRow({
+  page,
+  onEdit,
+  onDelete,
+}: {
+  page: PlanPage;
+  onEdit: () => void;
+  onDelete: () => void;
+}) {
+  return (
+    <div className="flex items-start gap-3 p-3 rounded-lg border border-border bg-card group">
+      <Badge
+        variant="outline"
+        className={`shrink-0 text-[10px] font-medium h-5 px-1.5 mt-0.5 ${
+          page.action === "CREATE"
+            ? "border-green-500/50 text-green-600"
+            : "border-yellow-500/50 text-yellow-600"
+        }`}
+      >
+        {page.action}
+      </Badge>
+
+      <div className="min-w-0 flex-1">
+        <div className="flex items-center gap-2 flex-wrap">
+          <span className="text-sm font-medium">{page.title}</span>
+          <span className="text-[10px] text-muted-foreground font-mono">
+            {page.slug}
+          </span>
+          <Badge variant="secondary" className="text-[10px] h-4 px-1.5">
+            {page.page_type}
+          </Badge>
+          {page.priority !== undefined && (
+            <span className="text-[10px] text-muted-foreground">
+              #{page.priority}
+            </span>
+          )}
+        </div>
+        {page.entity_names && page.entity_names.length > 0 && (
+          <p className="text-[11px] text-muted-foreground mt-1 truncate">
+            {page.entity_names.slice(0, 6).join(", ")}
+            {page.entity_names.length > 6 &&
+              ` +${page.entity_names.length - 6} more`}
+          </p>
+        )}
+      </div>
+
+      <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity shrink-0">
+        <button
+          type="button"
+          onClick={onEdit}
+          className="p-1 rounded hover:bg-secondary text-muted-foreground hover:text-foreground transition-colors"
+          title="Edit"
+        >
+          <span className="material-symbols-outlined" style={{ fontSize: 16 }}>
+            edit
+          </span>
+        </button>
+        <button
+          type="button"
+          onClick={onDelete}
+          className="p-1 rounded hover:bg-destructive/10 text-muted-foreground hover:text-destructive transition-colors"
+          title="Delete"
+        >
+          <span className="material-symbols-outlined" style={{ fontSize: 16 }}>
+            delete
+          </span>
+        </button>
+      </div>
+    </div>
+  );
+}
+
 export function PlanReviewDialog({
   source,
   onClose,
@@ -46,19 +251,53 @@ export function PlanReviewDialog({
   onClose: () => void;
   onDone: () => void;
 }) {
-  const [plan, setPlan] = React.useState<PlanData | null>(null);
+  const [planMeta, setPlanMeta] = React.useState<Omit<PlanData, "pages"> | null>(null);
+  const [pages, setPages] = React.useState<PlanPage[]>([]);
   const [loading, setLoading] = React.useState(true);
   const [error, setError] = React.useState<string | null>(null);
   const [submitting, setSubmitting] = React.useState<"approve" | "reject" | null>(null);
   const [reviewNote, setReviewNote] = React.useState("");
   const [confirmReject, setConfirmReject] = React.useState(false);
+  const [editingIdx, setEditingIdx] = React.useState<number | null>(null);
+  const [deleteConfirmIdx, setDeleteConfirmIdx] = React.useState<number | null>(null);
 
   React.useEffect(() => {
     api<PlanResponse>(`/api/sources/${source.id}/plan`)
-      .then((res) => setPlan(res.plan))
+      .then((res) => {
+        const { pages: pg, ...rest } = res.plan;
+        setPlanMeta(rest);
+        setPages([...(pg ?? [])].sort((a, b) => (a.priority ?? 99) - (b.priority ?? 99)));
+      })
       .catch((e) => setError(e instanceof Error ? e.message : "Failed to load plan"))
       .finally(() => setLoading(false));
   }, [source.id]);
+
+  const handleSaveEdit = (idx: number, updated: PlanPage) => {
+    setPages((prev) => prev.map((p, i) => (i === idx ? updated : p)));
+    setEditingIdx(null);
+  };
+
+  const handleDelete = (idx: number) => {
+    if (deleteConfirmIdx !== idx) {
+      setDeleteConfirmIdx(idx);
+      return;
+    }
+    setPages((prev) => prev.filter((_, i) => i !== idx));
+    setDeleteConfirmIdx(null);
+  };
+
+  const handleAddPage = () => {
+    const newPage: PlanPage = {
+      action: "CREATE",
+      slug: `new-page-${pages.length + 1}`,
+      title: "New Page",
+      page_type: "concept",
+      entity_names: [],
+      priority: (pages.length + 1),
+    };
+    setPages((prev) => [...prev, newPage]);
+    setEditingIdx(pages.length);
+  };
 
   const handleApprove = async () => {
     setSubmitting("approve");
@@ -66,7 +305,10 @@ export function PlanReviewDialog({
     try {
       await api(`/api/sources/${source.id}/plan/approve`, {
         method: "POST",
-        body: { note: reviewNote || "Approved via UI" },
+        body: {
+          note: reviewNote || "Approved via UI",
+          modified_plan: planMeta ? { ...planMeta, pages } : { pages },
+        },
       });
       onDone();
     } catch (e) {
@@ -94,13 +336,12 @@ export function PlanReviewDialog({
     }
   };
 
-  const pages = plan?.pages ?? [];
   const creates = pages.filter((p) => p.action === "CREATE");
   const updates = pages.filter((p) => p.action === "UPDATE");
 
   return (
     <Dialog open onOpenChange={(open) => !open && onClose()}>
-      <DialogContent className="sm:max-w-2xl max-h-[85vh] flex flex-col">
+      <DialogContent className="sm:max-w-2xl max-h-[90vh] flex flex-col">
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2">
             <span className="material-symbols-outlined text-blue-500" style={{ fontSize: 20 }}>
@@ -109,7 +350,7 @@ export function PlanReviewDialog({
             Review Compilation Plan
           </DialogTitle>
           <p className="text-sm text-muted-foreground mt-1">
-            {source.title} — approve to start writing wiki pages, or reject to stop.
+            {source.title} — chỉnh sửa plan nếu cần, sau đó Approve để bắt đầu viết wiki.
           </p>
         </DialogHeader>
 
@@ -128,130 +369,155 @@ export function PlanReviewDialog({
             </div>
           )}
 
-          {plan && (
-            <div className="flex flex-col gap-4">
-              {/* Summary row */}
+          {!loading && planMeta !== null && (
+            <div className="flex flex-col gap-3">
+              {/* Summary */}
               <div className="flex items-center gap-4 text-sm text-muted-foreground flex-wrap">
                 <span className="flex items-center gap-1.5">
                   <span className="w-2 h-2 rounded-full bg-green-500" />
-                  {creates.length} page{creates.length !== 1 ? "s" : ""} to create
+                  {creates.length} trang tạo mới
                 </span>
                 <span className="flex items-center gap-1.5">
                   <span className="w-2 h-2 rounded-full bg-yellow-500" />
-                  {updates.length} page{updates.length !== 1 ? "s" : ""} to update
+                  {updates.length} trang cập nhật
                 </span>
-                {plan.strategy && (
+                {planMeta.strategy && (
                   <span className="flex items-center gap-1.5">
-                    <span className="material-symbols-outlined text-sm">analytics</span>
-                    {plan.strategy}
+                    <span className="material-symbols-outlined" style={{ fontSize: 14 }}>analytics</span>
+                    {planMeta.strategy}
                   </span>
                 )}
               </div>
 
               {/* Planner notes */}
-              {plan.compilation_notes && (
+              {planMeta.compilation_notes && (
                 <div className="text-xs text-muted-foreground bg-secondary/40 rounded-lg px-3 py-2 border border-border">
-                  <span className="font-medium text-foreground">Planner note: </span>
-                  {plan.compilation_notes}
+                  <span className="font-medium text-foreground">Ghi chú: </span>
+                  {planMeta.compilation_notes}
                 </div>
               )}
 
               {/* Page list */}
-              {[...creates, ...updates]
-                .sort((a, b) => (a.priority ?? 99) - (b.priority ?? 99))
-                .map((page) => (
-                  <div
-                    key={page.slug}
-                    className="flex items-start gap-3 p-3 rounded-lg border border-border bg-card"
-                  >
-                    <Badge
-                      variant="outline"
-                      className={`shrink-0 text-[10px] font-medium h-5 px-1.5 ${
-                        page.action === "CREATE"
-                          ? "border-green-500/50 text-green-600"
-                          : "border-yellow-500/50 text-yellow-600"
-                      }`}
+              <div className="flex flex-col gap-2">
+                {pages.map((page, idx) =>
+                  editingIdx === idx ? (
+                    <EditForm
+                      key={idx}
+                      page={page}
+                      onSave={(updated) => handleSaveEdit(idx, updated)}
+                      onCancel={() => setEditingIdx(null)}
+                    />
+                  ) : deleteConfirmIdx === idx ? (
+                    <div
+                      key={idx}
+                      className="flex items-center justify-between gap-3 p-3 rounded-lg border border-destructive/40 bg-destructive/5"
                     >
-                      {page.action}
-                    </Badge>
-                    <div className="min-w-0 flex-1">
-                      <div className="flex items-center gap-2 flex-wrap">
-                        <span className="text-sm font-medium">{page.title}</span>
-                        <span className="text-[10px] text-muted-foreground font-mono">
-                          {page.slug}
-                        </span>
-                        <Badge variant="secondary" className="text-[10px] h-4 px-1.5">
-                          {page.page_type}
-                        </Badge>
+                      <span className="text-sm text-destructive">
+                        Xóa trang <strong>{page.title}</strong>?
+                      </span>
+                      <div className="flex items-center gap-2 shrink-0">
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          onClick={() => setDeleteConfirmIdx(null)}
+                        >
+                          Hủy
+                        </Button>
+                        <Button
+                          variant="destructive"
+                          size="sm"
+                          onClick={() => handleDelete(idx)}
+                        >
+                          Xóa
+                        </Button>
                       </div>
-                      {page.entity_names && page.entity_names.length > 0 && (
-                        <p className="text-[11px] text-muted-foreground mt-1 truncate">
-                          {page.entity_names.slice(0, 5).join(", ")}
-                          {page.entity_names.length > 5 && ` +${page.entity_names.length - 5} more`}
-                        </p>
-                      )}
                     </div>
-                  </div>
-                ))}
+                  ) : (
+                    <PlanPageRow
+                      key={idx}
+                      page={page}
+                      onEdit={() => {
+                        setDeleteConfirmIdx(null);
+                        setEditingIdx(idx);
+                      }}
+                      onDelete={() => {
+                        setEditingIdx(null);
+                        handleDelete(idx);
+                      }}
+                    />
+                  )
+                )}
+              </div>
+
+              {/* Add page */}
+              <button
+                type="button"
+                onClick={handleAddPage}
+                className="flex items-center gap-2 px-3 py-2 rounded-lg border border-dashed border-border text-sm text-muted-foreground hover:text-foreground hover:border-primary/50 hover:bg-secondary/40 transition-colors"
+              >
+                <span className="material-symbols-outlined" style={{ fontSize: 16 }}>add</span>
+                Thêm trang mới
+              </button>
             </div>
           )}
         </div>
-        <div className="mt-4 flex flex-col gap-2 shrink-0">
+
+        {/* Review note */}
+        <div className="mt-4 shrink-0">
           <textarea
             value={reviewNote}
             onChange={(e) => setReviewNote(e.target.value)}
-            placeholder="Review note or feedback (optional)"
-            className="w-full text-sm rounded-lg border border-border bg-background px-3 py-2 resize-none h-16 focus:outline-none focus:ring-2 focus:ring-primary/30 focus:border-primary/50"
+            placeholder="Ghi chú review (tùy chọn)"
+            className="w-full text-sm rounded-lg border border-border bg-background px-3 py-2 resize-none h-14 focus:outline-none focus:ring-2 focus:ring-primary/30 focus:border-primary/50"
           />
         </div>
 
-        <div className="flex items-center justify-end gap-2 mt-4 pt-4 border-t border-border shrink-0">
-          <Button
-            variant="ghost"
-            onClick={onClose}
-            disabled={submitting !== null}
-          >
-            Cancel
+        <div className="flex items-center justify-between gap-2 mt-3 pt-3 border-t border-border shrink-0">
+          <Button variant="ghost" onClick={onClose} disabled={submitting !== null}>
+            Đóng
           </Button>
-          {!confirmReject ? (
+
+          <div className="flex items-center gap-2">
+            {!confirmReject ? (
+              <Button
+                variant="outline"
+                onClick={() => setConfirmReject(true)}
+                disabled={loading || submitting !== null}
+                className="text-destructive border-destructive/30 hover:bg-destructive/10"
+              >
+                <span className="material-symbols-outlined" style={{ fontSize: 16 }}>close</span>
+                Từ chối
+              </Button>
+            ) : (
+              <Button
+                variant="destructive"
+                onClick={handleReject}
+                disabled={submitting !== null}
+              >
+                {submitting === "reject" ? (
+                  <span className="material-symbols-outlined animate-spin" style={{ fontSize: 16 }}>
+                    progress_activity
+                  </span>
+                ) : (
+                  <span className="material-symbols-outlined" style={{ fontSize: 16 }}>close</span>
+                )}
+                Xác nhận từ chối
+              </Button>
+            )}
             <Button
-              variant="outline"
-              onClick={() => setConfirmReject(true)}
-              disabled={loading || submitting !== null}
-              className="text-destructive border-destructive/30 hover:bg-destructive/10"
+              onClick={handleApprove}
+              disabled={loading || submitting !== null || pages.length === 0}
             >
-              <span className="material-symbols-outlined" style={{ fontSize: 16 }}>close</span>
-              Reject
-            </Button>
-          ) : (
-            <Button
-              variant="destructive"
-              onClick={handleReject}
-              disabled={submitting !== null}
-            >
-              {submitting === "reject" ? (
+              {submitting === "approve" ? (
                 <span className="material-symbols-outlined animate-spin" style={{ fontSize: 16 }}>
                   progress_activity
                 </span>
               ) : (
-                <span className="material-symbols-outlined" style={{ fontSize: 16 }}>close</span>
+                <span className="material-symbols-outlined" style={{ fontSize: 16 }}>check</span>
               )}
-              Confirm Reject
+              Approve & Compile
             </Button>
-          )}
-          <Button
-            onClick={handleApprove}
-            disabled={loading || submitting !== null}
-          >
-            {submitting === "approve" ? (
-              <span className="material-symbols-outlined animate-spin" style={{ fontSize: 16 }}>
-                progress_activity
-              </span>
-            ) : (
-              <span className="material-symbols-outlined" style={{ fontSize: 16 }}>check</span>
-            )}
-            Approve & Compile
-          </Button>
+          </div>
         </div>
       </DialogContent>
     </Dialog>

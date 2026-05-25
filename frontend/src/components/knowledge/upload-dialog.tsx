@@ -17,18 +17,10 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
+import { cn } from "@/lib/utils";
 
-type KnowledgeType = {
-  id: string;
-  slug: string;
-  name: string;
-  color: string;
-};
-
-type Department = {
-  id: string;
-  name: string;
-};
+type KnowledgeType = { id: string; slug: string; name: string; color: string };
+type Department    = { id: string; name: string };
 
 type Props = {
   open: boolean;
@@ -44,375 +36,381 @@ const ACCEPTED_MIMES = [
   "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
   "application/msword",
   "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-  "text/plain",
-  "text/csv",
-  "text/markdown",
+  "text/plain", "text/csv", "text/markdown",
   "application/vnd.openxmlformats-officedocument.presentationml.presentation",
 ];
 const ACCEPT_STRING = ACCEPTED_EXTENSIONS.map((e) => `.${e}`).join(",");
 
-function getFileExtension(name: string): string {
-  return (name.split(".").pop() || "").toLowerCase();
-}
+type FileStatus = "pending" | "uploading" | "done" | "error";
+type FileEntry  = { id: string; file: File; status: FileStatus; error?: string };
 
+function ext(name: string)              { return (name.split(".").pop() || "").toLowerCase(); }
+function fmtSize(b: number)            {
+  if (b < 1024) return `${b} B`;
+  if (b < 1048576) return `${(b / 1024).toFixed(1)} KB`;
+  return `${(b / 1048576).toFixed(1)} MB`;
+}
 function validateFile(f: File): string | null {
-  const ext = getFileExtension(f.name);
-  if (!ACCEPTED_EXTENSIONS.includes(ext) && !ACCEPTED_MIMES.includes(f.type)) {
-    return `Unsupported file type ".${ext}". Accepted: ${ACCEPTED_EXTENSIONS.join(", ")}`;
-  }
-  if (f.size > 50 * 1024 * 1024) {
-    return "File too large. Maximum size is 50 MB.";
-  }
+  if (!ACCEPTED_EXTENSIONS.includes(ext(f.name)) && !ACCEPTED_MIMES.includes(f.type))
+    return `Unsupported type ".${ext(f.name)}"`;
+  if (f.size > 50 * 1024 * 1024) return "Exceeds 50 MB";
   return null;
 }
 
-function formatFileSize(bytes: number): string {
-  if (bytes < 1024) return `${bytes} B`;
-  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
-  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
-}
+const STATUS_ICON: Record<FileStatus, { icon: string; cls: string }> = {
+  pending:   { icon: "description",       cls: "text-muted-foreground/40" },
+  uploading: { icon: "progress_activity", cls: "text-primary animate-spin" },
+  done:      { icon: "check_circle",      cls: "text-green-500" },
+  error:     { icon: "error",             cls: "text-destructive" },
+};
 
 export function UploadDialog({ open, onOpenChange, types, departments, onUploaded }: Props) {
-  const [file, setFile] = useState<File | null>(null);
-  const [typeId, setTypeId] = useState("");
+  const [entries,       setEntries]       = useState<FileEntry[]>([]);
+  const [addError,      setAddError]      = useState("");
+  const [typeId,        setTypeId]        = useState("");
   const [selectedDepts, setSelectedDepts] = useState<string[]>([]);
-  const [scopeType, setScopeType] = useState("global");
-  const [scopeId, setScopeId] = useState("");
-  const [projects, setProjects] = useState<{ id: string; name: string }[]>([]);
-  const [uploading, setUploading] = useState(false);
-  const [error, setError] = useState("");
-  const [dragOver, setDragOver] = useState(false);
+  const [scopeType,     setScopeType]     = useState("global");
+  const [scopeId,       setScopeId]       = useState("");
+  const [projects,      setProjects]      = useState<{ id: string; name: string }[]>([]);
+  const [uploading,     setUploading]     = useState(false);
+  const [dragOver,      setDragOver]      = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
-  const toggleDept = (deptId: string) => {
-    setSelectedDepts((prev) =>
-      prev.includes(deptId) ? prev.filter((d) => d !== deptId) : [...prev, deptId]
-    );
-  };
+  const reset = useCallback(() => {
+    setEntries([]); setAddError(""); setTypeId("");
+    setSelectedDepts([]); setScopeType("global"); setScopeId("");
+  }, []);
 
   useEffect(() => {
-    if (!open) return;
+    if (!open) { reset(); return; }
     api<{ id: string; name: string }[]>("/api/projects")
-      .then((data) => setProjects(Array.isArray(data) ? data : []))
+      .then((d) => setProjects(Array.isArray(d) ? d : []))
       .catch(() => setProjects([]));
-  }, [open]);
+  }, [open, reset]);
 
-  const handleFile = useCallback((f: File) => {
-    const validationError = validateFile(f);
-    if (validationError) {
-      setError(validationError);
-      setFile(null);
-      return;
+  const addFiles = useCallback((incoming: File[]) => {
+    setAddError("");
+    const toAdd: FileEntry[] = [];
+    const errs: string[] = [];
+    for (const f of incoming) {
+      const e = validateFile(f);
+      if (e) { errs.push(`${f.name}: ${e}`); continue; }
+      toAdd.push({ id: `${f.name}-${f.size}-${f.lastModified}`, file: f, status: "pending" });
     }
-    setError("");
-    setFile(f);
+    if (errs.length) setAddError(errs.join(" · "));
+    setEntries((prev) => {
+      const ids = new Set(prev.map((e) => e.id));
+      return [...prev, ...toAdd.filter((e) => !ids.has(e.id))];
+    });
   }, []);
 
-  const handleDrop = useCallback(
-    (e: React.DragEvent) => {
-      e.preventDefault();
-      e.stopPropagation();
-      setDragOver(false);
-      const f = e.dataTransfer.files?.[0];
-      if (f) handleFile(f);
-    },
-    [handleFile]
-  );
+  const removeEntry = (id: string) => setEntries((p) => p.filter((e) => e.id !== id));
 
-  const handleDragOver = useCallback((e: React.DragEvent) => {
-    e.preventDefault();
-    e.stopPropagation();
-    setDragOver(true);
-  }, []);
+  const handleDrop = useCallback((e: React.DragEvent) => {
+    e.preventDefault(); e.stopPropagation(); setDragOver(false);
+    addFiles(Array.from(e.dataTransfer.files));
+  }, [addFiles]);
 
-  const handleDragLeave = useCallback((e: React.DragEvent) => {
-    e.preventDefault();
-    e.stopPropagation();
-    setDragOver(false);
-  }, []);
+  const handleDragOver  = useCallback((e: React.DragEvent) => { e.preventDefault(); e.stopPropagation(); setDragOver(true);  }, []);
+  const handleDragLeave = useCallback((e: React.DragEvent) => { e.preventDefault(); e.stopPropagation(); setDragOver(false); }, []);
 
   const handleUpload = async () => {
-    if (!file) return;
+    const toUpload = entries.filter((e) => e.status === "pending" || e.status === "error");
+    if (!toUpload.length) return;
     setUploading(true);
-    setError("");
+    let anyError = false;
 
-    try {
-      const formData = new FormData();
-      formData.append("file", file);
-      if (typeId) formData.append("knowledge_type_id", typeId);
-      
-      if (selectedDepts.length > 0) {
-        formData.append("department_ids", selectedDepts.join(","));
+    for (const entry of toUpload) {
+      setEntries((p) => p.map((e) => e.id === entry.id ? { ...e, status: "uploading", error: undefined } : e));
+      try {
+        const fd = new FormData();
+        fd.append("file", entry.file);
+        if (typeId)               fd.append("knowledge_type_id", typeId);
+        if (selectedDepts.length) fd.append("department_ids", selectedDepts.join(","));
+        fd.append("scope_type", scopeType);
+        if (scopeType !== "global" && scopeId) fd.append("scope_id", scopeId);
+        await apiUpload("/api/sources/upload", fd);
+        setEntries((p) => p.map((e) => e.id === entry.id ? { ...e, status: "done" } : e));
+      } catch (err) {
+        anyError = true;
+        const msg = err instanceof Error ? err.message : "Upload failed";
+        setEntries((p) => p.map((e) => e.id === entry.id ? { ...e, status: "error", error: msg } : e));
       }
-      formData.append("scope_type", scopeType);
-      if (scopeType !== "global" && scopeId) {
-        formData.append("scope_id", scopeId);
-      }
-
-      await apiUpload("/api/sources/upload", formData);
-      onUploaded();
-      onOpenChange(false);
-      setFile(null);
-      setTypeId("");
-      setSelectedDepts([]);
-      setScopeType("global");
-      setScopeId("");
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "Upload failed");
-    } finally {
-      setUploading(false);
     }
+
+    setUploading(false);
+    onUploaded();
+    if (!anyError) onOpenChange(false);
   };
+
+  const pendingCount = entries.filter((e) => e.status === "pending").length;
+  const errorCount   = entries.filter((e) => e.status === "error").length;
+  const doneCount    = entries.filter((e) => e.status === "done").length;
+  const retryCount   = pendingCount + errorCount;
+
+  const uploadLabel = uploading
+    ? `Uploading… (${doneCount}/${entries.length})`
+    : errorCount > 0 && !pendingCount
+      ? `Retry ${errorCount} failed`
+      : `Upload ${retryCount} file${retryCount !== 1 ? "s" : ""}`;
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="sm:max-w-md">
-        <DialogHeader>
-          <DialogTitle className="text-xl font-heading">Upload Document</DialogTitle>
+      {/*
+        flex flex-col + max-h keeps the dialog bounded.
+        The base DialogContent uses `grid`; flex overrides it via tailwind-merge.
+        overflow-hidden clips children; scrolling happens on the inner body div.
+      */}
+      <DialogContent className="flex flex-col w-full max-w-[calc(100%-1.5rem)] sm:max-w-lg overflow-hidden max-h-[90dvh]">
+
+        {/* ── Fixed header ── */}
+        <DialogHeader className="shrink-0 pb-3 border-b border-border">
+          <DialogTitle className="text-base font-semibold">Upload Documents</DialogTitle>
         </DialogHeader>
 
-        <div className="flex flex-col gap-4 mt-2 overflow-hidden">
-          {/* Drag & drop zone */}
-          <div className="flex flex-col gap-2 min-w-0">
-            <Label>File</Label>
-            <div
-              onDrop={handleDrop}
-              onDragOver={handleDragOver}
-              onDragLeave={handleDragLeave}
-              onClick={() => fileInputRef.current?.click()}
-              className={`
-                relative flex flex-col items-center justify-center gap-2 px-4 py-6
-                rounded-xl border-2 border-dashed cursor-pointer transition-all duration-200 overflow-hidden
-                ${dragOver
-                  ? "border-primary bg-primary/5 scale-[1.01]"
-                  : file
-                    ? "border-primary/40 bg-primary/[0.02]"
-                    : "border-border hover:border-primary/40 hover:bg-accent/30"
-                }
-              `}
-            >
-              <input
-                ref={fileInputRef}
-                type="file"
-                accept={ACCEPT_STRING}
-                onChange={(e) => {
-                  const f = e.target.files?.[0];
-                  if (f) handleFile(f);
-                  // Reset input so same file can be re-selected
-                  e.target.value = "";
-                }}
-                className="hidden"
-              />
+        {/* ── Scrollable body ── */}
+        <div className="flex-1 min-h-0 overflow-y-auto flex flex-col gap-3 py-3">
 
-              {file ? (
-                /* File selected state */
-                <div className="flex items-center gap-3 w-full min-w-0">
-                  <div className="w-10 h-10 rounded-lg bg-primary/10 flex items-center justify-center shrink-0">
-                    <span className="material-symbols-outlined text-primary" style={{ fontSize: 20 }}>
-                      description
-                    </span>
-                  </div>
-                  <div className="flex-1 min-w-0 overflow-hidden">
-                    <p className="text-sm font-medium text-foreground truncate">{file.name}</p>
-                    <p className="text-xs text-muted-foreground">
-                      {formatFileSize(file.size)} · .{getFileExtension(file.name).toUpperCase()}
-                    </p>
-                  </div>
-                  <button
-                    type="button"
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      setFile(null);
-                      setError("");
-                    }}
-                    className="p-1 rounded-md hover:bg-accent/50 text-muted-foreground hover:text-foreground transition-colors"
-                  >
-                    <span className="material-symbols-outlined" style={{ fontSize: 16 }}>close</span>
-                  </button>
-                </div>
-              ) : (
-                /* Empty state — prompt */
-                <>
-                  <div className={`w-10 h-10 rounded-full flex items-center justify-center transition-colors ${
-                    dragOver ? "bg-primary/15" : "bg-accent/60"
-                  }`}>
-                    <span className={`material-symbols-outlined transition-colors ${
-                      dragOver ? "text-primary" : "text-muted-foreground"
-                    }`} style={{ fontSize: 22 }}>
-                      upload_file
-                    </span>
-                  </div>
-                  <div className="text-center">
-                    <p className="text-sm text-foreground font-medium">
-                      {dragOver ? "Drop file here" : "Drag & drop or click to browse"}
-                    </p>
-                    <p className="text-xs text-muted-foreground mt-0.5">
-                      PDF, DOCX, XLSX, CSV, TXT, MD, PPTX · Max 50 MB
-                    </p>
-                  </div>
-                </>
-              )}
+          {/* Dropzone — compact when files exist */}
+          <div
+            onDrop={handleDrop}
+            onDragOver={handleDragOver}
+            onDragLeave={handleDragLeave}
+            onClick={() => !uploading && fileInputRef.current?.click()}
+            className={cn(
+              "flex items-center gap-3 rounded-lg border-2 border-dashed transition-all duration-200 cursor-pointer select-none",
+              entries.length > 0 ? "px-3 py-2.5" : "flex-col justify-center px-4 py-8",
+              dragOver    ? "border-primary bg-primary/5"
+              : entries.length > 0 ? "border-border hover:border-primary/50 hover:bg-accent/20"
+              : "border-border hover:border-primary/40 hover:bg-accent/30",
+              uploading && "pointer-events-none opacity-60"
+            )}
+          >
+            <input
+              ref={fileInputRef}
+              type="file"
+              multiple
+              accept={ACCEPT_STRING}
+              onChange={(e) => { if (e.target.files) addFiles(Array.from(e.target.files)); e.target.value = ""; }}
+              className="hidden"
+            />
+            <div className={cn(
+              "rounded-full flex items-center justify-center shrink-0 transition-colors",
+              entries.length > 0 ? "w-7 h-7" : "w-10 h-10",
+              dragOver ? "bg-primary/10" : "bg-accent/60"
+            )}>
+              <span className={cn("material-symbols-outlined", dragOver ? "text-primary" : "text-muted-foreground")}
+                style={{ fontSize: entries.length > 0 ? 16 : 20 }}>
+                upload_file
+              </span>
             </div>
-          </div>
-
-          {/* Knowledge Type */}
-          <div className="flex flex-col gap-2">
-            <Label>Knowledge Type</Label>
-            <Select value={typeId} onValueChange={(v) => setTypeId(v ?? "")}>
-              <SelectTrigger className="bg-background w-full">
-                {typeId ? (() => { const t = types.find(x => x.id === typeId); return t ? (
-                  <div className="flex items-center gap-2">
-                    <span className="w-2.5 h-2.5 rounded-full" style={{ backgroundColor: t.color }} />
-                    <span>{t.name}</span>
-                  </div>
-                ) : <SelectValue placeholder="Select type (optional)" />; })() : <SelectValue placeholder="Select type (optional)" />}
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="">None</SelectItem>
-                {types.map((t) => (
-                  <SelectItem key={t.id} value={t.id}>
-                    <div className="flex items-center gap-2">
-                      <span className="w-2.5 h-2.5 rounded-full" style={{ backgroundColor: t.color }} />
-                      {t.name}
-                    </div>
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-          </div>
-
-          {/* Department access control */}
-          <div className="flex flex-col gap-1.5">
-            <Label>Departments</Label>
-            <p className="text-xs text-muted-foreground">
-              Select which departments can access this document. Leave empty for global access.
-            </p>
-            <div className="border rounded-lg p-2 max-h-40 overflow-y-auto bg-background">
-              {departments.length === 0 ? (
-                <span className="text-xs text-muted-foreground">No departments available</span>
-              ) : (
-                departments.map((d) => (
-                  <label
-                    key={d.id}
-                    className="flex items-center gap-2 px-2 py-1.5 rounded hover:bg-muted cursor-pointer"
-                  >
-                    <input
-                      type="checkbox"
-                      checked={selectedDepts.includes(d.id)}
-                      onChange={() => toggleDept(d.id)}
-                      className="rounded border-border"
-                    />
-                    <span className="text-sm">{d.name}</span>
-                  </label>
-                ))
-              )}
-            </div>
-            {selectedDepts.length > 0 && (
-              <div className="flex flex-wrap gap-1 mt-1">
-                {selectedDepts.map((id) => {
-                  const name = departments.find((d) => d.id === id)?.name ?? id;
-                  return (
-                    <span
-                      key={id}
-                      className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium bg-primary/10 text-primary"
-                    >
-                      {name}
-                      <button type="button" onClick={() => toggleDept(id)} className="hover:text-destructive">×</button>
-                    </span>
-                  );
-                })}
+            {entries.length > 0 ? (
+              <span className="text-[13px] text-muted-foreground">
+                {dragOver ? "Drop to add more" : "Click or drop to add more files"}
+              </span>
+            ) : (
+              <div className="text-center">
+                <p className="text-sm font-medium text-foreground">
+                  {dragOver ? "Drop files here" : "Drag & drop or click to browse"}
+                </p>
+                <p className="text-xs text-muted-foreground mt-0.5">
+                  PDF, DOCX, XLSX, CSV, TXT, MD, PPTX · Max 50 MB per file
+                </p>
               </div>
             )}
           </div>
 
-          {/* Visibility / Scope */}
-          <div className="flex flex-col gap-2">
-            <Label>Visibility</Label>
-            <Select value={scopeType} onValueChange={(v) => {
-              const val = v ?? "global";
-              setScopeType(val);
-              if (val === "global") setScopeId("");
-            }}>
-              <SelectTrigger className="bg-background w-full">
-                <div className="flex items-center gap-2">
-                  <span className="material-symbols-outlined" style={{ fontSize: 14 }}>
-                    {scopeType === "global" ? "public" : "folder_special"}
-                  </span>
-                  <span className="capitalize">{scopeType === "project" ? "Workspace" : scopeType}</span>
-                </div>
-              </SelectTrigger>
-              <SelectContent className="min-w-[220px]">
-                <SelectItem value="global">
-                  <div className="flex items-center gap-2">
-                    <span className="material-symbols-outlined" style={{ fontSize: 14 }}>public</span>
-                    Global
-                  </div>
-                </SelectItem>
-                <SelectItem value="project">
-                  <div className="flex items-center gap-2">
-                    <span className="material-symbols-outlined" style={{ fontSize: 14 }}>folder_special</span>
-                    Workspace
-                  </div>
-                </SelectItem>
-              </SelectContent>
-            </Select>
-            {scopeType === "global" && (
-              <p className="text-xs text-amber-600 dark:text-amber-400 flex items-start gap-1.5 mt-0.5">
-                <span className="material-symbols-outlined shrink-0" style={{ fontSize: 13, marginTop: 1 }}>warning</span>
-                Document content will be compiled into the shared wiki and visible to all employees — including those without access to the original file. Only upload if the content is not sensitive.
-              </p>
-            )}
-          </div>
+          {/* Validation error */}
+          {addError && (
+            <p className="text-xs text-destructive flex items-start gap-1.5 -mt-1">
+              <span className="material-symbols-outlined shrink-0" style={{ fontSize: 13, marginTop: 1 }}>error</span>
+              <span className="break-words">{addError}</span>
+            </p>
+          )}
 
-          {scopeType === "project" && (
+          {/* File list */}
+          {entries.length > 0 && (
+            <div className="rounded-lg border border-border overflow-hidden bg-background">
+              <div className="overflow-y-auto" style={{ maxHeight: "11rem" }}>
+                {entries.map((entry) => {
+                  const { icon, cls } = STATUS_ICON[entry.status];
+                  return (
+                    <div key={entry.id} className="flex items-center gap-2 px-3 py-2 border-b border-border/50 last:border-0">
+                      <span className={cn("material-symbols-outlined shrink-0", cls)} style={{ fontSize: 15 }}>
+                        {icon}
+                      </span>
+                      <div className="flex-1 min-w-0">
+                        <p className="text-[13px] truncate leading-snug">{entry.file.name}</p>
+                        <p className={cn("text-[11px] truncate leading-tight", entry.error ? "text-destructive" : "text-muted-foreground")}>
+                          {entry.error ?? `${fmtSize(entry.file.size)} · ${ext(entry.file.name).toUpperCase()}`}
+                        </p>
+                      </div>
+                      {!uploading && entry.status !== "done" && (
+                        <button type="button" onClick={() => removeEntry(entry.id)}
+                          className="shrink-0 w-5 h-5 flex items-center justify-center rounded text-muted-foreground/40 hover:text-destructive hover:bg-destructive/10 transition-colors">
+                          <span className="material-symbols-outlined" style={{ fontSize: 13 }}>close</span>
+                        </button>
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
+              {/* Summary bar */}
+              <div className="flex items-center justify-between px-3 py-1.5 bg-muted/30 border-t border-border text-[11px] text-muted-foreground">
+                <span>
+                  {entries.length} file{entries.length !== 1 ? "s" : ""}
+                  {doneCount > 0 && <span className="text-green-600 ml-1.5">· {doneCount} done</span>}
+                  {errorCount > 0 && <span className="text-destructive ml-1.5">· {errorCount} failed</span>}
+                </span>
+                {!uploading && (
+                  <button type="button" onClick={() => setEntries([])}
+                    className="hover:text-foreground transition-colors">
+                    Clear all
+                  </button>
+                )}
+              </div>
+            </div>
+          )}
+
+          {/* Knowledge Type + Visibility — side by side on sm+ */}
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
             <div className="flex flex-col gap-1.5">
-              <Label>Target Workspace</Label>
-              <Select value={scopeId} onValueChange={(v) => setScopeId(v ?? "")}>
-                <SelectTrigger className="bg-background">
-                  <span>{scopeId ? (projects.find(p => p.id === scopeId)?.name ?? "Select...") : "Select workspace..."}</span>
+              <Label className="text-xs">Knowledge Type</Label>
+              <Select value={typeId} onValueChange={(v) => setTypeId(v ?? "")}>
+                <SelectTrigger className="bg-background h-8 text-[13px]">
+                  {typeId ? (() => {
+                    const t = types.find((x) => x.id === typeId);
+                    return t ? (
+                      <div className="flex items-center gap-1.5">
+                        <span className="w-2 h-2 rounded-full shrink-0" style={{ backgroundColor: t.color }} />
+                        <span className="truncate">{t.name}</span>
+                      </div>
+                    ) : <SelectValue placeholder="Optional" />;
+                  })() : <SelectValue placeholder="Optional" />}
                 </SelectTrigger>
                 <SelectContent>
-                  {projects.map((p) => (
-                    <SelectItem key={p.id} value={p.id}>
-                      {p.name}
+                  <SelectItem value="">None</SelectItem>
+                  {types.map((t) => (
+                    <SelectItem key={t.id} value={t.id}>
+                      <div className="flex items-center gap-2">
+                        <span className="w-2 h-2 rounded-full shrink-0" style={{ backgroundColor: t.color }} />
+                        {t.name}
+                      </div>
                     </SelectItem>
                   ))}
                 </SelectContent>
               </Select>
             </div>
-          )}
 
-          {error && (
-            <p className="text-destructive text-sm bg-destructive/10 px-3 py-2 rounded-lg flex items-center gap-2">
-              <span className="material-symbols-outlined" style={{ fontSize: 16 }}>error</span>
-              {error}
+            <div className="flex flex-col gap-1.5">
+              <Label className="text-xs">Visibility</Label>
+              <Select value={scopeType} onValueChange={(v) => { const val = v ?? "global"; setScopeType(val); if (val === "global") setScopeId(""); }}>
+                <SelectTrigger className="bg-background h-8 text-[13px]">
+                  <div className="flex items-center gap-1.5">
+                    <span className="material-symbols-outlined" style={{ fontSize: 13 }}>
+                      {scopeType === "global" ? "public" : "folder_special"}
+                    </span>
+                    <span>{scopeType === "project" ? "Workspace" : "Global"}</span>
+                  </div>
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="global">
+                    <div className="flex items-center gap-2">
+                      <span className="material-symbols-outlined" style={{ fontSize: 13 }}>public</span>
+                      Global
+                    </div>
+                  </SelectItem>
+                  <SelectItem value="project">
+                    <div className="flex items-center gap-2">
+                      <span className="material-symbols-outlined" style={{ fontSize: 13 }}>folder_special</span>
+                      Workspace
+                    </div>
+                  </SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+          </div>
+
+          {/* Global warning */}
+          {scopeType === "global" && (
+            <p className="text-[11px] text-amber-600 dark:text-amber-400 flex items-start gap-1.5 -mt-1 bg-amber-50 dark:bg-amber-950/30 rounded-lg px-2.5 py-2">
+              <span className="material-symbols-outlined shrink-0" style={{ fontSize: 12, marginTop: 1 }}>warning</span>
+              Content will be compiled into the shared wiki, visible to all employees. Only upload non-sensitive documents.
             </p>
           )}
 
-          <div className="flex justify-end gap-2 mt-2">
-            <Button variant="outline" onClick={() => onOpenChange(false)}>
-              Cancel
-            </Button>
-            <Button
-              disabled={!file || uploading}
-              onClick={handleUpload}
-              className="bg-primary text-primary-foreground hover:bg-primary/90"
-            >
-              {uploading ? (
-                <span className="flex items-center gap-2">
-                  <span className="material-symbols-outlined animate-spin text-sm">
-                    progress_activity
-                  </span>
-                  Uploading...
-                </span>
-              ) : (
-                "Upload"
+          {/* Target Workspace */}
+          {scopeType === "project" && (
+            <div className="flex flex-col gap-1.5">
+              <Label className="text-xs">Target Workspace</Label>
+              <Select value={scopeId} onValueChange={(v) => setScopeId(v ?? "")}>
+                <SelectTrigger className="bg-background h-8 text-[13px]">
+                  <span>{scopeId ? (projects.find((p) => p.id === scopeId)?.name ?? "Select…") : "Select workspace…"}</span>
+                </SelectTrigger>
+                <SelectContent>
+                  {projects.map((p) => <SelectItem key={p.id} value={p.id}>{p.name}</SelectItem>)}
+                </SelectContent>
+              </Select>
+            </div>
+          )}
+
+          {/* Departments */}
+          {departments.length > 0 && (
+            <div className="flex flex-col gap-1.5">
+              <Label className="text-xs">
+                Department Access
+                <span className="ml-1.5 font-normal text-muted-foreground">(optional)</span>
+              </Label>
+              <div className="border border-border rounded-lg overflow-hidden bg-background" style={{ maxHeight: "8rem" }}>
+                <div className="overflow-y-auto h-full">
+                  {departments.map((d) => (
+                    <label key={d.id}
+                      className="flex items-center gap-2 px-3 py-1.5 cursor-pointer hover:bg-muted/50 border-b border-border/40 last:border-0">
+                      <input
+                        type="checkbox"
+                        checked={selectedDepts.includes(d.id)}
+                        onChange={() => setSelectedDepts((p) => p.includes(d.id) ? p.filter((x) => x !== d.id) : [...p, d.id])}
+                        className="rounded border-border shrink-0"
+                      />
+                      <span className="text-[13px]">{d.name}</span>
+                    </label>
+                  ))}
+                </div>
+              </div>
+              {selectedDepts.length > 0 && (
+                <div className="flex flex-wrap gap-1">
+                  {selectedDepts.map((id) => {
+                    const name = departments.find((d) => d.id === id)?.name ?? id;
+                    return (
+                      <span key={id}
+                        className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[11px] font-medium bg-primary/10 text-primary">
+                        {name}
+                        <button type="button"
+                          onClick={() => setSelectedDepts((p) => p.filter((x) => x !== id))}
+                          className="hover:text-destructive leading-none">×</button>
+                      </span>
+                    );
+                  })}
+                </div>
               )}
-            </Button>
-          </div>
+            </div>
+          )}
         </div>
+
+        {/* ── Fixed footer ── */}
+        <div className="shrink-0 flex justify-end gap-2 pt-3 border-t border-border">
+          <Button variant="outline" size="sm" onClick={() => onOpenChange(false)} disabled={uploading}>
+            {errorCount > 0 && !pendingCount && doneCount > 0 ? "Close" : "Cancel"}
+          </Button>
+          <Button size="sm" disabled={retryCount === 0 || uploading} onClick={handleUpload}
+            className="min-w-[110px]">
+            {uploading
+              ? <><span className="material-symbols-outlined animate-spin mr-1.5" style={{ fontSize: 13 }}>progress_activity</span>{uploadLabel}</>
+              : uploadLabel}
+          </Button>
+        </div>
+
       </DialogContent>
     </Dialog>
   );
 }
-

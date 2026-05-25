@@ -92,19 +92,13 @@ export async function api<T = unknown>(
   return JSON.parse(text);
 }
 
-/**
- * Upload a file via multipart/form-data.
- * Bypasses the Next.js proxy (which has a 10MB body limit) by calling the
- * API directly using the current page's hostname and the API port.
- */
+/** Upload a file via multipart/form-data. Uses the same base URL as `api()`. */
 export async function apiUpload<T = unknown>(
   path: string,
   formData: FormData,
   timeoutMs = 120_000
 ): Promise<T> {
-  const uploadBase = typeof window !== "undefined"
-    ? `${window.location.protocol}//${window.location.hostname}:5055`
-    : "http://localhost:5055";
+  const uploadBase = typeof window !== "undefined" ? API_BASE : "http://localhost:5055";
 
   const token = getToken();
   const controller = new AbortController();

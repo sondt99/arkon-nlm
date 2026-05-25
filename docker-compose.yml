@@ -65,9 +65,11 @@ services:
       MINIO_ROOT_PASSWORD: ${MINIO_SECRET_KEY:-minioadmin123}
     volumes:
       - ./data/minio:/data
-    ports:
-      - "9002:9000"
-      - "9003:9001"
+    # File access goes through nginx. Uncomment for direct dev access or
+    # MinIO console access (port 9003).
+    # ports:
+    #   - "9002:9000"
+    #   - "9003:9001"
     healthcheck:
       test: ["CMD", "mc", "ready", "local"]
       interval: 10s
@@ -79,8 +81,9 @@ services:
   api:
     <<: *backend
     container_name: arkon_api
-    ports:
-      - "5055:5055"
+    # Access via nginx on port 80. Uncomment for direct dev access.
+    # ports:
+    #   - "5055:5055"
     command: python -m uvicorn app.main:app --host 0.0.0.0 --port 5055
     healthcheck:
       test: ["CMD", "python", "-c",
@@ -116,13 +119,37 @@ services:
     image: arkon-frontend:latest
     container_name: arkon_frontend
     restart: always
-    ports:
-      - "3119:3000"
+    # Port 3000 is internal — access via nginx on port 80 instead.
+    # Uncomment the line below for direct dev access without nginx.
+    # ports:
+    #   - "3119:3000"
     environment:
       - INTERNAL_API_URL=http://api:5055
     depends_on:
       api:
         condition: service_healthy
+
+  # ── Reverse proxy ─────────────────────────────────────────────────────────
+  # Single entry point for all traffic. Routes:
+  #   /api/*         → api:5055          (backend, no size limit)
+  #   /arkon-files/* → minio:9000        (presigned file URLs — must match MINIO_BUCKET)
+  #   /*             → frontend:3000     (Next.js)
+  #
+  # For HTTPS: terminate SSL at your server's nginx/Caddy and forward to this
+  # container on port 80. Then set MINIO_SECURE=true in .env.docker so
+  # presigned URLs use https://.
+  nginx:
+    image: nginx:alpine
+    container_name: arkon_nginx
+    restart: always
+    ports:
+      - "${NGINX_PORT:-80}:80"
+    volumes:
+      - ./nginx/nginx.conf:/etc/nginx/conf.d/default.conf:ro
+    depends_on:
+      - frontend
+      - api
+      - minio
 
 # All persistent data stored in ./data/ (relative to this file = project root).
 # To use a different location, create a docker-compose.override.yml:

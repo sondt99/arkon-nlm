@@ -12,7 +12,7 @@ function genId(): string {
 }
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import { api, ApiError } from "@/lib/api";
+import { api, apiUpload, ApiError, getToken } from "@/lib/api";
 import { PageHeader } from "@/components/shared/page-header";
 import { Button } from "@/components/ui/button";
 import {
@@ -254,20 +254,10 @@ function AddSourceDialog({
 
   const submitFile = async () => {
     if (!file) return;
-    const token = typeof window !== "undefined" ? localStorage.getItem("arkon_token") : null;
-    const base = `${window.location.protocol}//${window.location.hostname}:5055`;
     const formData = new FormData();
     formData.append("file", file);
     if (title.trim()) formData.append("title", title.trim());
-    const resp = await fetch(`${base}/api/notebooklm/nlm/notebooks/${notebookId}/sources/upload`, {
-      method: "POST",
-      headers: token ? { Authorization: `Bearer ${token}` } : {},
-      body: formData,
-    });
-    if (!resp.ok) {
-      const err = await resp.json().catch(() => ({ detail: "Upload failed" }));
-      throw new Error(err.detail || "Upload failed");
-    }
+    await apiUpload(`/api/notebooklm/nlm/notebooks/${notebookId}/sources/upload`, formData);
   };
 
   const submit = async () => {
@@ -700,8 +690,8 @@ function PreviewDialog({
           );
           setPreviewData(data);
         } else if (PREVIEWABLE_BINARY_KINDS.has(artifact.kind)) {
-          const token = typeof window !== "undefined" ? localStorage.getItem("arkon_token") : null;
-          const base = `${window.location.protocol}//${window.location.hostname}:5055`;
+          const token = getToken();
+          const base = process.env.NEXT_PUBLIC_API_URL ?? "";
           const resp = await fetch(
             `${base}/api/notebooklm/nlm/notebooks/${notebookId}/artifacts/${artifact.id}/download`,
             { headers: token ? { Authorization: `Bearer ${token}` } : {} }
@@ -1032,8 +1022,8 @@ function StudioTab({
   };
 
   const handleDownload = async (artifact: NLMArtifactNative) => {
-    const token = typeof window !== "undefined" ? localStorage.getItem("arkon_token") : null;
-    const base = `${window.location.protocol}//${window.location.hostname}:5055`;
+    const token = getToken();
+    const base = process.env.NEXT_PUBLIC_API_URL ?? "";
     const url = `${base}/api/notebooklm/nlm/notebooks/${notebookId}/artifacts/${artifact.id}/download`;
     try {
       const resp = await fetch(url, {

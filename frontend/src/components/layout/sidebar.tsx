@@ -5,6 +5,7 @@ import Link from "next/link";
 import Image from "next/image";
 import { usePathname, useRouter } from "next/navigation";
 import { cn } from "@/lib/utils";
+import { Skeleton } from "@/components/ui/skeleton";
 import { useAuth } from "@/lib/auth";
 import { api } from "@/lib/api";
 import {
@@ -259,11 +260,13 @@ function SidebarWorkspacesSection({
       >
         <div className="mt-[2px] space-y-[1px]">
           {!loaded ? (
-            <div className="flex items-center gap-2 ml-3 px-2 py-[5px]">
-              <span className="material-symbols-outlined text-[14px] text-muted-foreground/40 animate-spin">
-                progress_activity
-              </span>
-              <span className="text-[12px] text-muted-foreground/40">Loading…</span>
+            <div className="ml-3 space-y-[3px] py-[2px]">
+              {[52, 72, 44].map((w, i) => (
+                <div key={i} className="flex items-center gap-2 px-2 py-[5px]">
+                  <Skeleton className="w-2 h-2 rounded-sm shrink-0" />
+                  <Skeleton style={{ height: 10, width: w }} />
+                </div>
+              ))}
             </div>
           ) : workspaces.length === 0 ? (
             <div className="ml-3 px-2 py-[5px] text-[12px] text-muted-foreground/40">

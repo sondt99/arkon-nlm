@@ -23,6 +23,7 @@ import {
 import { EmptyState } from "@/components/shared/empty-state";
 import { ScopeBadge } from "@/components/shared/scope-badge";
 
+import { Skeleton } from "@/components/ui/skeleton";
 import { KnowledgeType, Department, Source } from "./types";
 import { fileIcons, getFileExt } from "./utils";
 import { StatusDot } from "./status-dot";
@@ -154,11 +155,46 @@ export function KnowledgeTable({
       {/* Table */}
       <div className="bg-card rounded-xl border border-border shadow-sahara overflow-hidden">
         {loading ? (
-          <div className="flex items-center justify-center py-16">
-            <span className="material-symbols-outlined text-3xl text-muted-foreground animate-spin">
-              progress_activity
-            </span>
-          </div>
+          <Table>
+            <TableHeader>
+              <TableRow className="hover:bg-transparent">
+                <TableHead className="text-[11px] uppercase tracking-wider font-semibold text-muted-foreground">Document</TableHead>
+                <TableHead className="text-[11px] uppercase tracking-wider font-semibold text-muted-foreground">Category</TableHead>
+                <TableHead className="text-[11px] uppercase tracking-wider font-semibold text-muted-foreground">Visibility</TableHead>
+                <TableHead className="text-[11px] uppercase tracking-wider font-semibold text-muted-foreground">Department</TableHead>
+                <TableHead className="text-[11px] uppercase tracking-wider font-semibold text-muted-foreground">Pages</TableHead>
+                <TableHead className="text-[11px] uppercase tracking-wider font-semibold text-muted-foreground">Wiki</TableHead>
+                <TableHead className="text-[11px] uppercase tracking-wider font-semibold text-muted-foreground">Contributed By</TableHead>
+                <TableHead className="text-[11px] uppercase tracking-wider font-semibold text-muted-foreground">Status</TableHead>
+                <TableHead className="text-[11px] uppercase tracking-wider font-semibold text-muted-foreground">Created</TableHead>
+                <TableHead className="w-[60px]" />
+              </TableRow>
+            </TableHeader>
+            <TableBody>
+              {Array.from({ length: 8 }).map((_, i) => (
+                <TableRow key={i} className="hover:bg-transparent">
+                  <TableCell>
+                    <div className="flex items-center gap-2.5">
+                      <Skeleton className="w-4 h-4 rounded shrink-0" />
+                      <div className="space-y-1.5">
+                        <Skeleton style={{ height: 12, width: 120 + (i % 4) * 32 }} />
+                        {i % 3 === 0 && <Skeleton style={{ height: 10, width: 80 }} />}
+                      </div>
+                    </div>
+                  </TableCell>
+                  <TableCell><Skeleton style={{ height: 18, width: 64, borderRadius: 9999 }} /></TableCell>
+                  <TableCell><Skeleton style={{ height: 12, width: 44 }} /></TableCell>
+                  <TableCell><Skeleton style={{ height: 12, width: 56 + (i % 2) * 16 }} /></TableCell>
+                  <TableCell><Skeleton style={{ height: 12, width: 24 }} /></TableCell>
+                  <TableCell><Skeleton style={{ height: 12, width: 24 }} /></TableCell>
+                  <TableCell><Skeleton style={{ height: 12, width: 72 }} /></TableCell>
+                  <TableCell><Skeleton style={{ height: 18, width: 72, borderRadius: 9999 }} /></TableCell>
+                  <TableCell><Skeleton style={{ height: 12, width: 64 }} /></TableCell>
+                  <TableCell />
+                </TableRow>
+              ))}
+            </TableBody>
+          </Table>
         ) : sources.length === 0 ? (
           <EmptyState
             icon="cloud_upload"

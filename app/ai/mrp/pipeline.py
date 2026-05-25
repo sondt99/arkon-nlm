@@ -48,6 +48,7 @@ async def run_commit_phase(
     Uses apply_create / apply_update from wiki_service (idempotent via upsert
     fallback). All pages are flushed then committed in a single transaction.
     """
+    from sqlalchemy import select, func
     from app.ai.mrp.merger import merge_page_content
     from app.database.models import Source, SourceCompilationPlan
     from app.database.models import SourceImage
@@ -85,7 +86,6 @@ async def run_commit_phase(
     for pr in page_results:
         try:
             # Acquire advisory lock for this slug to prevent race conditions
-            from sqlalchemy import select, func
             await session.execute(select(func.pg_advisory_xact_lock(func.hashtext(pr.slug))))
 
             if pr.action == "CREATE":

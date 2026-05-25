@@ -40,6 +40,7 @@ export function WikiPageTree({
   const [loading, setLoading] = React.useState(true);
   const [search, setSearch] = React.useState("");
   const [collapsed, setCollapsed] = React.useState(false);
+  const treeRef = React.useRef<HTMLDivElement>(null);
   const [expandedGroups, setExpandedGroups] = React.useState<Set<string>>(() => {
     try {
       const saved = localStorage.getItem("wiki-tree-expanded-groups");
@@ -54,6 +55,11 @@ export function WikiPageTree({
   const [armedSlug, setArmedSlug] = React.useState<string | null>(null);
   const [deletingSlug, setDeletingSlug] = React.useState<string | null>(null);
 
+  const expandedGroupsRef = React.useRef(expandedGroups);
+  expandedGroupsRef.current = expandedGroups;
+
+  const currentSlug = activeSlug ?? pathname.replace(/^\/wiki\//, "");
+
   const debouncedSearch = useDebounce(search, 150);
 
   const loadPages = React.useCallback(() => {
@@ -67,6 +73,31 @@ export function WikiPageTree({
   React.useEffect(() => {
     loadPages();
   }, [loadPages]);
+
+  // Auto-expand group and scroll active item into view when slug or pages change
+  React.useEffect(() => {
+    if (!currentSlug || !pages.length) return;
+    const activePage = pages.find((p) => p.slug === currentSlug);
+    if (!activePage || activePage.page_type === "index" || activePage.page_type === "log") return;
+
+    // Expand group if collapsed
+    if (!expandedGroupsRef.current.has(activePage.page_type)) {
+      setExpandedGroups((prev) => {
+        const next = new Set(prev);
+        next.add(activePage.page_type);
+        try {
+          localStorage.setItem("wiki-tree-expanded-groups", JSON.stringify([...next]));
+        } catch {}
+        return next;
+      });
+    }
+
+    // Scroll after DOM update
+    requestAnimationFrame(() => {
+      const el = treeRef.current?.querySelector(`[data-slug="${CSS.escape(currentSlug)}"]`);
+      el?.scrollIntoView({ block: "nearest", behavior: "smooth" });
+    });
+  }, [currentSlug, pages]);
 
   const handleDelete = async (slug: string) => {
     // First click: arm; second click: execute
@@ -136,8 +167,6 @@ export function WikiPageTree({
       return next;
     });
 
-  const currentSlug = activeSlug ?? pathname.replace(/^\/wiki\//, "");
-
   if (collapsed) {
     return (
       <div className="w-10 border-r border-border bg-card/30 flex flex-col items-center pt-4 gap-3 shrink-0">
@@ -196,7 +225,7 @@ export function WikiPageTree({
       </div>
 
       {/* Tree */}
-      <div className="flex-1 overflow-y-auto py-2">
+      <div ref={treeRef} className="flex-1 overflow-y-auto py-2">
         {loading ? (
           <div className="px-3 space-y-2 mt-1">
             {Array.from({ length: 6 }).map((_, i) => (

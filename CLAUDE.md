@@ -137,6 +137,22 @@ rtk init --global       # Add RTK to ~/.claude/CLAUDE.md
 Overall average: **60-90% token reduction** on common development operations.
 <!-- /rtk-instructions -->
 
+# Documentation Maintenance
+
+**Rule:** Whenever code changes affect system architecture, APIs, data models, or business logic, update `docs/DESIGN_DOCUMENT.md` accordingly in the same task.
+
+**What to update:**
+- New or modified API endpoint → update section 4 (Đặc tả API)
+- New or modified DB model/column → update section 3 (Mô hình dữ liệu)
+- New feature or use case change → update section 5 (Đặc tả Use Case)
+- Pipeline/background task change → update sections 6 and Phụ lục
+- Permission/RBAC change → update section 7
+- MCP tool change → update section 8
+
+**Scope:** Only update the parts that actually changed. Do not rewrite unrelated sections.
+
+---
+
 # Arkon MCP — Knowledge Base Access
 
 Arkon exposes a FastMCP server for Claude Desktop and Claude Code to query the enterprise knowledge base.

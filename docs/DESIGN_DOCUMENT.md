@@ -1,0 +1,1435 @@
+# Arkon — Tài liệu Phân tích Thiết kế Hệ thống
+
+**Phiên bản:** 1.0  
+**Ngày:** 2026-05-25  
+
+---
+
+## Mục lục
+
+1. [Tổng quan hệ thống](#1-tổng-quan-hệ-thống)
+2. [Kiến trúc kỹ thuật](#2-kiến-trúc-kỹ-thuật)
+3. [Mô hình dữ liệu](#3-mô-hình-dữ-liệu)
+4. [Đặc tả API](#4-đặc-tả-api)
+5. [Đặc tả Use Case](#5-đặc-tả-use-case)
+6. [Luồng xử lý MRP Pipeline](#6-luồng-xử-lý-mrp-pipeline)
+7. [Hệ thống quyền hạn (RBAC)](#7-hệ-thống-quyền-hạn-rbac)
+8. [Tích hợp MCP](#8-tích-hợp-mcp)
+
+---
+
+## 1. Tổng quan hệ thống
+
+### 1.1 Giới thiệu
+
+Arkon là nền tảng **knowledge base (KB) doanh nghiệp được hỗ trợ bởi AI**. Hệ thống cho phép tổ chức tải lên tài liệu, tự động trích xuất và biên soạn kiến thức thành các trang wiki có cấu trúc, sau đó cung cấp kiến thức đó cho nhân viên và các agent AI thông qua giao diện web và giao thức MCP (Model Context Protocol).
+
+### 1.2 Các tính năng chính
+
+| Tính năng | Mô tả |
+|-----------|-------|
+| **Ingestion Pipeline (MRP)** | Tự động phân tích tài liệu qua 5 phase: MAP → REDUCE → REFINE → VERIFY → COMMIT |
+| **Wiki System** | Trang wiki markdown tự động biên soạn, có wikilink, revision history, draft workflow |
+| **Skill System** | Quản lý gói kỹ năng AI (ZIP packages) với workflow đóng góp và phê duyệt |
+| **RBAC** | Phân quyền hai tầng: global scope + workspace membership |
+| **NotebookLM Integration** | Gửi tài liệu sang Google NotebookLM, nhận artifact ngược lại |
+| **MCP Server** | Cho phép Claude Desktop/Claude Code truy vấn KB qua 16 tools |
+
+### 1.3 Người dùng hệ thống
+
+| Actor | Vai trò |
+|-------|---------|
+| **Admin** | Quản trị hệ thống, nhân viên, cài đặt AI provider |
+| **Employee (Contributor)** | Tải tài liệu, đề xuất chỉnh sửa wiki |
+| **Employee (Editor/Knowledge Admin)** | Phê duyệt draft, chỉnh sửa wiki trực tiếp |
+| **MCP Agent (Claude)** | Truy vấn KB, đề xuất/phê duyệt chỉnh sửa qua MCP token |
+
+---
+
+## 2. Kiến trúc kỹ thuật
+
+### 2.1 Stack công nghệ
+
+```
+┌─────────────────────────────────────────────────────────────┐
+│                     Frontend (Next.js 15)                    │
+│  React Client Components · Tailwind CSS · shadcn/ui          │
+└─────────────────────────┬───────────────────────────────────┘
+                          │ HTTP/REST + SSE (MCP)
+┌─────────────────────────▼───────────────────────────────────┐
+│                  Backend (FastAPI / Python)                   │
+│  Async · Pydantic v2 · SQLAlchemy 2 · arq (task queue)      │
+├──────────────┬──────────────┬───────────────────────────────┤
+│  PostgreSQL  │    Redis     │          MinIO                 │
+│  + pgvector  │  (arq queue) │  (files, images, skills)      │
+└──────────────┴──────────────┴───────────────────────────────┘
+```
+
+### 2.2 Sơ đồ component
+
+```
+app/
+├── routers/          # FastAPI route handlers
+│   ├── auth.py
+│   ├── sources.py
+│   ├── wiki.py
+│   ├── skills.py
+│   ├── projects.py
+│   ├── notebooklm.py
+│   ├── admin.py
+│   └── ...
+├── services/         # Business logic layer
+│   ├── wiki_service.py
+│   ├── kb_service.py         # Document parsing, OCR, image
+│   ├── embedding_storage.py
+│   ├── notebooklm_service.py
+│   ├── permissions.py
+│   └── ...
+├── ai/               # AI pipeline
+│   ├── mrp/
+│   │   ├── mapper.py     # Phase 1: MAP
+│   │   ├── reducer.py    # Phase 2: REDUCE
+│   │   ├── writer.py     # Phase 3: REFINE
+│   │   ├── verifier.py   # Phase 4: VERIFY
+│   │   └── pipeline.py   # Phase 5: COMMIT + orchestration
+│   ├── wiki_agent.py
+│   ├── registry.py       # AI provider registry
+│   └── embedding_catalog.py
+├── database/
+│   └── models.py         # SQLAlchemy models
+├── mcp/
+│   └── tools.py          # MCP server tools (16 tools)
+└── worker.py             # arq background tasks
+```
+
+### 2.3 Luồng dữ liệu tổng quan
+
+```
+[Tài liệu PDF/URL]
+        │
+        ▼
+[ingest_file_task / ingest_url_task]
+        │ extract text, images
+        ▼
+[caption_images_task] ──── Vision LLM ──── captions → source_images
+        │
+        ▼
+[ingest_map_reduce_task]
+        │
+        ├── Phase 1: MAP ──── LLM ──── chunk extracts → source_chunk_extracts
+        │
+        └── Phase 2: REDUCE ── LLM+Embeddings ──── compilation plan
+                                                          │
+                                                   [Human Review]
+                                                          │ approve
+                                                          ▼
+                                              [ingest_refine_task]
+                                                          │
+                                          ┌───────────────┼───────────────┐
+                                          ▼               ▼               ▼
+                                    Phase 3:REFINE  Phase 4:VERIFY  Phase 5:COMMIT
+                                     (write pages)  (check coverage) (save to DB)
+                                                                          │
+                                                                   wiki_pages ──── embeddings
+```
+
+---
+
+## 3. Mô hình dữ liệu
+
+### 3.1 Nhóm Identity & Organization
+
+#### `employees`
+| Cột | Kiểu | Mô tả |
+|-----|------|-------|
+| `id` | UUID PK | |
+| `name` | VARCHAR | Tên nhân viên |
+| `email` | VARCHAR UNIQUE | Email đăng nhập |
+| `password_hash` | VARCHAR | bcrypt |
+| `role` | ENUM | `admin` / `employee` |
+| `department_id` | UUID FK→departments | Nullable |
+| `custom_role_id` | UUID FK→roles | Vai trò tùy chỉnh, nullable |
+| `mcp_token` | VARCHAR UNIQUE | Bearer token cho MCP, nullable |
+| `is_active` | BOOLEAN | Mặc định TRUE |
+| `last_connected` | TIMESTAMP | Lần cuối kết nối |
+
+#### `departments`
+| Cột | Kiểu | Mô tả |
+|-----|------|-------|
+| `id` | UUID PK | |
+| `name` | VARCHAR UNIQUE | |
+| `description` | TEXT | Nullable |
+
+#### `roles` (Custom RBAC)
+| Cột | Kiểu | Mô tả |
+|-----|------|-------|
+| `id` | UUID PK | |
+| `name` | VARCHAR UNIQUE | |
+| `permissions` | JSONB | Mảng permission strings |
+| `is_system` | BOOLEAN | Vai trò hệ thống không thể xóa |
+
+---
+
+### 3.2 Nhóm Projects / Workspaces
+
+#### `projects`
+| Cột | Kiểu | Mô tả |
+|-----|------|-------|
+| `id` | UUID PK | |
+| `name` | VARCHAR | |
+| `workspace_type` | ENUM | `project` / `customer` |
+| `status` | ENUM | `active` / `archived` |
+| `created_by_id` | UUID FK→employees | |
+
+#### `project_members`
+| Cột | Kiểu | Mô tả |
+|-----|------|-------|
+| `project_id` | UUID FK (PK) | |
+| `employee_id` | UUID FK (PK) | |
+| `role` | ENUM | `viewer` / `contributor` / `editor` / `admin` |
+
+---
+
+### 3.3 Nhóm Document Sources
+
+#### `sources`
+| Cột | Kiểu | Mô tả |
+|-----|------|-------|
+| `id` | UUID PK | |
+| `title` | VARCHAR | Tiêu đề tài liệu |
+| `file_name` | VARCHAR | Tên file gốc, nullable |
+| `full_text` | TEXT | Nội dung trích xuất |
+| `source_type` | ENUM | `file` / `url` |
+| `scope_type` | VARCHAR | `global` / `project` |
+| `scope_id` | UUID | ID project nếu scoped, nullable |
+| `knowledge_type_id` | UUID FK | Nullable |
+| `minio_key` | VARCHAR | Đường dẫn lưu trữ file |
+| `status` | ENUM | `pending` / `processing` / `plan_ready` / `ready` / `error` |
+| `progress` | INTEGER | 0–100 |
+| `progress_message` | VARCHAR | Thông báo tiến trình |
+| `pipeline_phase` | VARCHAR | Phase MRP hiện tại |
+| `outline_json` | JSONB | Mục lục tài liệu |
+
+#### `source_images`
+| Cột | Kiểu | Mô tả |
+|-----|------|-------|
+| `id` | UUID PK | |
+| `source_id` | UUID FK | |
+| `minio_key` | VARCHAR | Đường dẫn ảnh trong MinIO |
+| `page_number` | INTEGER | Số trang chứa ảnh |
+| `caption` | TEXT | Caption do Vision LLM tạo |
+| `content_type` | VARCHAR | MIME type (image/jpeg, ...) |
+
+#### `source_chunk_extracts`
+| Cột | Kiểu | Mô tả |
+|-----|------|-------|
+| `id` | UUID PK | |
+| `source_id` | UUID FK | |
+| `chunk_index` | INTEGER | Thứ tự chunk |
+| `start_char` / `end_char` | INTEGER | Vị trí trong full_text |
+| `extract_json` | JSONB | Kết quả MAP phase (entities, concepts, facts) |
+| `status` | ENUM | `pending` / `done` |
+
+#### `source_compilation_plans`
+| Cột | Kiểu | Mô tả |
+|-----|------|-------|
+| `id` | UUID PK | |
+| `source_id` | UUID UNIQUE FK | Một plan mỗi source |
+| `plan_json` | JSONB | Danh sách wiki page targets |
+| `status` | ENUM | `pending_review` / `approved` / `in_progress` / `done` / `rejected` |
+| `reviewed_by` | UUID FK | Nullable |
+| `review_note` | VARCHAR | Ghi chú phê duyệt |
+
+---
+
+### 3.4 Nhóm Wiki
+
+#### `wiki_pages`
+| Cột | Kiểu | Mô tả |
+|-----|------|-------|
+| `id` | UUID PK | |
+| `slug` | VARCHAR | Định danh duy nhất trong scope |
+| `title` | VARCHAR | |
+| `page_type` | ENUM | `entity` / `concept` / `topic` / `source` |
+| `content_md` | TEXT | Nội dung Markdown |
+| `summary` | TEXT | Tóm tắt ngắn |
+| `scope_type` | VARCHAR | `global` / `project` |
+| `scope_id` | UUID | ID project, nullable |
+| `source_ids` | ARRAY(UUID) | Các source đóng góp |
+| `knowledge_type_slugs` | ARRAY(VARCHAR) | |
+| `version` | INTEGER | Tăng mỗi lần cập nhật |
+| `orphaned` | BOOLEAN | Không có wikilink trỏ vào |
+
+#### `wiki_page_drafts`
+| Cột | Kiểu | Mô tả |
+|-----|------|-------|
+| `id` | UUID PK | |
+| `page_id` | UUID FK→wiki_pages | |
+| `author_id` | UUID FK→employees | |
+| `content_md` | TEXT | Nội dung đề xuất |
+| `status` | ENUM | `pending` / `approved` / `rejected` |
+| `source` | VARCHAR | `web_ui` / `mcp_claude_desktop` / ... |
+
+#### `wiki_page_revisions`
+| Cột | Kiểu | Mô tả |
+|-----|------|-------|
+| `id` | UUID PK | |
+| `page_id` | UUID FK | |
+| `version` | INTEGER | |
+| `content_md` | TEXT | |
+| `change_type` | ENUM | `agent_compile` / `editor_edit` / `draft_approved` / `rollback` |
+| `changed_by_id` | UUID FK | Null = system |
+
+---
+
+### 3.5 Nhóm Skills
+
+#### `skills`
+| Cột | Kiểu | Mô tả |
+|-----|------|-------|
+| `id` | UUID PK | |
+| `name` / `slug` | VARCHAR | |
+| `current_version` | VARCHAR | Semver |
+| `storage_path` | VARCHAR | MinIO path |
+| `status` | ENUM | `active` / `processing` / `deprecated` / `archived` |
+| `is_system` | BOOLEAN | Kỹ năng tích hợp sẵn |
+
+#### `skill_contributions`
+| Cột | Kiểu | Mô tả |
+|-----|------|-------|
+| `id` | UUID PK | |
+| `skill_id` | UUID FK | Null = đề xuất kỹ năng mới |
+| `contributor_id` | UUID FK | |
+| `status` | ENUM | `draft` / `pending` / `approved` / `rejected` |
+| `storage_path` | VARCHAR | MinIO staging area |
+
+---
+
+### 3.6 Nhóm Embeddings
+
+Bốn bảng vector tương ứng với 4 kích thước: **768, 1024, 1536, 3072**.
+
+```
+wiki_page_embeddings_{768|1024|1536|3072}
+  ├── page_id       UUID FK (PK component)
+  ├── model_spec_id VARCHAR  (PK component)
+  ├── content_hash  VARCHAR  SHA256 của content
+  └── embedding     VECTOR(N)
+```
+
+---
+
+## 4. Đặc tả API
+
+### 4.1 Xác thực — `/api/auth`
+
+---
+
+#### `POST /api/auth/login`
+**Mô tả:** Đăng nhập và nhận JWT access token.
+
+**Request Body:**
+```json
+{
+  "email": "user@company.com",
+  "password": "secret"
+}
+```
+
+**Response 200:**
+```json
+{
+  "access_token": "eyJhbGci...",
+  "token_type": "bearer",
+  "user": {
+    "id": "uuid",
+    "name": "Nguyễn Văn A",
+    "email": "user@company.com",
+    "role": "employee",
+    "department_id": "uuid",
+    "department_name": "Engineering",
+    "permissions": ["doc:read:own_dept", "wiki:read:own_dept"],
+    "workspace_memberships": [{"project_id": "uuid", "role": "contributor"}]
+  }
+}
+```
+
+**Lỗi:** `401` — sai thông tin đăng nhập; `403` — tài khoản bị vô hiệu hóa.
+
+---
+
+#### `GET /api/auth/me`
+**Mô tả:** Lấy thông tin người dùng hiện tại.  
+**Auth:** JWT Bearer  
+**Response:** Cùng cấu trúc `user` như login response.
+
+---
+
+#### `POST /api/auth/change-password`
+**Request Body:** `{current_password, new_password}`  
+**Response 200:** `{message: "Password changed successfully"}`
+
+---
+
+### 4.2 Tài liệu (Sources) — `/api/sources`
+
+---
+
+#### `GET /api/sources`
+**Mô tả:** Lấy danh sách tài liệu với phân trang và lọc.  
+**Auth:** JWT, cần `doc:read:*`
+
+**Query Parameters:**
+| Param | Kiểu | Mô tả |
+|-------|------|-------|
+| `knowledge_type_id` | UUID | Lọc theo loại kiến thức |
+| `department_id` | UUID | Lọc theo phòng ban |
+| `status` | string | `pending` / `processing` / `ready` / `error` |
+| `search` | string | Tìm kiếm theo title |
+| `page` | int | Mặc định 1 |
+| `page_size` | int | Mặc định 20 |
+
+**Response 200:**
+```json
+{
+  "items": [{
+    "id": "uuid",
+    "title": "Báo cáo Q1 2025",
+    "file_name": "bao-cao-q1.pdf",
+    "source_type": "file",
+    "scope_type": "global",
+    "status": "ready",
+    "progress": 100,
+    "page_count": 45,
+    "wiki_page_count": 12,
+    "knowledge_type_name": "Finance",
+    "knowledge_type_color": "#2563eb",
+    "department_names": ["Finance", "Management"],
+    "contributed_by_name": "Nguyễn Văn A",
+    "created_at": "2025-01-15T10:30:00Z"
+  }],
+  "total": 150,
+  "page": 1,
+  "page_size": 20,
+  "total_pages": 8
+}
+```
+
+---
+
+#### `POST /api/sources/upload`
+**Mô tả:** Tải lên tài liệu PDF/DOCX/TXT.  
+**Content-Type:** `multipart/form-data`  
+**Auth:** JWT, cần `doc:create:*`
+
+**Form Fields:**
+| Field | Bắt buộc | Mô tả |
+|-------|----------|-------|
+| `file` | ✓ | File tài liệu |
+| `title` | | Tiêu đề (mặc định = tên file) |
+| `knowledge_type_id` | | UUID |
+| `department_ids` | | Mảng UUID |
+| `scope_type` | | `global` (mặc định) / `project` |
+| `scope_id` | | UUID project nếu `scope_type=project` |
+
+**Response 201:** `SourceResponse` — tài liệu được tạo với `status: "pending"`.  
+**Side effect:** Enqueue `ingest_file_task` vào arq queue.
+
+---
+
+#### `POST /api/sources/url`
+**Mô tả:** Thêm tài liệu từ URL.  
+**Request Body:**
+```json
+{
+  "url": "https://example.com/document.pdf",
+  "title": "Tên tài liệu",
+  "knowledge_type_id": "uuid"
+}
+```
+**Response 201:** `SourceResponse`  
+**Side effect:** Enqueue `ingest_url_task`.
+
+---
+
+#### `GET /api/sources/{id}/progress`
+**Mô tả:** Polling tiến trình xử lý tài liệu.  
+**Response:**
+```json
+{
+  "id": "uuid",
+  "status": "processing",
+  "progress": 45,
+  "progress_message": "Extracting knowledge from chunks (3/8)...",
+  "page_count": 45,
+  "wiki_page_count": 0
+}
+```
+
+---
+
+#### `GET /api/sources/{id}/plan`
+**Mô tả:** Lấy compilation plan cho tài liệu (sau phase REDUCE).  
+**Response:**
+```json
+{
+  "id": "uuid",
+  "source_id": "uuid",
+  "status": "pending_review",
+  "plan": {
+    "pages": [
+      {
+        "slug": "nguyen-van-a",
+        "title": "Nguyễn Văn A",
+        "page_type": "entity",
+        "action": "CREATE",
+        "priority": 1
+      }
+    ]
+  },
+  "created_at": "2025-01-15T11:00:00Z"
+}
+```
+
+---
+
+#### `POST /api/sources/{id}/plan/approve`
+**Mô tả:** Phê duyệt compilation plan, bắt đầu phase REFINE.  
+**Auth:** Admin hoặc `doc:manage`  
+**Request Body:**
+```json
+{
+  "note": "Looks good",
+  "modified_plan": { "pages": [...] }
+}
+```
+**Response:** `{job_id: "arq-job-id"}`  
+**Side effect:** Enqueue `ingest_refine_task`.
+
+---
+
+#### `GET /api/sources/{id}/wiki-pages`
+**Mô tả:** Lấy danh sách wiki pages được tạo từ tài liệu này.  
+**Response:**
+```json
+[
+  {
+    "id": "uuid",
+    "slug": "nguyen-van-a",
+    "title": "Nguyễn Văn A",
+    "page_type": "entity",
+    "summary": "Giám đốc điều hành...",
+    "updated_at": "2025-01-15T12:00:00Z"
+  }
+]
+```
+
+---
+
+#### `PATCH /api/sources/{id}`
+**Mô tả:** Cập nhật metadata tài liệu.  
+**Request Body:** (tất cả optional)
+```json
+{
+  "title": "Tiêu đề mới",
+  "knowledge_type_id": "uuid",
+  "department_ids": ["uuid1", "uuid2"],
+  "scope_type": "project",
+  "scope_id": "uuid"
+}
+```
+
+---
+
+#### `DELETE /api/sources/{id}`
+**Auth:** Admin  
+**Side effect:** Xóa file từ MinIO, xóa `source_id` khỏi tất cả wiki pages liên quan.
+
+---
+
+#### `POST /api/sources/{id}/retry`
+**Mô tả:** Thử lại xử lý tài liệu sau khi lỗi.  
+**Response:** `SourceResponse` với status reset về `processing`.
+
+---
+
+### 4.3 Wiki — `/api/wiki`
+
+---
+
+#### `GET /api/wiki/pages`
+**Mô tả:** Lấy danh sách wiki pages.
+
+**Query Parameters:**
+| Param | Mô tả |
+|-------|-------|
+| `page_type` | `entity` / `concept` / `topic` / `source` |
+| `knowledge_type_slug` | Lọc theo loại kiến thức |
+| `limit` | Mặc định 200 |
+| `offset` | |
+| `scope_type` | `global` / `project` |
+| `scope_id` | UUID project |
+
+**Response:** `WikiPageSummary[]`
+```json
+[{
+  "slug": "quy-trinh-onboarding",
+  "title": "Quy trình Onboarding",
+  "page_type": "topic",
+  "summary": "Hướng dẫn tiếp nhận nhân viên mới...",
+  "knowledge_type_slugs": ["hr"],
+  "version": 3,
+  "orphaned": false
+}]
+```
+
+---
+
+#### `GET /api/wiki/pages/{slug}`
+**Mô tả:** Lấy nội dung đầy đủ của một wiki page.
+
+**Response:** `WikiPageDetail`
+```json
+{
+  "slug": "quy-trinh-onboarding",
+  "title": "Quy trình Onboarding",
+  "page_type": "topic",
+  "content_md": "# Quy trình Onboarding\n\n...",
+  "summary": "...",
+  "version": 3,
+  "backlinks": [{"slug": "hr-policies", "title": "HR Policies"}],
+  "outlinks": [{"slug": "it-setup", "title": "IT Setup"}],
+  "source_ids": ["uuid1", "uuid2"]
+}
+```
+
+---
+
+#### `PUT /api/wiki/pages/{slug}`
+**Mô tả:** Cập nhật nội dung wiki page trực tiếp (không qua draft).  
+**Auth:** `wiki:write` hoặc `wiki:manage`  
+**Request Body:**
+```json
+{
+  "content_md": "# Nội dung mới\n\n...",
+  "change_note": "Cập nhật quy trình 2025"
+}
+```
+**Side effect:** Tạo revision mới, regenerate wikilinks.
+
+---
+
+#### `POST /api/wiki/pages/{slug}/drafts`
+**Mô tả:** Tạo draft đề xuất chỉnh sửa (dành cho contributor).  
+**Request Body:**
+```json
+{
+  "content_md": "# Nội dung đề xuất\n\n...",
+  "note": "Bổ sung thông tin về chính sách mới"
+}
+```
+**Response 201:** `DraftResponse`
+
+---
+
+#### `GET /api/wiki/drafts`
+**Mô tả:** Lấy danh sách drafts chờ phê duyệt.  
+**Auth:** Editor/Admin  
+**Query:** `status=pending` (mặc định)  
+**Response:** `DraftResponse[]`
+
+---
+
+#### `POST /api/wiki/drafts/{id}/approve`
+**Auth:** Editor/Admin  
+**Request Body:**
+```json
+{
+  "reviewer_note": "Đã kiểm tra, chính xác",
+  "edited_content_md": "# Nội dung sau chỉnh sửa nhỏ\n\n..."
+}
+```
+
+---
+
+#### `GET /api/wiki/graph`
+**Mô tả:** Lấy dữ liệu đồ thị liên kết giữa các wiki pages.  
+**Query:** `slug` (trung tâm), `depth` (mặc định 2)  
+**Response:**
+```json
+{
+  "nodes": [{"id": "slug", "label": "Title", "page_type": "entity"}],
+  "edges": [{"source": "slug-a", "target": "slug-b"}],
+  "total": 45,
+  "has_more": false
+}
+```
+
+---
+
+#### `GET /api/wiki/pages/{slug}/revisions`
+**Response:** `WikiRevisionSummary[]`
+```json
+[{
+  "id": "uuid",
+  "version": 3,
+  "change_type": "editor_edit",
+  "changed_by_name": "Trần Thị B",
+  "change_note": "Cập nhật quy trình 2025",
+  "created_at": "2025-01-15T14:00:00Z"
+}]
+```
+
+---
+
+#### `POST /api/wiki/pages/{slug}/revisions/{version}/rollback`
+**Auth:** Admin  
+**Mô tả:** Khôi phục wiki page về phiên bản cũ.
+
+---
+
+### 4.4 Nhân viên & Tổ chức — `/api`
+
+---
+
+#### `GET /api/employees`
+**Auth:** Admin  
+**Query:** `search`, `department_id`, `page`, `page_size`  
+**Response:**
+```json
+{
+  "items": [{
+    "id": "uuid",
+    "name": "Nguyễn Văn A",
+    "email": "a@company.com",
+    "role": "employee",
+    "department_name": "Engineering",
+    "is_active": true,
+    "has_mcp_token": false,
+    "last_connected": "2025-01-15T08:00:00Z"
+  }],
+  "total": 50
+}
+```
+
+---
+
+#### `POST /api/employees`
+**Auth:** Admin  
+**Request Body:**
+```json
+{
+  "name": "Trần Thị B",
+  "email": "b@company.com",
+  "password": "initial-password",
+  "role": "employee",
+  "department_id": "uuid",
+  "custom_role_id": "uuid"
+}
+```
+
+---
+
+#### `POST /api/my/mcp-token`
+**Mô tả:** Tự tạo MCP token (self-service) để tích hợp với Claude Desktop.  
+**Auth:** JWT (bất kỳ nhân viên)  
+**Response:**
+```json
+{
+  "token": "arkon_abc123...",
+  "employee_name": "Nguyễn Văn A",
+  "instructions": "Add this token to your Claude Desktop MCP config..."
+}
+```
+
+---
+
+### 4.5 Projects / Workspaces — `/api/projects`
+
+---
+
+#### `GET /api/projects`
+**Mô tả:** Admin thấy tất cả; nhân viên thường chỉ thấy các project mà họ là thành viên.  
+**Response:** `ProjectOut[]`
+```json
+[{
+  "id": "uuid",
+  "name": "Project Alpha",
+  "workspace_type": "project",
+  "status": "active",
+  "member_count": 8,
+  "my_role": "contributor"
+}]
+```
+
+---
+
+#### `POST /api/projects/{id}/members`
+**Auth:** Workspace Admin  
+**Request Body:** `{employee_id, role}`  
+**Roles:** `viewer` / `contributor` / `editor` / `admin`
+
+---
+
+#### `POST /api/projects/{id}/sources/upload`
+**Mô tả:** Tải tài liệu trực tiếp vào workspace (tài liệu được scoped vào project).
+
+---
+
+### 4.6 Skills — `/api/skills`
+
+---
+
+#### `POST /api/skills/upload`
+**Mô tả:** Tải lên gói kỹ năng AI (file ZIP).  
+**Content-Type:** `multipart/form-data`
+
+- **Admin:** Cài đặt trực tiếp → `{results: [{slug, status, action}]}`
+- **Non-admin:** Tạo contribution chờ phê duyệt → `{contribution_id}`
+
+**Validation:**
+- Tối đa 100 files trong ZIP
+- Tổng kích thước uncompressed ≤ 10 MB
+- Kiểm tra Zip Slip attack
+
+---
+
+#### `GET /api/skills/{slug}/files/content`
+**Mô tả:** Xem nội dung file trong skill package (để review).  
+**Query:** `path: string`, `version?: string`  
+**Response:** `{content: "...file content..."}`
+
+---
+
+#### `POST /api/skill-contributions/{id}/approve`
+**Auth:** Admin  
+**Mô tả:** Phê duyệt skill contribution, tạo phiên bản mới của skill.  
+**Response:** `{status: "approved", skill_id, skill_slug, version: "1.2.0"}`
+
+---
+
+### 4.7 NotebookLM — `/api/notebooklm`
+
+---
+
+#### `POST /api/notebooklm/auth/import-cookies`
+**Mô tả:** Import cookies Google từ browser extension (Cookie-Editor format) để xác thực với NotebookLM.  
+**Request Body:**
+```json
+{
+  "cookies": [
+    {"name": "SID", "value": "...", "domain": ".google.com", ...}
+  ]
+}
+```
+**Validation:** Yêu cầu tối thiểu `SID` và `__Secure-1PSIDTS`.
+
+---
+
+#### `POST /api/notebooklm/notebooks`
+**Mô tả:** Tạo NotebookLM notebook mới và đưa nội dung tài liệu Arkon vào.  
+**Request Body:**
+```json
+{
+  "title": "Phân tích Q1 2025",
+  "source_id": "uuid"
+}
+```
+**Response 201:** `NotebookResponse`  
+**Side effect:** Gọi NLM API tạo notebook và thêm `source.full_text` như nguồn.
+
+---
+
+#### `POST /api/notebooklm/nlm/notebooks/{nlm_id}/sources`
+**Mô tả:** Thêm nguồn vào notebook NLM đã có.  
+**Request Body (kind=arkon):**
+```json
+{
+  "kind": "arkon",
+  "source_id": "uuid"
+}
+```
+**Các kind:** `url` / `text` / `arkon` / `drive`
+
+---
+
+#### `POST /api/notebooklm/nlm/notebooks/{nlm_id}/artifacts/generate`
+**Mô tả:** Kích hoạt tạo artifact (podcast, report, quiz...) trên NLM.  
+**Request Body:**
+```json
+{
+  "artifact_type": "audio",
+  "report_format": null
+}
+```
+**Artifact types:** `audio` / `video` / `report` / `quiz` / `flashcards` / `slide_deck` / `infographic` / `data_table`
+
+---
+
+#### `POST /api/notebooklm/nlm/notebooks/{nlm_id}/artifacts/{artifact_id}/ingest`
+**Mô tả:** Lấy artifact từ NLM và đưa vào Arkon wiki pipeline.  
+**Side effect:** Text artifacts → `ingest_map_reduce_task`; PDF → `ingest_file_task`.
+
+---
+
+### 4.8 Cài đặt Admin — `/api/settings`
+
+---
+
+#### `GET /api/settings`
+**Auth:** Admin  
+**Mô tả:** Lấy cài đặt AI provider (API keys được mask `••••••••last4`).
+
+---
+
+#### `PUT /api/settings`
+**Request Body:**
+```json
+{
+  "settings": {
+    "llm_provider": "openai",
+    "llm_model": "gpt-4o",
+    "llm_api_key": "sk-...",
+    "embedding_provider": "openai",
+    "embedding_model": "text-embedding-3-large"
+  }
+}
+```
+
+---
+
+#### `POST /api/settings/embeddings/switch`
+**Mô tả:** Chuyển đổi embedding model. Tự động tạo job để re-embed toàn bộ wiki.  
+**Request Body:** `{model_spec_id: "openai-3-large-3072"}`  
+**Response:** `{job_id: "uuid"}`
+
+---
+
+### 4.9 Audit Log — `/api/audit`
+
+---
+
+#### `GET /api/audit/log`
+**Auth:** Admin  
+**Query:** `page`, `page_size`, `principal_id`, `action`, `decision`, `resource_type`  
+**Response:**
+```json
+{
+  "items": [{
+    "timestamp": "2025-01-15T10:00:00Z",
+    "principal_id": "uuid",
+    "principal_type": "human",
+    "action": "wiki.page.edit",
+    "resource_type": "wiki_page",
+    "resource_id": "slug",
+    "decision": "allow"
+  }],
+  "total": 1500
+}
+```
+
+---
+
+## 5. Đặc tả Use Case
+
+### UC-01: Đăng nhập hệ thống
+
+**Actor:** Nhân viên / Admin  
+**Mục tiêu:** Xác thực và lấy JWT token để sử dụng hệ thống
+
+**Tiền điều kiện:**
+- Tài khoản đã được tạo bởi Admin
+- Tài khoản đang hoạt động (`is_active = true`)
+
+**Luồng chính:**
+1. Người dùng nhập email và mật khẩu
+2. Hệ thống xác thực thông tin với `POST /api/auth/login`
+3. Hệ thống trả về JWT token và thông tin người dùng (bao gồm permissions)
+4. Frontend lưu token vào localStorage/cookie
+5. Người dùng được chuyển đến dashboard
+
+**Luồng thay thế:**
+- *2a.* Sai email/password → `401 Unauthorized`
+- *2b.* Tài khoản bị vô hiệu hóa → `403 Forbidden`
+
+**Hậu điều kiện:** Người dùng đã đăng nhập, có JWT token hợp lệ
+
+---
+
+### UC-02: Tải lên tài liệu
+
+**Actor:** Contributor, Knowledge Admin, Admin  
+**Mục tiêu:** Tải tài liệu PDF/DOCX lên hệ thống để xử lý và biên soạn kiến thức
+
+**Tiền điều kiện:**
+- Người dùng đã đăng nhập
+- Có quyền `doc:create:own_dept` hoặc `doc:create:all`
+
+**Luồng chính:**
+1. Người dùng truy cập trang Knowledge
+2. Nhấn "Upload Document"
+3. Chọn file, điền tiêu đề, chọn knowledge type, department, scope
+4. Nhấn Upload → `POST /api/sources/upload`
+5. Hệ thống lưu file vào MinIO, tạo bản ghi `sources` với `status=pending`
+6. Background task `ingest_file_task` được enqueue
+7. Frontend polling `GET /api/sources/{id}/progress` mỗi 3 giây
+8. Khi `status=plan_ready`: frontend hiển thị nút "Review Plan"
+9. Nếu `mrp_auto_approve_plan=true`: tự động chuyển sang REFINE, bỏ qua bước 8-10
+10. Admin/Editor review plan, chỉnh sửa nếu cần, nhấn Approve
+11. `POST /api/sources/{id}/plan/approve` → enqueue `ingest_refine_task`
+12. Tiến trình tiếp tục đến `status=ready`
+
+**Luồng thay thế:**
+- *6a.* File không phải PDF/DOCX hợp lệ → `status=error`, hiển thị thông báo
+- *10a.* Admin reject plan → tài liệu ở `status=error`, có thể retry
+- *12a.* Pipeline lỗi bất kỳ phase → `status=error`, có thể retry từ phase đó
+
+**Hậu điều kiện:**
+- `source.status = "ready"`
+- Các wiki pages đã được tạo/cập nhật
+- Embeddings đã được tính toán
+
+---
+
+### UC-03: Xem và chỉnh sửa Wiki Page
+
+**Actor:** Nhân viên (mọi vai trò)  
+**Mục tiêu:** Đọc và đề xuất chỉnh sửa nội dung wiki
+
+**Tiền điều kiện:**
+- Người dùng đã đăng nhập
+- Có quyền `wiki:read:own_dept` hoặc cao hơn
+
+**Luồng chính (xem):**
+1. Người dùng truy cập `/wiki`
+2. Wiki tree hiển thị tất cả pages nhóm theo type (entity/concept/topic/source)
+3. Click vào page → `GET /api/wiki/pages/{slug}`
+4. Frontend render markdown, resolve wikilinks, hiển thị ảnh
+5. Sidebar hiển thị backlinks, outlinks
+
+**Luồng chính (đề xuất chỉnh sửa — Contributor):**
+1. Click "Propose Edit" trên wiki page
+2. Editor hiện ra với nội dung hiện tại
+3. Người dùng chỉnh sửa, điền ghi chú
+4. Submit → `POST /api/wiki/pages/{slug}/drafts`
+5. Draft ở trạng thái `pending`, chờ Editor/Admin phê duyệt
+
+**Luồng chính (chỉnh sửa trực tiếp — Editor/Admin):**
+1. Click "Edit" → editor hiện ra
+2. Chỉnh sửa nội dung markdown
+3. Save → `PUT /api/wiki/pages/{slug}`
+4. Hệ thống lưu revision mới, cập nhật wikilinks
+
+**Hậu điều kiện:** Kiến thức được cập nhật và phản ánh trong wiki
+
+---
+
+### UC-04: Phê duyệt Wiki Draft
+
+**Actor:** Editor, Knowledge Admin, Admin  
+**Mục tiêu:** Review và phê duyệt/từ chối đề xuất chỉnh sửa wiki
+
+**Tiền điều kiện:**
+- Có draft ở trạng thái `pending`
+- Người dùng có quyền `wiki:manage`
+
+**Luồng chính:**
+1. Vào trang Draft Review
+2. `GET /api/wiki/drafts?status=pending`
+3. Click vào draft để xem chi tiết, so sánh với nội dung hiện tại
+4. Có thể chỉnh sửa nhỏ trước khi duyệt
+5. Nhấn Approve → `POST /api/wiki/drafts/{id}/approve`
+6. Wiki page được cập nhật, revision mới được tạo
+
+**Luồng thay thế:**
+- *5a.* Nhấn Reject, điền lý do → `POST /api/wiki/drafts/{id}/reject`
+- Draft được đánh dấu `rejected`, người đề xuất được thông báo
+
+---
+
+### UC-05: Tìm kiếm kiến thức
+
+**Actor:** Nhân viên, MCP Agent  
+**Mục tiêu:** Tìm thông tin trong knowledge base
+
+**Tiền điều kiện:** Người dùng đã đăng nhập (hoặc có MCP token)
+
+**Luồng chính (qua giao diện web):**
+1. Nhấn Cmd+K để mở Wiki Search Dialog
+2. Gõ từ khóa
+3. Hệ thống tìm kiếm full-text trên `wiki_pages` (title, summary, content)
+4. Kết quả hiển thị nhóm theo type
+5. Click vào kết quả → mở wiki page
+
+**Luồng chính (qua MCP/Claude):**
+1. Claude gọi `search_wiki(query="thông tin về onboarding")`
+2. Hệ thống tìm kiếm semantic (vector) + keyword
+3. Trả về danh sách pages với summary
+4. Claude gọi `read_wiki_page(slug="quy-trinh-onboarding")` để đọc đầy đủ
+
+---
+
+### UC-06: Quản lý Skills AI
+
+**Actor:** Admin, Contributor (đề xuất)  
+**Mục tiêu:** Cài đặt và quản lý gói kỹ năng AI cho hệ thống
+
+**Tiền điều kiện:** Admin đã đăng nhập
+
+**Luồng chính (Admin cài đặt trực tiếp):**
+1. Admin truy cập Skills management
+2. Upload file ZIP chứa skill package
+3. `POST /api/skills/upload` với `force=true`
+4. `ingest_skill_task` validate và giải nén vào MinIO
+5. Skill được active ngay lập tức
+
+**Luồng chính (Contributor đề xuất):**
+1. Contributor upload ZIP → tự động tạo `skill_contribution` với `status=draft`
+2. Contributor submit → `status=pending`
+3. Admin review file trong contribution: `GET /api/skill-contributions/{id}/files`
+4. Xem nội dung từng file: `GET /api/skill-contributions/{id}/files/content`
+5. Nhấn Approve → `POST /api/skill-contributions/{id}/approve`
+6. Skill được tạo/cập nhật phiên bản mới
+
+**Bảo mật:**
+- Kiểm tra Zip Slip: từ chối path thoát khỏi thư mục trích xuất
+- Giới hạn: tối đa 100 files, 10 MB uncompressed
+
+---
+
+### UC-07: Tích hợp với NotebookLM
+
+**Actor:** Nhân viên  
+**Mục tiêu:** Gửi tài liệu sang Google NotebookLM để tạo podcast/report AI
+
+**Tiền điều kiện:**
+- Đã import cookies Google thành công
+- Tài liệu có `status=ready`
+
+**Luồng chính:**
+1. Trong Knowledge table, click "Send to NotebookLM" trên tài liệu
+2. Dialog hiện ra với 2 lựa chọn:
+   - **Tạo notebook mới:** Nhập tên → `POST /api/notebooklm/notebooks`
+   - **Thêm vào notebook có sẵn:** Load `GET /api/notebooklm/nlm/notebooks` → chọn notebook → `POST /api/notebooklm/nlm/notebooks/{id}/sources` với `kind=arkon`
+3. Hệ thống đưa `source.full_text` vào NLM notebook
+4. Redirect sang trang NotebookLM trong Arkon
+5. Người dùng yêu cầu tạo artifact (ví dụ: audio podcast)
+6. `POST /api/notebooklm/nlm/notebooks/{id}/artifacts/generate` với `artifact_type=audio`
+7. Polling trạng thái artifact
+8. Khi hoàn thành: có thể download hoặc ingest ngược lại vào Arkon wiki
+
+**Luồng ingest ngược:**
+1. Click "Add to Wiki" trên artifact hoàn thành
+2. `POST /api/notebooklm/nlm/notebooks/{id}/artifacts/{artifact_id}/ingest`
+3. Text artifacts → `ingest_map_reduce_task` → tạo wiki pages mới
+4. PDF (slide_deck) → `ingest_file_task` → full MRP pipeline
+
+---
+
+### UC-08: Cấu hình AI Provider
+
+**Actor:** Admin  
+**Mục tiêu:** Cấu hình LLM, Embedding, Vision model cho hệ thống
+
+**Tiền điều kiện:** Admin đã đăng nhập
+
+**Luồng chính:**
+1. Vào Admin → Settings
+2. `GET /api/settings` — xem cấu hình hiện tại (API keys bị mask)
+3. Chọn provider (OpenAI, Anthropic, Azure, Ollama...)
+4. Điền API key, model name, base URL
+5. Click "Test Connection" → `POST /api/settings/test-llm`
+6. Nếu test thành công → `PUT /api/settings` lưu cài đặt
+7. Để thay đổi embedding model: `POST /api/settings/embeddings/switch`
+8. Hệ thống tạo job re-embed tất cả wiki pages với model mới
+
+---
+
+### UC-09: Quản lý Workspace
+
+**Actor:** Admin, Workspace Admin  
+**Mục tiêu:** Tạo và quản lý workspace riêng cho team/dự án
+
+**Tiền điều kiện:** Admin đã đăng nhập
+
+**Luồng chính:**
+1. `POST /api/projects` tạo workspace mới
+2. Creator tự động trở thành workspace admin
+3. Thêm thành viên: `POST /api/projects/{id}/members` với các role khác nhau
+4. Upload tài liệu vào workspace: `POST /api/projects/{id}/sources/upload`
+   - Tài liệu được scoped: `scope_type=project`, `scope_id={project_id}`
+   - Wiki pages được biên soạn chỉ visible trong workspace này
+5. Xem wiki workspace: `GET /api/projects/{id}/wiki`
+
+---
+
+### UC-10: Tích hợp Claude Desktop qua MCP
+
+**Actor:** Nhân viên sử dụng Claude Desktop  
+**Mục tiêu:** Cho phép Claude Desktop truy vấn knowledge base qua giao thức MCP
+
+**Tiền điều kiện:**
+- Claude Desktop đã cài đặt
+- Nhân viên có tài khoản Arkon
+
+**Luồng chính:**
+1. Nhân viên vào Profile → "Generate MCP Token" → `POST /api/my/mcp-token`
+2. Copy token, thêm vào config Claude Desktop:
+   ```json
+   {
+     "mcpServers": {
+       "arkon": {
+         "url": "http://arkon.company.com/mcp",
+         "headers": {"Authorization": "Bearer arkon_abc123..."}
+       }
+     }
+   }
+   ```
+3. Claude Desktop kết nối MCP server tại `/mcp`
+4. Claude có thể gọi:
+   - `search_wiki("chính sách nghỉ phép")` — tìm kiếm semantic
+   - `read_wiki_page("chinh-sach-nghi-phep")` — đọc đầy đủ
+   - `propose_wiki_edit(slug, content_md, note)` — tạo draft
+   - `list_pending_drafts()` — xem drafts chờ duyệt (nếu có quyền)
+5. Mọi action được ghi vào audit log với `principal_type=agent`
+
+---
+
+### UC-11: Review Compilation Plan
+
+**Actor:** Admin, Knowledge Admin  
+**Mục tiêu:** Kiểm tra và chỉnh sửa kế hoạch biên soạn wiki trước khi xử lý
+
+**Tiền điều kiện:**
+- Tài liệu đang ở `status=plan_ready`
+- Người dùng có quyền `doc:manage`
+
+**Luồng chính:**
+1. Trong Knowledge table, click "Review Plan" trên tài liệu
+2. Dialog hiển thị danh sách các wiki pages dự kiến tạo/cập nhật
+3. Với mỗi page: hiển thị slug, title, page_type, action (CREATE/UPDATE), priority
+4. Người dùng có thể:
+   - **Chỉnh sửa** page (thay đổi title, slug, action, page_type)
+   - **Xóa** page không cần thiết
+   - **Thêm** page mới vào plan
+5. Click "Approve" → `POST /api/sources/{id}/plan/approve` với `modified_plan`
+6. Phase REFINE bắt đầu, tạo wiki pages theo plan đã phê duyệt
+
+**Luồng thay thế:**
+- *5a.* Click "Reject" → plan bị từ chối, tài liệu ở `status=error`
+
+---
+
+### UC-12: Xem Lịch sử Revision
+
+**Actor:** Editor, Admin  
+**Mục tiêu:** Xem lịch sử thay đổi và khôi phục phiên bản cũ của wiki page
+
+**Luồng chính:**
+1. Mở wiki page → click "History"
+2. `GET /api/wiki/pages/{slug}/revisions`
+3. Danh sách revision theo thứ tự thời gian, hiển thị: version, loại thay đổi, người thay đổi, ghi chú
+4. Click vào revision → xem nội dung
+5. Nếu cần khôi phục: click "Rollback to this version"
+6. `POST /api/wiki/pages/{slug}/revisions/{version}/rollback` (Auth: Admin)
+7. Wiki page được khôi phục, revision mới được tạo với `change_type=rollback`
+
+---
+
+## 6. Luồng xử lý MRP Pipeline
+
+### 6.1 Tổng quan
+
+```
+Document
+   │
+   ▼
+Phase 0: TRIAGE (trong MAP)
+   │  Phân loại tài liệu, chọn chunking strategy
+   ▼
+Phase 1: MAP
+   │  Chia tài liệu thành chunks
+   │  LLM extract từ mỗi chunk: entities, concepts, facts
+   │  Lưu vào source_chunk_extracts
+   ▼
+Phase 2: REDUCE
+   │  Gom nhóm extracts bằng embeddings clustering
+   │  LLM tổng hợp thành compilation plan
+   │  Lưu vào source_compilation_plans (status=pending_review)
+   │
+   ├─► [Human Review] ──reject──► Error
+   │         │ approve
+   ▼
+Phase 3: REFINE
+   │  Với mỗi page trong plan: tập hợp evidence chunks
+   │  LLM viết nội dung đầy đủ cho từng wiki page
+   │  Output: PageWriteResult[]
+   ▼
+Phase 4: VERIFY
+   │  Kiểm tra coverage: mỗi chunk có được đại diện?
+   │  Bổ sung nội dung bị thiếu nếu cần
+   ▼
+Phase 5: COMMIT
+   │  pg_advisory_xact_lock mỗi slug (race condition safety)
+   │  CREATE: kiểm tra race, fallback sang UPDATE nếu cần
+   │  UPDATE: merge nội dung nếu trang có content từ source khác
+   │  Strip hallucinated image UUIDs
+   │  Embed mỗi page
+   │  Regenerate wiki index
+   │  Append activity log
+   └─► source.status = "ready"
+```
+
+### 6.2 Merge Strategy
+
+Khi một source muốn UPDATE một trang đã có nội dung từ source khác:
+```
+Điều kiện merge: is_new_source AND len(existing_content) > 100 chars
+   → LLM merge_page_content(existing_md, new_md, slug)
+   → Kết hợp kiến thức từ cả hai nguồn, không bỏ sót
+
+Không merge: cùng source cập nhật lại
+   → Overwrite trực tiếp
+```
+
+### 6.3 Image Pipeline
+
+```
+PDF upload
+   │
+   ▼
+ingest_file_task
+   │  PyMuPDF extract ảnh theo trang
+   │  Filter: ≥ 5120 bytes (bỏ icon/logo nhỏ)
+   │  OCR per-page nếu < 50 chars text (DPI 300)
+   │  Lưu ảnh vào MinIO
+   ▼
+caption_images_task
+   │  Vision LLM phân loại:
+   │    RELEVANT: yes → caption mô tả nội dung
+   │    RELEVANT: no  → prefix [decorative]
+   ▼
+Wiki compile
+   │  load_source_images: bỏ qua [decorative]
+   │  LLM đặt ![caption](IMAGE:uuid) trong content_md
+   ▼
+COMMIT phase
+   │  _strip_invalid_image_markers: xóa UUID không tồn tại
+   ▼
+/api/wiki/images/{uuid} → proxy từ MinIO
+```
+
+---
+
+## 7. Hệ thống quyền hạn (RBAC)
+
+### 7.1 Cấu trúc Permission
+
+Format: `<domain>:<action>:<scope>`
+
+| Domain | Actions | Scopes |
+|--------|---------|--------|
+| `doc` | `read`, `create`, `edit`, `delete`, `manage` | `own_dept`, `all` |
+| `wiki` | `read`, `write`, `manage` | `own_dept`, `all` |
+| `skill` | `read`, `install`, `manage` | `own_dept`, `all` |
+| `org` | `departments`, `employees`, `roles`, `audit` | `read`, `write` |
+| `workspaces` | `create`, `manage` | — |
+| `system` | `settings`, `embeddings` | — |
+
+### 7.2 Vai trò mặc định
+
+| Vai trò | Permissions chính |
+|---------|-------------------|
+| **Viewer** | `doc:read:own_dept`, `wiki:read:own_dept`, `skill:read:own_dept` |
+| **Contributor** | + `doc:create:own_dept`, `wiki:write:own_dept`, `skill:install:own_dept` |
+| **Department Admin** | + `doc:edit/delete:own_dept`, `org:departments:read`, `org:employees:read` |
+| **Knowledge Admin** | + `:all` variants, `wiki:manage:all`, `skill:manage:all`, `workspaces:create` |
+| **Admin** | Toàn bộ quyền, không giới hạn |
+
+### 7.3 Workspace Roles (per-project)
+
+| Role | Quyền trong workspace |
+|------|----------------------|
+| `viewer` | Xem tài liệu và wiki của workspace |
+| `contributor` | Thêm tài liệu, đề xuất chỉnh sửa wiki |
+| `editor` | Duyệt draft, chỉnh sửa wiki trực tiếp |
+| `admin` | Quản lý thành viên, xóa tài liệu |
+
+### 7.4 MCP Token Scope
+
+MCP token được liên kết với một nhân viên và kế thừa toàn bộ permissions của nhân viên đó. Mọi action qua MCP được ghi vào audit log với `principal_type=agent`.
+
+---
+
+## 8. Tích hợp MCP
+
+### 8.1 Endpoint
+
+```
+SSE: GET/POST /mcp
+Auth: Authorization: Bearer <mcp_token>
+```
+
+### 8.2 Tools (16 tools)
+
+#### Tier 1 — Đọc (mọi token)
+
+| Tool | Input | Output |
+|------|-------|--------|
+| `search_wiki` | `query: str, limit?: int` | `[{slug, title, summary, page_type, relevance}]` |
+| `read_wiki_index` | — | `{content_md: str}` |
+| `read_wiki_page` | `slug: str` | `{slug, title, content_md, backlinks, outlinks}` |
+| `list_wiki_pages` | `page_type?, kt_slug?` | `[WikiPageSummary]` |
+
+#### Tier 1.5 — Source drill-down
+
+| Tool | Input | Output |
+|------|-------|--------|
+| `get_source` | `source_id: str` | SourceResponse |
+| `get_source_outline` | `source_id: str` | `{outline_json}` |
+| `get_source_pages` | `source_id: str` | `[WikiPageSummary]` |
+| `list_sources` | filters | `[SourceResponse]` |
+| `list_knowledge_types` | — | `[KnowledgeType]` |
+| `get_knowledge_type_docs` | `kt_slug: str` | `[WikiPageSummary]` |
+
+#### Tier 2 — Đóng góp (contributor+)
+
+| Tool | Input | Output |
+|------|-------|--------|
+| `propose_wiki_edit` | `slug, content_md, note?` | `{draft_id, status}` |
+
+#### Tier 3 — Chỉnh sửa (editor+)
+
+| Tool | Input | Output |
+|------|-------|--------|
+| `edit_wiki_page` | `slug, content_md, change_note?` | WikiPageDetail |
+
+#### Tier 4 — Review (editor+)
+
+| Tool | Input | Output |
+|------|-------|--------|
+| `list_pending_drafts` | — | `[DraftResponse]` |
+| `review_draft` | `draft_id: str` | DraftResponse |
+| `approve_draft` | `draft_id, note?, edited_content_md?` | DraftResponse |
+| `reject_draft` | `draft_id, note: str` | DraftResponse |
+
+---
+
+## Phụ lục: Background Tasks
+
+| Task | Trigger | Mô tả |
+|------|---------|-------|
+| `ingest_file_task` | File upload | Extract text, ảnh; bắt đầu MRP |
+| `ingest_url_task` | URL submit | Fetch content; bắt đầu MRP |
+| `caption_images_task` | Sau ingest | Vision LLM caption toàn bộ ảnh |
+| `ingest_map_reduce_task` | Auto | Phase 0-2 (MAP + REDUCE) |
+| `ingest_refine_task` | Plan approved | Phase 3-5 (REFINE + VERIFY + COMMIT) |
+| `reembed_all_pages_task` | Embedding switch | Re-embed tất cả wiki pages |
+| `notebooklm_generate_task` | Artifact request | Gọi NLM API tạo artifact |
+| `notebooklm_ingest_artifact_task` | Ingest request | Download artifact, enqueue MRP |
+| `ingest_skill_task` | Skill upload | Validate ZIP, extract vào MinIO |
+| `delete_skill_task` | Skill delete | Xóa files từ MinIO |
+
+**Cron jobs:**
+- `notebooklm_refresh_session_cron` — mỗi 30 phút: làm mới NLM auth cookies
+- `cleanup_temp_uploads_cron` — mỗi giờ: dọn staging uploads cũ

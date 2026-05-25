@@ -119,10 +119,8 @@ services:
     image: arkon-frontend:latest
     container_name: arkon_frontend
     restart: always
-    # Port 3000 is internal — access via nginx on port 80 instead.
-    # Uncomment the line below for direct dev access without nginx.
-    # ports:
-    #   - "3119:3000"
+    ports:
+      - "3119:3000"
     environment:
       - INTERNAL_API_URL=http://api:5055
     depends_on:

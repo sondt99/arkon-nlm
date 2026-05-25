@@ -162,7 +162,7 @@ The initial message includes an **"## Available images"** section listing every 
 extracted from this document as a ready-to-paste markdown marker:
     ![caption](image://<uuid>)
 
-If the source has images, **use them**. Do not leave images unplaced without a reason.
+Place images where they add value. Irrelevant or decorative images should be dropped.
 
 Rules:
 - COPY markers verbatim — the `(image://<uuid>)` part must be byte-for-byte identical.
@@ -171,7 +171,7 @@ Rules:
   entity it depicts.
 - You may rewrite the caption inside `![ ]` for clarity in context.
 - Each marker must appear in AT MOST ONE wiki page.
-- DROP a marker only if no page covers the subject (truly decorative/irrelevant).
+- DROP a marker if it is decorative, redundant, or no wiki page meaningfully discusses it.
 - Call `list_source_images` if you need to refresh the image inventory mid-session.
 
 # Decision rules
@@ -210,9 +210,8 @@ These represent expert domain input. When updating such a page:
 3. For each candidate you plan to update, call `read_wiki_page` to see existing content.
 4. If the source is long, call `read_source_excerpt` to read beyond the initial 30k chars.
 5. Call `create_page` or `update_page` for each operation (full content, not a diff).
-   — Distribute image markers from the "Available images" inventory across the pages
-     where they are most contextually relevant. Every image should end up in exactly
-     one page unless it is clearly decorative.
+   — Place image markers where they are contextually relevant. Drop markers that
+     don't fit naturally into any page.
 6. Call `append_log` once with a one-line summary.
 7. Call `finish` with a brief report. This must be your last tool call.
 

@@ -23,6 +23,15 @@ from app.services.image_service import ImageInfo, extract_images
 from app.services.source_outline import assemble_full_text, build_outline
 from app.services.storage_service import storage_service
 
+_VISION_PROMPT = """Analyze this image and respond in exactly this format (two lines, nothing else):
+RELEVANT: yes
+CAPTION: <1-2 sentence description>
+
+Use RELEVANT: no for logos, watermarks, decorative borders, backgrounds, signatures, small icons, page headers/footers.
+Use RELEVANT: yes for diagrams, charts, photos, illustrations, tables, infographics, maps, technical drawings, screenshots with content."""
+
+_MIN_OCR_CHARS = 50
+
 # ---------------------------------------------------------------------------
 # Ingestion pipeline
 # ---------------------------------------------------------------------------
@@ -88,9 +97,10 @@ async def ingest_source(
                         if idx % 5 == 0 or idx == 1 or idx == len(images):
                             logger.info(f"Vision AI analyzing image {idx}/{len(images)}...")
                         img_bytes = storage_service.download_file(img.minio_key)
-                        img.caption = await vision_provider.analyze_image(
-                            img_bytes, img.content_type
+                        raw = await vision_provider.analyze_image(
+                            img_bytes, img.content_type, prompt=_VISION_PROMPT
                         )
+                        img.caption = _parse_vision_response(raw)
                     except Exception as e:
                         logger.warning(f"Failed to analyze image {img.minio_key}: {e}")
 
@@ -176,6 +186,28 @@ def _guess_content_type(file_name: str) -> str:
     }.get(ext, "application/octet-stream")
 
 
+def _parse_vision_response(raw: str) -> str:
+    """Parse structured vision response into a caption string.
+
+    Expected format:
+        RELEVANT: yes/no
+        CAPTION: <text>
+
+    Returns caption prefixed with '[decorative] ' when not relevant.
+    Falls back to raw text if the format is not recognized.
+    """
+    relevant = True
+    caption = raw.strip()
+    for line in raw.splitlines():
+        line = line.strip()
+        if line.upper().startswith("RELEVANT:"):
+            val = line.split(":", 1)[1].strip().lower()
+            relevant = val.startswith("y")
+        elif line.upper().startswith("CAPTION:"):
+            caption = line.split(":", 1)[1].strip()
+    return caption if relevant else f"[decorative] {caption}"
+
+
 def _sanitize_caption_for_alt(caption: str) -> str:
     """Make a caption safe to use inside markdown image alt text."""
     # Strip newlines + characters that would break `![alt](url)` parsing.
@@ -198,6 +230,8 @@ def _inline_image_markers(pages_data: list[dict], images: list[ImageInfo]) -> No
     by_page: dict[int, list[str]] = {}
     for img in images:
         if not img.image_id:
+            continue
+        if (img.caption or "").startswith("[decorative]"):
             continue
         alt = _sanitize_caption_for_alt(img.caption or "")
         marker = f"![{alt}](image://{img.image_id})"
@@ -230,23 +264,17 @@ async def _extract_text_from_file(file_data: bytes, file_name: str) -> list[dict
         import fitz
         doc = fitz.open(stream=file_data, filetype="pdf")
         for i, page in enumerate(doc):  # type: ignore[arg-type]
-            pages_data.append({"content": _clean_text(page.get_text() or "").strip(), "page_number": i + 1})
+            text = _clean_text(page.get_text() or "").strip()
+            if len(text) < _MIN_OCR_CHARS:
+                try:
+                    tp = page.get_textpage_ocr(flags=0, language="vie+eng", dpi=300, full=True)
+                    ocr_text = _clean_text(page.get_text(textpage=tp) or "").strip()
+                    if len(ocr_text) > len(text):
+                        text = ocr_text
+                except Exception as ocr_err:
+                    logger.warning(f"OCR failed for page {i + 1}: {ocr_err}")
+            pages_data.append({"content": text, "page_number": i + 1})
         doc.close()
-
-        # If no text extracted (image-based PDF), fall back to Tesseract OCR
-        if not any(p.get("content") for p in pages_data):
-            try:
-                ocr_pages: list[dict] = []
-                doc = fitz.open(stream=file_data, filetype="pdf")
-                for i, page in enumerate(doc):  # type: ignore[arg-type]
-                    tp = page.get_textpage_ocr(flags=0, language="vie+eng", dpi=150, full=True)
-                    text = _clean_text(page.get_text(textpage=tp) or "").strip()
-                    ocr_pages.append({"content": text, "page_number": i + 1})
-                doc.close()
-                pages_data = ocr_pages
-            except Exception as ocr_err:
-                logger.warning(f"PDF OCR fallback failed: {ocr_err}")
-
         return pages_data
 
     if ext == "docx":

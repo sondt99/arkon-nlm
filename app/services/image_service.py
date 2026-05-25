@@ -11,9 +11,9 @@ from loguru import logger
 
 from app.services.storage_service import storage_service
 
-# Skip images smaller than this — they're almost always icons/decorators,
-# not content. Tune via env later if needed.
-MIN_IMAGE_BYTES = 2048
+# Skip images smaller than this — filters out most icons, bullets, and small
+# decorative elements. 5 KB is a safe floor that still keeps small charts/diagrams.
+MIN_IMAGE_BYTES = 5120
 
 
 def _mime_from_ext(ext: str) -> str:

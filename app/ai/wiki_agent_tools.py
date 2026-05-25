@@ -27,6 +27,8 @@ async def load_source_images(session: AsyncSession, source_id: uuid.UUID) -> lis
     )
     out = []
     for img_id, caption, page_number, _ in result.all():
+        if (caption or "").startswith("[decorative]"):
+            continue
         out.append({"id": str(img_id), "caption": caption or "", "page": page_number})
     return out
 

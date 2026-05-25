@@ -92,12 +92,13 @@ export function KnowledgeTable({
 
   const handleDelete = async (id: string) => {
     setActionError(null);
+    onDeleteSource(id); // remove from UI immediately before API call
     try {
       await api(`/api/sources/${id}`, { method: "DELETE" });
-      onDeleteSource(id);
       onRefresh();
     } catch (err) {
       setActionError(err instanceof Error ? err.message : "Failed to delete");
+      onRefresh(); // restore item on failure
     }
   };
 

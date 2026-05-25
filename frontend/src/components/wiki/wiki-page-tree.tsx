@@ -40,9 +40,16 @@ export function WikiPageTree({
   const [loading, setLoading] = React.useState(true);
   const [search, setSearch] = React.useState("");
   const [collapsed, setCollapsed] = React.useState(false);
-  const [expandedGroups, setExpandedGroups] = React.useState<Set<string>>(
-    new Set(GROUP_ORDER)
-  );
+  const [expandedGroups, setExpandedGroups] = React.useState<Set<string>>(() => {
+    try {
+      const saved = localStorage.getItem("wiki-tree-expanded-groups");
+      if (saved) {
+        const arr = JSON.parse(saved);
+        if (Array.isArray(arr)) return new Set(arr);
+      }
+    } catch {}
+    return new Set(GROUP_ORDER);
+  });
   // Two-stage delete
   const [armedSlug, setArmedSlug] = React.useState<string | null>(null);
   const [deletingSlug, setDeletingSlug] = React.useState<string | null>(null);
@@ -123,6 +130,9 @@ export function WikiPageTree({
     setExpandedGroups((prev) => {
       const next = new Set(prev);
       next.has(type) ? next.delete(type) : next.add(type);
+      try {
+        localStorage.setItem("wiki-tree-expanded-groups", JSON.stringify([...next]));
+      } catch {}
       return next;
     });
 

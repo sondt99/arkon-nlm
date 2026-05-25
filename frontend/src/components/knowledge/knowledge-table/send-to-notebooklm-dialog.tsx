@@ -16,10 +16,9 @@ import { Source } from "./types";
 
 type NotebookItem = {
   id: string;
-  notebook_id: string;
   title: string;
-  artifact_count: number;
-  created_at: string;
+  sources_count: number;
+  created_at: string | null;
 };
 
 type Mode = "new" | "existing";
@@ -43,10 +42,12 @@ export function SendToNotebookLMDialog({
   React.useEffect(() => {
     if (mode === "existing" && notebooks.length === 0) {
       setLoadingNotebooks(true);
-      api<NotebookItem[]>("/api/notebooklm/notebooks")
+      setError(null);
+      api<NotebookItem[]>("/api/notebooklm/nlm/notebooks")
         .then((data) => {
-          setNotebooks(Array.isArray(data) ? data : []);
-          if (data?.length > 0) setSelectedNotebookId(data[0].id);
+          const list = Array.isArray(data) ? data : [];
+          setNotebooks(list);
+          if (list.length > 0) setSelectedNotebookId(list[0].id);
         })
         .catch((e) => setError(e instanceof Error ? e.message : "Failed to load notebooks"))
         .finally(() => setLoadingNotebooks(false));
@@ -58,25 +59,14 @@ export function SendToNotebookLMDialog({
     setError(null);
     try {
       if (mode === "new") {
-        if (!newTitle.trim()) {
-          setError("Title is required");
-          return;
-        }
+        if (!newTitle.trim()) { setError("Title is required"); return; }
         await api("/api/notebooklm/notebooks", {
           method: "POST",
           body: { title: newTitle.trim(), source_id: source.id },
         });
       } else {
-        if (!selectedNotebookId) {
-          setError("Please select a notebook");
-          return;
-        }
-        const nb = notebooks.find((n) => n.id === selectedNotebookId);
-        if (!nb) {
-          setError("Selected notebook not found");
-          return;
-        }
-        await api(`/api/notebooklm/nlm/notebooks/${nb.notebook_id}/sources`, {
+        if (!selectedNotebookId) { setError("Please select a notebook"); return; }
+        await api(`/api/notebooklm/nlm/notebooks/${selectedNotebookId}/sources`, {
           method: "POST",
           body: { kind: "arkon", source_id: source.id },
         });
@@ -92,8 +82,8 @@ export function SendToNotebookLMDialog({
 
   return (
     <Dialog open onOpenChange={(open) => !open && onClose()}>
-      <DialogContent className="sm:max-w-md">
-        <DialogHeader>
+      <DialogContent className="sm:max-w-md max-h-[85vh] flex flex-col">
+        <DialogHeader className="shrink-0">
           <DialogTitle className="flex items-center gap-2">
             <span className="material-symbols-outlined text-blue-500" style={{ fontSize: 20 }}>
               book_2
@@ -103,9 +93,9 @@ export function SendToNotebookLMDialog({
           <p className="text-sm text-muted-foreground mt-1 truncate">{source.title}</p>
         </DialogHeader>
 
-        <div className="flex flex-col gap-4 mt-2">
+        <div className="flex flex-col gap-4 mt-2 min-h-0 flex-1 overflow-y-auto pr-1">
           {/* Mode selector */}
-          <div className="grid grid-cols-2 gap-2">
+          <div className="grid grid-cols-2 gap-2 shrink-0">
             <button
               type="button"
               onClick={() => setMode("new")}
@@ -134,7 +124,7 @@ export function SendToNotebookLMDialog({
 
           {/* New notebook: title input */}
           {mode === "new" && (
-            <div className="flex flex-col gap-1.5">
+            <div className="flex flex-col gap-1.5 shrink-0">
               <Label>Tên notebook</Label>
               <Input
                 value={newTitle}
@@ -146,49 +136,50 @@ export function SendToNotebookLMDialog({
             </div>
           )}
 
-          {/* Existing notebook: list */}
+          {/* Existing: notebook list */}
           {mode === "existing" && (
-            <div className="flex flex-col gap-1.5">
-              <Label>Chọn notebook</Label>
+            <div className="flex flex-col gap-1.5 min-h-0">
+              <Label className="shrink-0">Chọn notebook</Label>
               {loadingNotebooks ? (
-                <div className="flex items-center justify-center py-6">
-                  <span className="material-symbols-outlined animate-spin text-muted-foreground">
+                <div className="flex items-center justify-center py-8">
+                  <span className="material-symbols-outlined animate-spin text-muted-foreground text-3xl">
                     progress_activity
                   </span>
                 </div>
               ) : notebooks.length === 0 ? (
-                <div className="text-sm text-muted-foreground text-center py-4 border rounded-lg bg-secondary/20">
+                <div className="text-sm text-muted-foreground text-center py-6 border rounded-lg bg-secondary/20">
                   Chưa có notebook nào. Hãy tạo notebook mới.
                 </div>
               ) : (
-                <div className="flex flex-col gap-1 max-h-52 overflow-y-auto border rounded-lg p-1 bg-background">
+                <div className="flex flex-col gap-0.5 overflow-y-auto border rounded-lg p-1 bg-background" style={{ maxHeight: 240 }}>
                   {notebooks.map((nb) => (
                     <button
                       key={nb.id}
                       type="button"
                       onClick={() => setSelectedNotebookId(nb.id)}
-                      className={`flex items-center gap-3 px-3 py-2 rounded-md text-left transition-colors ${
+                      className={`flex items-center gap-3 px-3 py-2.5 rounded-md text-left w-full transition-colors ${
                         selectedNotebookId === nb.id
                           ? "bg-primary/10 text-primary"
                           : "hover:bg-secondary/50"
                       }`}
                     >
-                      <span
-                        className="material-symbols-outlined shrink-0"
-                        style={{ fontSize: 18 }}
-                      >
+                      <span className="material-symbols-outlined shrink-0" style={{ fontSize: 18 }}>
                         {selectedNotebookId === nb.id ? "check_circle" : "menu_book"}
                       </span>
                       <div className="min-w-0 flex-1">
                         <p className="text-sm font-medium truncate">{nb.title}</p>
                         <p className="text-[10px] text-muted-foreground">
-                          {nb.artifact_count} artifact{nb.artifact_count !== 1 ? "s" : ""}
-                          {" · "}
-                          {new Date(nb.created_at).toLocaleDateString("vi-VN", {
-                            day: "numeric",
-                            month: "short",
-                            year: "numeric",
-                          })}
+                          {nb.sources_count} source{nb.sources_count !== 1 ? "s" : ""}
+                          {nb.created_at && (
+                            <>
+                              {" · "}
+                              {new Date(nb.created_at).toLocaleDateString("vi-VN", {
+                                day: "numeric",
+                                month: "short",
+                                year: "numeric",
+                              })}
+                            </>
+                          )}
                         </p>
                       </div>
                     </button>
@@ -199,28 +190,29 @@ export function SendToNotebookLMDialog({
           )}
 
           {error && (
-            <p className="text-destructive text-sm bg-destructive/10 px-3 py-2 rounded-lg">
+            <p className="text-destructive text-sm bg-destructive/10 px-3 py-2 rounded-lg shrink-0">
               {error}
             </p>
           )}
+        </div>
 
-          <div className="flex justify-end gap-2 mt-1">
-            <Button variant="outline" onClick={onClose} disabled={sending}>
-              Cancel
-            </Button>
-            <Button
-              onClick={handleSend}
-              disabled={sending || (mode === "existing" && (loadingNotebooks || !selectedNotebookId))}
-              className="bg-blue-600 hover:bg-blue-700 text-white"
-            >
-              {sending ? (
-                <span className="flex items-center gap-2">
-                  <span className="material-symbols-outlined animate-spin text-sm">progress_activity</span>
-                  Sending…
-                </span>
-              ) : mode === "new" ? "Tạo & gửi" : "Thêm vào notebook"}
-            </Button>
-          </div>
+        {/* Footer — always visible */}
+        <div className="flex justify-end gap-2 pt-3 shrink-0 border-t border-border mt-2">
+          <Button variant="outline" onClick={onClose} disabled={sending}>
+            Cancel
+          </Button>
+          <Button
+            onClick={handleSend}
+            disabled={sending || (mode === "existing" && (loadingNotebooks || !selectedNotebookId))}
+            className="bg-blue-600 hover:bg-blue-700 text-white"
+          >
+            {sending ? (
+              <span className="flex items-center gap-2">
+                <span className="material-symbols-outlined animate-spin text-sm">progress_activity</span>
+                Sending…
+              </span>
+            ) : mode === "new" ? "Tạo & gửi" : "Thêm vào notebook"}
+          </Button>
         </div>
       </DialogContent>
     </Dialog>

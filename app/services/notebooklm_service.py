@@ -430,32 +430,46 @@ async def generate_nlm_artifact(
     notebook_id: str,
     artifact_type: str,
     report_format: Optional[str] = None,
+    instructions: Optional[str] = None,
 ) -> dict:
     from notebooklm.rpc import ReportFormat
 
+    ins = instructions.strip() if instructions and instructions.strip() else None
+
     async with await get_client() as client:
         if artifact_type == "audio":
-            gen = await client.artifacts.generate_audio(notebook_id)
+            gen = await client.artifacts.generate_audio(notebook_id, instructions=ins)
         elif artifact_type == "video":
-            gen = await client.artifacts.generate_video(notebook_id)
+            gen = await client.artifacts.generate_video(notebook_id, instructions=ins)
         elif artifact_type == "report":
-            fmt_map = {
-                "briefing_doc": ReportFormat.BRIEFING_DOC,
-                "study_guide": ReportFormat.STUDY_GUIDE,
-                "blog_post": ReportFormat.BLOG_POST,
-            }
-            fmt = fmt_map.get(report_format or "", ReportFormat.BRIEFING_DOC)
-            gen = await client.artifacts.generate_report(notebook_id, report_format=fmt)
+            if report_format == "custom":
+                gen = await client.artifacts.generate_report(
+                    notebook_id,
+                    report_format=ReportFormat.CUSTOM,
+                    custom_prompt=ins,
+                )
+            else:
+                fmt_map = {
+                    "briefing_doc": ReportFormat.BRIEFING_DOC,
+                    "study_guide": ReportFormat.STUDY_GUIDE,
+                    "blog_post": ReportFormat.BLOG_POST,
+                }
+                fmt = fmt_map.get(report_format or "", ReportFormat.BRIEFING_DOC)
+                gen = await client.artifacts.generate_report(
+                    notebook_id,
+                    report_format=fmt,
+                    extra_instructions=ins,
+                )
         elif artifact_type == "quiz":
-            gen = await client.artifacts.generate_quiz(notebook_id)
+            gen = await client.artifacts.generate_quiz(notebook_id, instructions=ins)
         elif artifact_type == "flashcards":
-            gen = await client.artifacts.generate_flashcards(notebook_id)
+            gen = await client.artifacts.generate_flashcards(notebook_id, instructions=ins)
         elif artifact_type == "slide_deck":
-            gen = await client.artifacts.generate_slide_deck(notebook_id)
+            gen = await client.artifacts.generate_slide_deck(notebook_id, instructions=ins)
         elif artifact_type == "infographic":
-            gen = await client.artifacts.generate_infographic(notebook_id)
+            gen = await client.artifacts.generate_infographic(notebook_id, instructions=ins)
         elif artifact_type == "data_table":
-            gen = await client.artifacts.generate_data_table(notebook_id)
+            gen = await client.artifacts.generate_data_table(notebook_id, instructions=ins)
         else:
             raise ValueError(f"Unknown artifact type: {artifact_type}")
         return {"task_id": gen.task_id, "status": gen.status}

@@ -680,6 +680,7 @@ def _parse_drive_url(url: str) -> tuple[str, str, str]:
 class NLMArtifactGenerate(BaseModel):
     artifact_type: str
     report_format: Optional[str] = None
+    instructions: Optional[str] = None
 
 
 class NLMChatAsk(BaseModel):
@@ -856,7 +857,7 @@ async def nlm_generate_artifact(
             detail=f"artifact_type must be one of: {', '.join(sorted(VALID_ARTIFACT_TYPES))}",
         )
     try:
-        return await generate_nlm_artifact(nlm_id, body.artifact_type, body.report_format)
+        return await generate_nlm_artifact(nlm_id, body.artifact_type, body.report_format, body.instructions)
     except Exception as e:
         raise _nlm_error(e)
 

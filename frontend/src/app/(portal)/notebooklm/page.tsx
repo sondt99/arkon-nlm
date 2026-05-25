@@ -428,10 +428,17 @@ function GenerateDialog({
 }) {
   const [artifactType, setArtifactType] = useState<ArtifactType>("audio");
   const [reportFormat, setReportFormat] = useState<ReportFormat>("briefing_doc");
+  const [instructions, setInstructions] = useState("");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
 
+  const isCustomReport = artifactType === "report" && reportFormat === "custom";
+
   const submit = async () => {
+    if (isCustomReport && !instructions.trim()) {
+      setError("Custom report requires instructions.");
+      return;
+    }
     setLoading(true);
     setError("");
     try {
@@ -440,6 +447,7 @@ function GenerateDialog({
         body: {
           artifact_type: artifactType,
           report_format: artifactType === "report" ? reportFormat : undefined,
+          instructions: instructions.trim() || undefined,
         },
       });
       onGenerated();
@@ -477,10 +485,31 @@ function GenerateDialog({
                   <SelectItem value="briefing_doc">Briefing Document</SelectItem>
                   <SelectItem value="study_guide">Study Guide</SelectItem>
                   <SelectItem value="blog_post">Blog Post</SelectItem>
+                  <SelectItem value="custom">✏️ Custom (from instructions)</SelectItem>
                 </SelectContent>
               </Select>
             </div>
           )}
+
+          <div>
+            <label className="text-[13px] font-medium mb-1.5 block">
+              {isCustomReport ? "Instructions (required)" : "Custom instructions"}
+              {!isCustomReport && (
+                <span className="text-muted-foreground font-normal ml-1">— optional</span>
+              )}
+            </label>
+            <textarea
+              value={instructions}
+              onChange={(e) => setInstructions(e.target.value)}
+              rows={4}
+              placeholder={
+                isCustomReport
+                  ? "Describe exactly what to generate, e.g. Tạo báo cáo chi tiết về quy trình vận hành, liệt kê từng bước và lưu ý quan trọng…"
+                  : "e.g. Tập trung vào nội dung kỹ thuật, cực kỳ chi tiết, không bỏ sót thông tin nào…"
+              }
+              className="w-full rounded-md border border-input bg-background px-3 py-2 text-[13px] placeholder:text-muted-foreground focus:outline-none focus:ring-1 focus:ring-ring resize-none"
+            />
+          </div>
 
           {error && <p className="text-[12px] text-red-600">{error}</p>}
           <div className="flex justify-end gap-2 pt-1">

@@ -268,7 +268,7 @@ export default function ChatPage() {
   const [loadingMsgs, setLoadingMsgs] = React.useState(false);
   const [sending, setSending] = React.useState(false);
   const [input, setInput] = React.useState("");
-  const [persona, setPersona] = React.useState<"victor" | "ashley">("victor");
+  const [persona, setPersona] = React.useState<"victor" | "ashley">("ashley");
   const [deletingId, setDeletingId] = React.useState<string | null>(null);
   const [editingConvId, setEditingConvId] = React.useState<string | null>(null);
   const [editingTitle, setEditingTitle] = React.useState("");

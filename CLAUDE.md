@@ -137,6 +137,18 @@ rtk init --global       # Add RTK to ~/.claude/CLAUDE.md
 Overall average: **60-90% token reduction** on common development operations.
 <!-- /rtk-instructions -->
 
+# Common Commands
+
+**Read `COMMANDS.md` before running any shell command.** It contains verified commands for this project (git, docker, tsc, alembic) with the correct flags for Windows/PowerShell. Do not guess OS-specific syntax — check there first.
+
+Key rules from COMMANDS.md:
+- Git: always use `git -C "E:\AI-CLAUDE\arkon" <subcommand>` (never `cd` first)
+- Docker: always use `docker compose -f "E:\AI-CLAUDE\arkon\docker-compose.yml" ...`
+- TypeScript check: use Bash tool with `./node_modules/.bin/tsc --noEmit`
+- Parentheses in Next.js paths need backtick-escaping in PowerShell: `` `(portal`) ``
+
+---
+
 # Documentation Maintenance
 
 **Rule:** Whenever code changes affect system architecture, APIs, data models, or business logic, update `docs/DESIGN_DOCUMENT.md` accordingly in the same task.

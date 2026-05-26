@@ -1765,6 +1765,37 @@ Auth: Authorization: Bearer <mcp_token>
 
 ---
 
+### v1.2.5 — 2026-05-26
+
+#### Zip Archive Upload (Documents)
+
+**Chức năng**
+- Người dùng có thể upload file `.zip` chứa nhiều tài liệu nguồn
+- Server giải nén in-memory và tạo Source + enqueue ingest job cho từng file hợp lệ bên trong
+- Response: `{ created, skipped, source_ids }` — báo số file đã tạo và danh sách bị bỏ qua
+
+**Bảo mật**
+
+| Mối đe dọa | Biện pháp |
+|-----------|-----------|
+| **ZipSlip** | `os.path.basename()` loại bỏ toàn bộ path components trước khi dùng filename trong DB/MinIO |
+| **Zip bomb** | Kiểm tra `info.file_size` (declared) trước khi đọc; kiểm tra `len(data)` (actual) sau giải nén |
+| **Entry count** | Tối đa 50 entries per archive |
+| **Per-file size** | Tối đa 50 MB mỗi file sau giải nén |
+| **Total size** | Tối đa 500 MB tổng uncompressed |
+| **Invalid format** | `BadZipFile`/`LargeZipFile` → HTTP 422 rõ ràng |
+| **Extension allowlist** | Chỉ `.pdf .docx .doc .txt .md .csv .xlsx .pptx` |
+| **Metadata junk** | Tự động bỏ `__MACOSX/`, dot-files, `Thumbs.db`, `desktop.ini` |
+
+**Files mới/sửa**
+- `app/services/zip_service.py` — mới: `extract_zip()`, `ZipExtractionError`, `_safe_filename()`
+- `app/routers/sources.py` — mới: `POST /api/sources/upload-zip`
+- `frontend/src/components/knowledge/upload-dialog.tsx` — thêm `.zip` vào accepted types, zip route riêng sang endpoint mới, hiển thị `folder_zip` icon và kết quả extract
+
+**Giới hạn zip file**: 100 MB (compressed), 500 MB (total uncompressed), 50 files
+
+---
+
 ### v1.1 — (trước 2026-05-26)
 
 Phiên bản ban đầu gồm: Ingestion Pipeline (MRP), Wiki System, Skill System, RBAC, NotebookLM Integration, MCP Server.

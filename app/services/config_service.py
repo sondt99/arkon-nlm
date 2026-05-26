@@ -28,10 +28,11 @@ def _derive_fernet_key(secret: str) -> bytes:
 def _is_sensitive(key: str) -> bool:
     """A key is sensitive if it stores raw credentials/API keys."""
     return (
-        key in {"embedding_api_key", "llm_api_key", "vision_api_key"}
+        key in {"embedding_api_key", "llm_api_key", "vision_api_key", "chatbot_api_key"}
         or key.startswith("embedding_api_key__")
         or key.startswith("llm_api_key__")
         or key.startswith("vision_api_key__")
+        or key.startswith("chatbot_api_key__")
     )
 
 
@@ -41,6 +42,7 @@ SENSITIVE_KEYS = frozenset({
     "embedding_api_key",
     "llm_api_key",
     "vision_api_key",
+    "chatbot_api_key",
 })
 
 # Active embedding model selection (canonical spec_id from EMBEDDING_CATALOG)
@@ -91,6 +93,17 @@ ALL_CONFIG_KEYS = [
     "embedding_custom_model_id",
     "embedding_custom_dimension",
     "embedding_custom_provider",
+
+    # --- Chatbot provider (optional — falls back to LLM provider if unset) ---
+    "chatbot_provider",           # "google" | "openai" | "anthropic" | "ollama" | "ninerouter"
+    "chatbot_model_id",
+    "chatbot_api_key",
+    "chatbot_api_key__google",
+    "chatbot_api_key__openai",
+    "chatbot_api_key__anthropic",
+    "chatbot_api_key__ollama",
+    "chatbot_api_key__ninerouter",
+    "chatbot_base_url",
 
     # --- System ---
     "session_timeout_minutes",

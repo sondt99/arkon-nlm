@@ -126,7 +126,7 @@ async def generate_reply(
     else:
         prompt = question
 
-    llm = await registry.get_llm()
+    llm = await registry.get_chatbot_llm()
     answer = await llm.generate(prompt, system=system_prompt, temperature=0.3)
 
     sources = [{"slug": p.slug, "title": p.title} for p in pages]

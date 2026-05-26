@@ -146,6 +146,20 @@ async def test_vision(db: AsyncSession = Depends(get_db)):
         return TestConnectionResult(success=False, message=str(e))
 
 
+@router.post("/settings/test-chatbot", response_model=TestConnectionResult)
+async def test_chatbot(db: AsyncSession = Depends(get_db)):
+    """Test the configured chatbot LLM provider (falls back to main LLM if not set)."""
+    from app.ai.registry import ProviderRegistry
+
+    try:
+        registry = ProviderRegistry(db)
+        provider = await registry.get_chatbot_llm()
+        ok, msg = await provider.test_connection()
+        return TestConnectionResult(success=ok, message=msg)
+    except Exception as e:
+        return TestConnectionResult(success=False, message=str(e))
+
+
 # ---------------------------------------------------------------------------
 # Supported providers list (for admin UI dropdowns)
 # ---------------------------------------------------------------------------

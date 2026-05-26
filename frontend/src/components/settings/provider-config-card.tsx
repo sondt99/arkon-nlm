@@ -121,7 +121,7 @@ const VISION_PROVIDERS: ProviderDef[] = [
   },
 ];
 
-const ALL_PROVIDERS = { llm: LLM_PROVIDERS, vision: VISION_PROVIDERS };
+const ALL_PROVIDERS = { llm: LLM_PROVIDERS, vision: VISION_PROVIDERS, chatbot: LLM_PROVIDERS };
 const PROVIDER_NAMES = ["google", "openai", "anthropic", "ollama", "ninerouter"] as const;
 
 // ── Props ─────────────────────────────────────────────────────────────────────
@@ -130,13 +130,15 @@ type Props = {
   title: string;
   description: string;
   icon: string;
-  capability: "llm" | "vision";
+  capability: "llm" | "vision" | "chatbot";
   testEndpoint: string;
+  /** Show a badge explaining this provider is optional / has a fallback */
+  fallbackNote?: string;
 };
 
 // ── Component ─────────────────────────────────────────────────────────────────
 
-export function ProviderConfigCard({ title, description, icon, capability, testEndpoint }: Props) {
+export function ProviderConfigCard({ title, description, icon, capability, testEndpoint, fallbackNote }: Props) {
   const providers = ALL_PROVIDERS[capability];
 
   const [provider, setProvider] = useState("");
@@ -292,15 +294,43 @@ export function ProviderConfigCard({ title, description, icon, capability, testE
         <div className="w-9 h-9 rounded-lg bg-primary/10 flex items-center justify-center">
           <span className="material-symbols-outlined text-primary text-base">{icon}</span>
         </div>
-        <div>
-          <h3 className="text-base font-semibold text-foreground">{title}</h3>
+        <div className="flex-1 min-w-0">
+          <div className="flex items-center gap-2 flex-wrap">
+            <h3 className="text-base font-semibold text-foreground">{title}</h3>
+            {fallbackNote && (
+              <span className="text-[10px] font-medium px-2 py-0.5 rounded-full bg-muted text-muted-foreground border border-border">
+                {fallbackNote}
+              </span>
+            )}
+          </div>
           <p className="text-xs text-muted-foreground">{description}</p>
         </div>
       </div>
 
       {/* Provider selector */}
       <div className="px-6 pb-4">
-        <div className="grid grid-cols-3 sm:grid-cols-5 gap-2">
+        <div className={`grid gap-2 ${capability === "chatbot" ? "grid-cols-3 sm:grid-cols-6" : "grid-cols-3 sm:grid-cols-5"}`}>
+          {/* Chatbot: "None" option = fall back to LLM provider */}
+          {capability === "chatbot" && (
+            <button
+              onClick={() => { setProvider(""); setModel(""); setBaseUrl(""); setFetchedModels(null); setFetchError(""); setTestResult(null); }}
+              className={`relative flex flex-col items-center gap-1.5 py-3 px-2 rounded-lg border transition-all text-xs font-medium ${
+                provider === ""
+                  ? "border-primary bg-primary/8 text-primary"
+                  : "border-border bg-background text-muted-foreground hover:border-primary/40 hover:text-foreground"
+              }`}
+            >
+              <span className="material-symbols-outlined text-xl">
+                device_hub
+              </span>
+              LLM fallback
+              {provider === "" && (
+                <span className="text-[9px] uppercase tracking-wide bg-primary/15 text-primary px-1.5 py-0.5 rounded-full font-semibold">
+                  Active
+                </span>
+              )}
+            </button>
+          )}
           {providers.map((p) => {
             const active = provider === p.value;
             const hasSavedKey = !!apiKeys[p.value];
@@ -331,6 +361,19 @@ export function ProviderConfigCard({ title, description, icon, capability, testE
           })}
         </div>
       </div>
+
+      {/* Chatbot fallback notice */}
+      {capability === "chatbot" && !provider && (
+        <div className="px-6 pb-5 border-t border-border/60 pt-4">
+          <div className="flex items-start gap-3 rounded-lg bg-muted/50 border border-border px-4 py-3">
+            <span className="material-symbols-outlined text-muted-foreground text-base mt-0.5">info</span>
+            <p className="text-xs text-muted-foreground leading-relaxed">
+              Chatbot will use the <strong>LLM Provider</strong> configured above.
+              Select a dedicated provider here if you want to use a different model for chat (e.g. a faster or cheaper one).
+            </p>
+          </div>
+        </div>
+      )}
 
       {/* Config fields */}
       {def && (

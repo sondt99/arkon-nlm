@@ -21,7 +21,7 @@ export default function SettingsPage() {
     <>
       <PageHeader
         title="Settings"
-        description="Configure AI providers for embedding, LLM, and vision processing."
+        description="Configure AI providers for embedding, LLM, vision processing, and chatbot."
       />
 
       <div className="flex flex-col gap-6">
@@ -41,6 +41,15 @@ export default function SettingsPage() {
           icon="visibility"
           capability="vision"
           testEndpoint="/api/settings/test-vision"
+        />
+
+        <ProviderConfigCard
+          title="Chatbot Provider"
+          description="Optional — dedicated model for the RAG knowledge assistant"
+          icon="smart_toy"
+          capability="chatbot"
+          testEndpoint="/api/settings/test-chatbot"
+          fallbackNote="Optional — falls back to LLM Provider"
         />
       </div>
     </>

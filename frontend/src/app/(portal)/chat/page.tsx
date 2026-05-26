@@ -1,6 +1,8 @@
 "use client";
 
 import React from "react";
+import ReactMarkdown from "react-markdown";
+import remarkGfm from "remark-gfm";
 import { api } from "@/lib/api";
 import { cn } from "@/lib/utils";
 import { AddToWikiDialog } from "./add-to-wiki-dialog";
@@ -23,66 +25,94 @@ type Message = {
 };
 
 // ---------------------------------------------------------------------------
-// Markdown renderer (minimal — no external deps needed)
+// Markdown renderer — uses react-markdown + remark-gfm
 // ---------------------------------------------------------------------------
-function renderMarkdown(text: string): React.ReactNode {
-  const lines = text.split("\n");
-  const elements: React.ReactNode[] = [];
-  let i = 0;
-
-  while (i < lines.length) {
-    const line = lines[i];
-
-    // Headings
-    if (line.startsWith("### ")) {
-      elements.push(<h3 key={i} className="text-sm font-semibold mt-3 mb-1">{line.slice(4)}</h3>);
-    } else if (line.startsWith("## ")) {
-      elements.push(<h2 key={i} className="text-sm font-bold mt-3 mb-1">{line.slice(3)}</h2>);
-    } else if (line.startsWith("# ")) {
-      elements.push(<h1 key={i} className="text-sm font-bold mt-3 mb-1">{line.slice(2)}</h1>);
-    } else if (line.startsWith("- ") || line.startsWith("* ")) {
-      elements.push(
-        <li key={i} className="ml-4 list-disc text-sm leading-relaxed">
-          {inlineMarkdown(line.slice(2))}
-        </li>
-      );
-    } else if (/^\d+\. /.test(line)) {
-      elements.push(
-        <li key={i} className="ml-4 list-decimal text-sm leading-relaxed">
-          {inlineMarkdown(line.replace(/^\d+\. /, ""))}
-        </li>
-      );
-    } else if (line.trim() === "") {
-      elements.push(<br key={i} />);
-    } else {
-      elements.push(
-        <p key={i} className="text-sm leading-relaxed">
-          {inlineMarkdown(line)}
-        </p>
-      );
-    }
-    i++;
-  }
-
-  return <>{elements}</>;
-}
-
-function inlineMarkdown(text: string): React.ReactNode {
-  // bold, code
-  const parts = text.split(/(\*\*[^*]+\*\*|`[^`]+`)/g);
-  return parts.map((part, i) => {
-    if (part.startsWith("**") && part.endsWith("**")) {
-      return <strong key={i}>{part.slice(2, -2)}</strong>;
-    }
-    if (part.startsWith("`") && part.endsWith("`")) {
-      return (
-        <code key={i} className="bg-muted px-1 py-0.5 rounded text-xs font-mono">
-          {part.slice(1, -1)}
-        </code>
-      );
-    }
-    return part;
-  });
+function ChatMarkdown({ content }: { content: string }) {
+  return (
+    <ReactMarkdown
+      remarkPlugins={[remarkGfm]}
+      components={{
+        h1: ({ children }) => (
+          <h1 className="text-base font-bold mt-3 mb-1.5 text-foreground">{children}</h1>
+        ),
+        h2: ({ children }) => (
+          <h2 className="text-sm font-bold mt-3 mb-1 text-foreground">{children}</h2>
+        ),
+        h3: ({ children }) => (
+          <h3 className="text-sm font-semibold mt-2 mb-0.5 text-foreground">{children}</h3>
+        ),
+        p: ({ children }) => (
+          <p className="text-sm leading-relaxed mb-2 last:mb-0">{children}</p>
+        ),
+        ul: ({ children }) => (
+          <ul className="text-sm leading-relaxed mb-2 ml-4 list-disc space-y-0.5">{children}</ul>
+        ),
+        ol: ({ children }) => (
+          <ol className="text-sm leading-relaxed mb-2 ml-4 list-decimal space-y-0.5">{children}</ol>
+        ),
+        li: ({ children }) => <li className="leading-relaxed">{children}</li>,
+        strong: ({ children }) => <strong className="font-semibold text-foreground">{children}</strong>,
+        em: ({ children }) => <em className="italic">{children}</em>,
+        a: ({ href, children }) => (
+          <a
+            href={href}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="text-primary underline underline-offset-2 hover:text-primary/80"
+          >
+            {children}
+          </a>
+        ),
+        code: ({ className, children, ...props }) => {
+          const isBlock = !!className;
+          if (isBlock) {
+            return (
+              <div className="relative group/code my-2">
+                <pre className="bg-muted/60 border border-border rounded-lg px-4 py-3 overflow-x-auto">
+                  <code className="text-xs font-mono text-foreground whitespace-pre">
+                    {children}
+                  </code>
+                </pre>
+              </div>
+            );
+          }
+          return (
+            <code
+              className="bg-muted border border-border/50 px-1.5 py-0.5 rounded text-xs font-mono text-foreground"
+              {...props}
+            >
+              {children}
+            </code>
+          );
+        },
+        pre: ({ children }) => <>{children}</>,
+        blockquote: ({ children }) => (
+          <blockquote className="border-l-2 border-primary/40 pl-3 my-2 text-muted-foreground italic text-sm">
+            {children}
+          </blockquote>
+        ),
+        hr: () => <hr className="my-3 border-border" />,
+        table: ({ children }) => (
+          <div className="overflow-x-auto my-2">
+            <table className="text-xs w-full border-collapse border border-border rounded">
+              {children}
+            </table>
+          </div>
+        ),
+        thead: ({ children }) => <thead className="bg-muted/50">{children}</thead>,
+        th: ({ children }) => (
+          <th className="border border-border px-2 py-1.5 text-left font-semibold text-foreground">
+            {children}
+          </th>
+        ),
+        td: ({ children }) => (
+          <td className="border border-border px-2 py-1.5 text-muted-foreground">{children}</td>
+        ),
+      }}
+    >
+      {content}
+    </ReactMarkdown>
+  );
 }
 
 // ---------------------------------------------------------------------------
@@ -121,8 +151,8 @@ function MessageBubble({ msg }: { msg: Message }) {
           {isUser ? (
             <p className="text-sm leading-relaxed whitespace-pre-wrap">{msg.content}</p>
           ) : (
-            <div className="prose prose-sm max-w-none text-foreground">
-              {renderMarkdown(msg.content)}
+            <div className="min-w-0">
+              <ChatMarkdown content={msg.content} />
             </div>
           )}
         </div>

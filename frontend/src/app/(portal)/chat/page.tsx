@@ -118,15 +118,40 @@ function ChatMarkdown({ content }: { content: string }) {
 // ---------------------------------------------------------------------------
 // Message bubble
 // ---------------------------------------------------------------------------
-function MessageBubble({ msg }: { msg: Message }) {
+function MessageBubble({
+  msg,
+  isEditing,
+  editContent,
+  onEditStart,
+  onEditChange,
+  onEditSave,
+  onEditCancel,
+}: {
+  msg: Message;
+  isEditing?: boolean;
+  editContent?: string;
+  onEditStart?: () => void;
+  onEditChange?: (val: string) => void;
+  onEditSave?: () => void;
+  onEditCancel?: () => void;
+}) {
   const isUser = msg.role === "user";
+  const editRef = React.useRef<HTMLTextAreaElement>(null);
+
+  React.useEffect(() => {
+    if (isEditing && editRef.current) {
+      editRef.current.focus();
+      const len = editRef.current.value.length;
+      editRef.current.setSelectionRange(len, len);
+    }
+  }, [isEditing]);
 
   return (
     <div className={cn("flex gap-3 max-w-3xl", isUser ? "ml-auto flex-row-reverse" : "")}>
       {/* Avatar */}
       <div
         className={cn(
-          "w-7 h-7 shrink-0 rounded-full flex items-center justify-center text-xs font-semibold",
+          "w-7 h-7 shrink-0 rounded-full flex items-center justify-center text-xs font-semibold mt-1",
           isUser
             ? "bg-primary text-primary-foreground"
             : "bg-muted text-muted-foreground border border-border"
@@ -140,25 +165,76 @@ function MessageBubble({ msg }: { msg: Message }) {
       </div>
 
       <div className={cn("flex flex-col gap-1 min-w-0", isUser ? "items-end" : "")}>
-        <div
-          className={cn(
-            "rounded-2xl px-4 py-3 max-w-prose",
-            isUser
-              ? "bg-primary text-primary-foreground rounded-tr-sm"
-              : "bg-card border border-border rounded-tl-sm"
-          )}
-        >
-          {isUser ? (
-            <p className="text-sm leading-relaxed whitespace-pre-wrap">{msg.content}</p>
-          ) : (
-            <div className="min-w-0">
-              <ChatMarkdown content={msg.content} />
+        {isEditing ? (
+          /* ── Inline edit mode ── */
+          <div className="flex flex-col gap-2 w-full max-w-prose">
+            <textarea
+              ref={editRef}
+              value={editContent}
+              onChange={(e) => {
+                onEditChange?.(e.target.value);
+                e.target.style.height = "auto";
+                e.target.style.height = `${Math.min(e.target.scrollHeight, 300)}px`;
+              }}
+              onKeyDown={(e) => {
+                if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); onEditSave?.(); }
+                if (e.key === "Escape") onEditCancel?.();
+              }}
+              rows={3}
+              className="w-full resize-none rounded-2xl rounded-tr-sm px-4 py-3 text-sm bg-primary/5 border border-primary/40 outline-none focus:border-primary/70 text-foreground leading-relaxed"
+              style={{ maxHeight: 300 }}
+            />
+            <div className="flex gap-2 justify-end text-xs">
+              <button
+                onClick={onEditCancel}
+                className="px-3 py-1.5 rounded-lg border border-border text-muted-foreground hover:text-foreground hover:bg-accent/50 transition-colors"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={onEditSave}
+                disabled={!editContent?.trim()}
+                className="px-3 py-1.5 rounded-lg bg-primary text-primary-foreground font-medium hover:bg-primary/90 disabled:opacity-40 disabled:cursor-not-allowed transition-colors flex items-center gap-1.5"
+              >
+                <span className="material-symbols-outlined" style={{ fontSize: 13 }}>refresh</span>
+                Save & Regenerate
+              </button>
             </div>
-          )}
-        </div>
+          </div>
+        ) : (
+          /* ── Normal display ── */
+          <div className={cn("group/msg relative", isUser ? "flex flex-col items-end" : "")}>
+            {/* Edit icon — only for user messages */}
+            {isUser && onEditStart && (
+              <button
+                onClick={onEditStart}
+                className="absolute -left-6 top-2.5 opacity-0 group-hover/msg:opacity-100 transition-opacity text-muted-foreground hover:text-foreground"
+                title="Edit message"
+              >
+                <span className="material-symbols-outlined" style={{ fontSize: 14 }}>edit</span>
+              </button>
+            )}
+            <div
+              className={cn(
+                "rounded-2xl px-4 py-3 max-w-prose",
+                isUser
+                  ? "bg-primary text-primary-foreground rounded-tr-sm"
+                  : "bg-card border border-border rounded-tl-sm"
+              )}
+            >
+              {isUser ? (
+                <p className="text-sm leading-relaxed whitespace-pre-wrap">{msg.content}</p>
+              ) : (
+                <div className="min-w-0">
+                  <ChatMarkdown content={msg.content} />
+                </div>
+              )}
+            </div>
+          </div>
+        )}
 
         {/* Sources */}
-        {!isUser && msg.sources && msg.sources.length > 0 && (
+        {!isEditing && !isUser && msg.sources && msg.sources.length > 0 && (
           <div className="flex flex-wrap gap-1 mt-1">
             {msg.sources.map((s) => (
               <a
@@ -195,6 +271,8 @@ export default function ChatPage() {
   const [deletingId, setDeletingId] = React.useState<string | null>(null);
   const [editingConvId, setEditingConvId] = React.useState<string | null>(null);
   const [editingTitle, setEditingTitle] = React.useState("");
+  const [editingMsgId, setEditingMsgId] = React.useState<string | null>(null);
+  const [editingMsgContent, setEditingMsgContent] = React.useState("");
   const [wikiDialogOpen, setWikiDialogOpen] = React.useState(false);
   const bottomRef = React.useRef<HTMLDivElement>(null);
   const textareaRef = React.useRef<HTMLTextAreaElement>(null);
@@ -284,6 +362,40 @@ export default function ChatPage() {
       });
     }
   }, [editingConvId]);
+
+  const handleEditMsgSave = async () => {
+    const text = editingMsgContent.trim();
+    if (!text || sending || !activeConvId) return;
+
+    const msgId = editingMsgId!;
+    const msgIndex = messages.findIndex((m) => m.id === msgId);
+    setEditingMsgId(null);
+    setSending(true);
+
+    // Optimistic: update the edited message, remove everything after it
+    setMessages((prev) => [
+      ...prev.slice(0, msgIndex),
+      { ...prev[msgIndex], content: text },
+    ]);
+
+    try {
+      const result = await api<{ user_message: Message; assistant_message: Message }>(
+        `/api/chat/conversations/${activeConvId}/messages/${msgId}/edit`,
+        { method: "PATCH", body: { content: text }, timeoutMs: 120_000 }
+      );
+      setMessages((prev) => [
+        ...prev.slice(0, msgIndex),
+        result.user_message,
+        result.assistant_message,
+      ]);
+    } catch {
+      // Rollback: reload from server
+      loadMessages(activeConvId);
+    } finally {
+      setSending(false);
+      textareaRef.current?.focus();
+    }
+  };
 
   // Dismiss delete arm on outside click
   React.useEffect(() => {
@@ -572,7 +684,23 @@ export default function ChatPage() {
             ) : (
               <div className="flex flex-col gap-6">
                 {messages.map((msg) => (
-                  <MessageBubble key={msg.id} msg={msg} />
+                  <MessageBubble
+                    key={msg.id}
+                    msg={msg}
+                    isEditing={editingMsgId === msg.id}
+                    editContent={editingMsgContent}
+                    onEditStart={
+                      msg.role === "user"
+                        ? () => {
+                            setEditingMsgId(msg.id);
+                            setEditingMsgContent(msg.content);
+                          }
+                        : undefined
+                    }
+                    onEditChange={setEditingMsgContent}
+                    onEditSave={handleEditMsgSave}
+                    onEditCancel={() => setEditingMsgId(null)}
+                  />
                 ))}
                 {sending && (
                   <div className="flex gap-3 max-w-3xl">

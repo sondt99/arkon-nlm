@@ -909,6 +909,43 @@ def get_embedding_model_for_dim(dimension: int) -> type:
         ) from e
 
 
+# ---------------------------------------------------------------------------
+# Chat — RAG-based knowledge assistant
+# ---------------------------------------------------------------------------
+
+class ChatConversation(Base):
+    __tablename__ = "chat_conversations"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    employee_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("employees.id", ondelete="CASCADE"), nullable=False
+    )
+    title: Mapped[str] = mapped_column(String(500), nullable=False, default="New conversation")
+    scope_type: Mapped[str] = mapped_column(String(20), nullable=False, default="global")
+    scope_id: Mapped[Optional[uuid.UUID]] = mapped_column(UUID(as_uuid=True), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
+    )
+
+    __table_args__ = (Index("ix_chat_conversations_employee_id", "employee_id"),)
+
+
+class ChatMessage(Base):
+    __tablename__ = "chat_messages"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    conversation_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("chat_conversations.id", ondelete="CASCADE"), nullable=False
+    )
+    role: Mapped[str] = mapped_column(String(20), nullable=False)
+    content: Mapped[str] = mapped_column(Text, nullable=False)
+    sources: Mapped[Optional[list]] = mapped_column(JSONB, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+    __table_args__ = (Index("ix_chat_messages_conversation_id", "conversation_id"),)
+
+
 class EmbeddingJob(Base):
     """Tracks a background re-embed job triggered when admin switches model."""
 

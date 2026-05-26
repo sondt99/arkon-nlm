@@ -120,6 +120,7 @@ from app.routers import (  # noqa: E402
     admin_settings,
     audit,
     auth,
+    chat,
     knowledge_types,
     notebooklm,
     notes,
@@ -150,6 +151,7 @@ app.include_router(audit.router, prefix="/api", tags=["audit"])
 app.include_router(skills.router, prefix="/api", tags=["skills"])
 app.include_router(skill_contributions.router, prefix="/api", tags=["skill-contributions"])
 app.include_router(notebooklm.router, prefix="/api", tags=["notebooklm"])
+app.include_router(chat.router, prefix="/api", tags=["chat"])
 
 
 @app.get("/")

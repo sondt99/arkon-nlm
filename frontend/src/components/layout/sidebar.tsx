@@ -48,6 +48,7 @@ const navSections: NavSection[] = [
     items: [
       { label: "Documents", href: "/knowledge", icon: "description", requiredPermissions: ["doc:read:own_dept", "doc:read:all"] },
       { label: "Wiki", href: "/wiki", icon: "auto_stories", requiredPermissions: ["wiki:read:own_dept", "wiki:read:all"] },
+      { label: "AI Chat", href: "/chat", icon: "smart_toy" },
       { label: "AI Skills", href: "/skills", icon: "bolt", requiredPermissions: ["skill:read:own_dept", "skill:read:all"] },
       { label: "NotebookLM", href: "/notebooklm", icon: "book_2" },
     ],

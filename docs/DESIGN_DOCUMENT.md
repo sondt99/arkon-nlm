@@ -33,6 +33,7 @@ Arkon là nền tảng **knowledge base (KB) doanh nghiệp được hỗ trợ 
 | **Skill System** | Quản lý gói kỹ năng AI (ZIP packages) với workflow đóng góp và phê duyệt |
 | **RBAC** | Phân quyền hai tầng: global scope + workspace membership |
 | **NotebookLM Integration** | Gửi tài liệu sang Google NotebookLM, nhận artifact ngược lại |
+| **RAG Chatbot** | Chatbot hỏi đáp dựa trên wiki KB — RAG search + LLM generation, có lịch sử hội thoại |
 | **MCP Server** | Cho phép Claude Desktop/Claude Code truy vấn KB qua 16 tools |
 
 ### 1.3 Người dùng hệ thống
@@ -315,6 +316,27 @@ wiki_page_embeddings_{768|1024|1536|3072}
   ├── model_spec_id VARCHAR  (PK component)
   ├── content_hash  VARCHAR  SHA256 của content
   └── embedding     VECTOR(N)
+```
+
+### 3.7 Nhóm Chat (RAG Chatbot)
+
+```
+chat_conversations
+  ├── id          UUID PK
+  ├── employee_id UUID FK → employees
+  ├── title       VARCHAR(500)
+  ├── scope_type  VARCHAR(20)   "global" | "project"
+  ├── scope_id    UUID nullable → workspace
+  ├── created_at  TIMESTAMPTZ
+  └── updated_at  TIMESTAMPTZ
+
+chat_messages
+  ├── id              UUID PK
+  ├── conversation_id UUID FK → chat_conversations (CASCADE)
+  ├── role            VARCHAR(20)  "user" | "assistant"
+  ├── content         TEXT
+  ├── sources         JSON nullable  [{slug, title}]
+  └── created_at      TIMESTAMPTZ
 ```
 
 ---
@@ -925,6 +947,71 @@ wiki_page_embeddings_{768|1024|1536|3072}
     "decision": "allow"
   }],
   "total": 1500
+}
+```
+
+---
+
+### 4.10 Chat (RAG Chatbot) — `/api/chat`
+
+Chatbot dựa trên RAG (Retrieval-Augmented Generation) — trả lời câu hỏi dựa trên nội dung wiki. Mỗi người dùng có danh sách conversations riêng.
+
+---
+
+#### `GET /api/chat/conversations`
+**Auth:** Any authenticated user  
+**Response:** `[{id, title, scope_type, scope_id, created_at, updated_at}]`
+
+---
+
+#### `POST /api/chat/conversations`
+**Auth:** Any authenticated user  
+**Body:**
+```json
+{
+  "title": "New conversation",
+  "scope_type": "global",
+  "scope_id": null
+}
+```
+**Response:** `ConversationOut`
+
+---
+
+#### `PATCH /api/chat/conversations/{id}`
+**Auth:** Owner  
+**Body:** `{"title": "Renamed title"}`  
+**Response:** `ConversationOut`
+
+---
+
+#### `DELETE /api/chat/conversations/{id}`
+**Auth:** Owner  
+**Response:** 204
+
+---
+
+#### `GET /api/chat/conversations/{id}/messages`
+**Auth:** Owner  
+**Response:** `[{id, role, content, sources, created_at}]` (chronological)
+
+---
+
+#### `POST /api/chat/conversations/{id}/messages`
+**Auth:** Owner  
+**Body:** `{"content": "What is XYZ?"}`  
+**Flow:**
+1. Embed question → pgvector search (top-5 wiki pages within scope)
+2. 1-hop wiki_links expansion from top-3 results
+3. Build system prompt with wiki context blocks
+4. Inject last 6 messages as conversation history
+5. LLM.generate() → answer
+6. Save user + assistant messages with sources JSON
+**Response:**
+```json
+{
+  "user_message": {id, role: "user", content, sources: null, created_at},
+  "assistant_message": {id, role: "assistant", content, sources: [{slug, title}], created_at}
 }
 ```
 

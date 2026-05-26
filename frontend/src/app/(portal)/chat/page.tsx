@@ -445,10 +445,10 @@ export default function ChatPage() {
             </span>
             <div className="flex flex-col min-w-0 flex-1">
               <span className="text-sm font-semibold truncate">
-                {activeConv ? activeConv.title : "Arkon Knowledge Assistant"}
+                {activeConv ? activeConv.title : "Victor"}
               </span>
               <span className="text-xs text-muted-foreground">
-                Ask anything about the knowledge base
+                Ask Victor anything about the knowledge base
               </span>
             </div>
             {/* Add to Wiki button — only when a conversation with messages exists */}
@@ -472,9 +472,9 @@ export default function ChatPage() {
                   <span className="material-symbols-outlined text-primary text-3xl">smart_toy</span>
                 </div>
                 <div>
-                  <h2 className="text-lg font-semibold">Ask Arkon anything</h2>
+                  <h2 className="text-lg font-semibold">Ask Victor anything</h2>
                   <p className="text-sm text-muted-foreground mt-1 max-w-md">
-                    I answer questions using your organization&apos;s knowledge base wiki.
+                    Victor answers questions using your organization&apos;s knowledge base wiki.
                     Start a new conversation or select an existing one.
                   </p>
                 </div>
@@ -566,7 +566,7 @@ export default function ChatPage() {
               </button>
             </div>
             <p className="text-[11px] text-muted-foreground/50 mt-2 text-center">
-              Answers are grounded in your organization&apos;s wiki. Always verify important information.
+              Victor&apos;s answers are grounded in your organization&apos;s wiki. Always verify important information.
             </p>
           </div>
         </div>

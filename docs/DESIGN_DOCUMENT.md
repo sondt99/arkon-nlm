@@ -1682,6 +1682,30 @@ Auth: Authorization: Bearer <mcp_token>
 
 ---
 
+### v1.2.1 — 2026-05-26
+
+#### Cải tiến Victor (RAG Chatbot)
+
+**Đổi tên & nhân cách**
+- Chatbot đổi tên từ "Arkon Knowledge Assistant" thành **Victor**
+- Cập nhật toàn bộ UI: sidebar nav, header, empty state, footer disclaimer
+- `chat_service.py` — system prompt mới định nghĩa nhân cách Victor:
+  - Thông minh, ham học hỏi, nhiệt tình chia sẻ kiến thức
+  - Luôn trả lời chi tiết đến từng tiểu tiết: sub-detail, nuance, edge case, implication
+  - Bắt buộc dùng markdown có cấu trúc (headings, bold, lists, tables, code blocks)
+  - Tone ấm áp, như đồng nghiệp giỏi giải thích, không khô khan
+  - `temperature` tăng từ `0.3` → `0.5` để câu trả lời sinh động hơn
+  - Context window mỗi wiki page tăng từ `2000` → `3000` chars
+
+**Inline conversation title editing**
+- Double-click vào tên conversation trong sidebar → vào chế độ edit inline
+- Hover → hiện icon ✏️ (rename) và 🗑️ (delete) cạnh nhau
+- Input: Enter để lưu, Escape để hủy, blur tự lưu
+- Optimistic update — đổi title ngay trên UI, rollback tự động nếu API lỗi
+- Gọi `PATCH /api/chat/conversations/{id}` (endpoint đã có sẵn)
+
+---
+
 ### v1.1 — (trước 2026-05-26)
 
 Phiên bản ban đầu gồm: Ingestion Pipeline (MRP), Wiki System, Skill System, RBAC, NotebookLM Integration, MCP Server.

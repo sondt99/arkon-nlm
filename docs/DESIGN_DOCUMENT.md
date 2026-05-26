@@ -1796,6 +1796,24 @@ Auth: Authorization: Bearer <mcp_token>
 
 ---
 
+### v1.2.6 — 2026-05-26
+
+#### Fix: Add to Wiki bảo toàn code và giải thích chi tiết
+
+**Vấn đề**: LLM tóm tắt quá đà khi chuyển conversation sang wiki — mã nguồn và các giải thích kỹ thuật dài bị rút gọn hoặc mất hoàn toàn.
+
+**Nguyên nhân**: prompt cũ dùng từ `"concise"` và `"Extract facts and actionable insights"`, ra lệnh cho LLM ưu tiên súc tích thay vì trung thành với nội dung gốc.
+
+**Fix** (`app/routers/chat.py` — synthesis prompt):
+- Đổi mục tiêu từ *tóm tắt* sang *tái cấu trúc*: LLM chỉ được thay đổi framing (bỏ label Q/A, thêm headings), không được lược bỏ nội dung
+- Hard rule: toàn bộ code blocks phải được copy nguyên văn với đúng language tag
+- Hard rule: giải thích kỹ thuật nhiều đoạn không được rút thành một câu
+- Hard rule: numbered steps, lists, examples phải giữ nguyên
+- System prompt: *"When in doubt, include more — never less"*
+- Temperature hạ `0.3` → `0.2` để output trung thành hơn với bản gốc
+
+---
+
 ### v1.1 — (trước 2026-05-26)
 
 Phiên bản ban đầu gồm: Ingestion Pipeline (MRP), Wiki System, Skill System, RBAC, NotebookLM Integration, MCP Server.

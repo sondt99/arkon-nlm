@@ -193,9 +193,12 @@ export default function ChatPage() {
   const [sending, setSending] = React.useState(false);
   const [input, setInput] = React.useState("");
   const [deletingId, setDeletingId] = React.useState<string | null>(null);
+  const [editingConvId, setEditingConvId] = React.useState<string | null>(null);
+  const [editingTitle, setEditingTitle] = React.useState("");
   const [wikiDialogOpen, setWikiDialogOpen] = React.useState(false);
   const bottomRef = React.useRef<HTMLDivElement>(null);
   const textareaRef = React.useRef<HTMLTextAreaElement>(null);
+  const editInputRef = React.useRef<HTMLInputElement>(null);
 
   const loadConversations = React.useCallback(() => {
     api<Conversation[]>("/api/chat/conversations")
@@ -253,6 +256,34 @@ export default function ChatPage() {
     } catch {}
     setDeletingId(null);
   };
+
+  const handleStartEdit = (conv: Conversation) => {
+    setDeletingId(null);
+    setEditingConvId(conv.id);
+    setEditingTitle(conv.title);
+  };
+
+  const handleSaveTitle = async (id: string) => {
+    const title = editingTitle.trim();
+    setEditingConvId(null);
+    if (!title) return;
+    setConversations((prev) => prev.map((c) => (c.id === id ? { ...c, title } : c)));
+    try {
+      await api(`/api/chat/conversations/${id}`, { method: "PATCH", body: { title } });
+    } catch {
+      loadConversations(); // revert on error
+    }
+  };
+
+  // Auto-focus edit input when entering edit mode
+  React.useEffect(() => {
+    if (editingConvId) {
+      requestAnimationFrame(() => {
+        editInputRef.current?.focus();
+        editInputRef.current?.select();
+      });
+    }
+  }, [editingConvId]);
 
   // Dismiss delete arm on outside click
   React.useEffect(() => {
@@ -389,6 +420,7 @@ export default function ChatPage() {
                 {conversations.map((conv) => {
                   const isActive = conv.id === activeConvId;
                   const isArmed = deletingId === conv.id;
+                  const isEditing = editingConvId === conv.id;
                   return (
                     <div
                       key={conv.id}
@@ -398,35 +430,62 @@ export default function ChatPage() {
                         isActive ? "bg-primary/10" : "hover:bg-accent/50"
                       )}
                     >
-                      <button
-                        onClick={() => setActiveConvId(conv.id)}
-                        className={cn(
-                          "flex-1 flex items-center gap-2 px-2 py-2 text-xs min-w-0 text-left",
-                          isActive ? "text-primary font-medium" : "text-muted-foreground hover:text-foreground"
-                        )}
-                      >
-                        <span
-                          className="material-symbols-outlined shrink-0"
-                          style={{ fontSize: 14 }}
-                        >
-                          {isActive ? "chat_bubble" : "chat_bubble_outline"}
-                        </span>
-                        <span className="truncate">{conv.title}</span>
-                      </button>
-                      {isArmed ? (
-                        <button
-                          onClick={(e) => { e.stopPropagation(); handleDelete(conv.id); }}
-                          className="shrink-0 mr-1 px-1.5 py-0.5 rounded text-[10px] font-semibold bg-destructive text-destructive-foreground hover:bg-destructive/90 animate-pulse"
-                        >
-                          Confirm
-                        </button>
+                      {isEditing ? (
+                        /* ── Inline title editor ── */
+                        <input
+                          ref={editInputRef}
+                          value={editingTitle}
+                          onChange={(e) => setEditingTitle(e.target.value)}
+                          onKeyDown={(e) => {
+                            if (e.key === "Enter") { e.preventDefault(); handleSaveTitle(conv.id); }
+                            if (e.key === "Escape") setEditingConvId(null);
+                          }}
+                          onBlur={() => handleSaveTitle(conv.id)}
+                          maxLength={500}
+                          className="flex-1 mx-2 my-1 px-2 py-1 text-xs bg-background border border-primary/50 rounded-md outline-none text-foreground min-w-0"
+                        />
                       ) : (
                         <button
-                          onClick={(e) => { e.preventDefault(); e.stopPropagation(); handleDelete(conv.id); }}
-                          className="shrink-0 mr-1 opacity-0 group-hover:opacity-100 text-muted-foreground hover:text-destructive transition-all"
+                          onClick={() => setActiveConvId(conv.id)}
+                          onDoubleClick={() => handleStartEdit(conv)}
+                          className={cn(
+                            "flex-1 flex items-center gap-2 px-2 py-2 text-xs min-w-0 text-left",
+                            isActive ? "text-primary font-medium" : "text-muted-foreground hover:text-foreground"
+                          )}
                         >
-                          <span className="material-symbols-outlined" style={{ fontSize: 14 }}>delete</span>
+                          <span className="material-symbols-outlined shrink-0" style={{ fontSize: 14 }}>
+                            {isActive ? "chat_bubble" : "chat_bubble_outline"}
+                          </span>
+                          <span className="truncate">{conv.title}</span>
                         </button>
+                      )}
+
+                      {!isEditing && (
+                        isArmed ? (
+                          <button
+                            onClick={(e) => { e.stopPropagation(); handleDelete(conv.id); }}
+                            className="shrink-0 mr-1 px-1.5 py-0.5 rounded text-[10px] font-semibold bg-destructive text-destructive-foreground hover:bg-destructive/90 animate-pulse"
+                          >
+                            Confirm
+                          </button>
+                        ) : (
+                          <div className="shrink-0 flex items-center mr-1 opacity-0 group-hover:opacity-100 transition-all">
+                            <button
+                              onClick={(e) => { e.preventDefault(); e.stopPropagation(); handleStartEdit(conv); }}
+                              className="text-muted-foreground hover:text-foreground transition-colors"
+                              title="Rename"
+                            >
+                              <span className="material-symbols-outlined" style={{ fontSize: 14 }}>edit</span>
+                            </button>
+                            <button
+                              onClick={(e) => { e.preventDefault(); e.stopPropagation(); handleDelete(conv.id); }}
+                              className="text-muted-foreground hover:text-destructive transition-colors"
+                              title="Delete"
+                            >
+                              <span className="material-symbols-outlined" style={{ fontSize: 14 }}>delete</span>
+                            </button>
+                          </div>
+                        )
                       )}
                     </div>
                   );

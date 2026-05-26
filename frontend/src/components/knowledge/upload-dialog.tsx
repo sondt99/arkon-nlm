@@ -39,18 +39,24 @@ const ACCEPTED_MIMES = [
   "text/plain", "text/csv", "text/markdown",
   "application/vnd.openxmlformats-officedocument.presentationml.presentation",
 ];
-const ACCEPT_STRING = ACCEPTED_EXTENSIONS.map((e) => `.${e}`).join(",");
+const ACCEPT_STRING = [...ACCEPTED_EXTENSIONS.map((e) => `.${e}`), ".zip"].join(",");
 
 type FileStatus = "pending" | "uploading" | "done" | "error";
-type FileEntry  = { id: string; file: File; status: FileStatus; error?: string };
+type ZipResult  = { created: number; skipped: string[] };
+type FileEntry  = { id: string; file: File; status: FileStatus; error?: string; zipResult?: ZipResult };
 
-function ext(name: string)              { return (name.split(".").pop() || "").toLowerCase(); }
-function fmtSize(b: number)            {
+function ext(name: string) { return (name.split(".").pop() || "").toLowerCase(); }
+function isZip(f: File)    { return ext(f.name) === "zip"; }
+function fmtSize(b: number) {
   if (b < 1024) return `${b} B`;
   if (b < 1048576) return `${(b / 1024).toFixed(1)} KB`;
   return `${(b / 1048576).toFixed(1)} MB`;
 }
 function validateFile(f: File): string | null {
+  if (isZip(f)) {
+    if (f.size > 100 * 1024 * 1024) return "Zip exceeds 100 MB";
+    return null;
+  }
   if (!ACCEPTED_EXTENSIONS.includes(ext(f.name)) && !ACCEPTED_MIMES.includes(f.type))
     return `Unsupported type ".${ext(f.name)}"`;
   if (f.size > 50 * 1024 * 1024) return "Exceeds 50 MB";
@@ -129,8 +135,16 @@ export function UploadDialog({ open, onOpenChange, types, departments, onUploade
         if (selectedDepts.length) fd.append("department_ids", selectedDepts.join(","));
         fd.append("scope_type", scopeType);
         if (scopeType !== "global" && scopeId) fd.append("scope_id", scopeId);
-        await apiUpload("/api/sources/upload", fd);
-        setEntries((p) => p.map((e) => e.id === entry.id ? { ...e, status: "done" } : e));
+
+        if (isZip(entry.file)) {
+          const res = await apiUpload<ZipResult>("/api/sources/upload-zip", fd);
+          setEntries((p) => p.map((e) =>
+            e.id === entry.id ? { ...e, status: "done", zipResult: res } : e
+          ));
+        } else {
+          await apiUpload("/api/sources/upload", fd);
+          setEntries((p) => p.map((e) => e.id === entry.id ? { ...e, status: "done" } : e));
+        }
       } catch (err) {
         anyError = true;
         const msg = err instanceof Error ? err.message : "Upload failed";
@@ -214,7 +228,10 @@ export function UploadDialog({ open, onOpenChange, types, departments, onUploade
                   {dragOver ? "Drop files here" : "Drag & drop or click to browse"}
                 </p>
                 <p className="text-xs text-muted-foreground mt-0.5">
-                  PDF, DOCX, XLSX, CSV, TXT, MD, PPTX · Max 50 MB per file
+                  PDF, DOCX, XLSX, CSV, TXT, MD, PPTX · Max 50 MB
+                </p>
+                <p className="text-xs text-muted-foreground/70 mt-0.5">
+                  Or upload a <span className="font-medium text-amber-600 dark:text-amber-400">ZIP archive</span> containing multiple files · Max 100 MB
                 </p>
               </div>
             )}
@@ -234,16 +251,33 @@ export function UploadDialog({ open, onOpenChange, types, departments, onUploade
               <div className="overflow-y-auto" style={{ maxHeight: "11rem" }}>
                 {entries.map((entry) => {
                   const { icon, cls } = STATUS_ICON[entry.status];
+                  const zip = isZip(entry.file);
+                  const zipDone = zip && entry.status === "done" && entry.zipResult;
                   return (
                     <div key={entry.id} className="flex items-center gap-2 px-3 py-2 border-b border-border/50 last:border-0">
-                      <span className={cn("material-symbols-outlined shrink-0", cls)} style={{ fontSize: 15 }}>
-                        {icon}
+                      <span
+                        className={cn("material-symbols-outlined shrink-0", zip && entry.status === "pending" ? "text-amber-500" : cls)}
+                        style={{ fontSize: 15 }}
+                      >
+                        {zip && entry.status === "pending" ? "folder_zip" : icon}
                       </span>
                       <div className="flex-1 min-w-0">
                         <p className="text-[13px] truncate leading-snug">{entry.file.name}</p>
                         <p className={cn("text-[11px] truncate leading-tight", entry.error ? "text-destructive" : "text-muted-foreground")}>
-                          {entry.error ?? `${fmtSize(entry.file.size)} · ${ext(entry.file.name).toUpperCase()}`}
+                          {entry.error
+                            ? entry.error
+                            : zipDone
+                              ? `${entry.zipResult!.created} file${entry.zipResult!.created !== 1 ? "s" : ""} extracted${entry.zipResult!.skipped.length ? ` · ${entry.zipResult!.skipped.length} skipped` : ""}`
+                              : zip
+                                ? `${fmtSize(entry.file.size)} · ZIP archive`
+                                : `${fmtSize(entry.file.size)} · ${ext(entry.file.name).toUpperCase()}`}
                         </p>
+                        {zipDone && entry.zipResult!.skipped.length > 0 && (
+                          <p className="text-[10px] text-amber-600 dark:text-amber-400 truncate leading-tight mt-0.5">
+                            Skipped: {entry.zipResult!.skipped.slice(0, 3).join(", ")}
+                            {entry.zipResult!.skipped.length > 3 && ` +${entry.zipResult!.skipped.length - 3} more`}
+                          </p>
+                        )}
                       </div>
                       {!uploading && entry.status !== "done" && (
                         <button type="button" onClick={() => removeEntry(entry.id)}

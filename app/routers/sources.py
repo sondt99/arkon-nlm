@@ -416,6 +416,124 @@ async def upload_source(
     return _to_response(source)
 
 
+@router.post("/sources/upload-zip", status_code=201)
+async def upload_zip_archive(
+    file: UploadFile = File(...),
+    knowledge_type_id: Optional[str] = Form(None),
+    department_ids: Optional[str] = Form(None),
+    scope_type: Optional[str] = Form(None),
+    scope_id: Optional[str] = Form(None),
+    db: AsyncSession = Depends(get_db),
+    user: Employee = require_permission("doc:create"),
+) -> dict:
+    """
+    Upload a .zip archive; the server extracts it in memory and enqueues each
+    valid file for ingestion.
+
+    Security: ZipSlip-safe (basename-only extraction), zip-bomb protection
+    (declared + actual size checks), entry-count cap, extension allowlist.
+    Unsupported or oversized entries are skipped and reported in the response.
+    """
+    from app.services.kb_service import _guess_content_type
+    from app.services.storage_service import storage_service
+    from app.services.zip_service import ZipExtractionError, extract_zip
+
+    file_name = (file.filename or "archive.zip").lower()
+    if not file_name.endswith(".zip"):
+        raise HTTPException(status_code=400, detail="Only .zip files are accepted by this endpoint.")
+
+    zip_data = await file.read()
+
+    try:
+        result = extract_zip(zip_data)
+    except ZipExtractionError as exc:
+        raise HTTPException(status_code=422, detail=str(exc))
+
+    if not result.files:
+        detail = "No supported files found in the archive."
+        if result.skipped:
+            detail += f" Skipped: {', '.join(result.skipped[:5])}"
+            if len(result.skipped) > 5:
+                detail += f" … and {len(result.skipped) - 5} more"
+        raise HTTPException(status_code=422, detail=detail)
+
+    # Parse shared metadata params (same validation as single upload)
+    dept_uuids: list[uuid.UUID] = []
+    if department_ids:
+        for d in department_ids.split(","):
+            d = d.strip()
+            if d:
+                try:
+                    dept_uuids.append(uuid.UUID(d))
+                except ValueError:
+                    raise HTTPException(status_code=400, detail=f"Invalid department_id: {d}")
+
+    perms = _get_user_permissions(user)
+    if user.role != "admin" and "doc:create:all" not in perms:
+        for did in dept_uuids:
+            if did != user.department_id:
+                raise HTTPException(
+                    status_code=403,
+                    detail="You can only assign documents to your own department",
+                )
+
+    repo = Repository(db)
+    created_sources: list[Source] = []
+
+    for extracted in result.files:
+        source = Source(
+            title=extracted.filename,
+            source_type="file",
+            file_name=extracted.filename,
+            file_size=len(extracted.data),
+            status="pending",
+            progress=0,
+            progress_message="Queued for ingestion...",
+            knowledge_type_id=uuid.UUID(knowledge_type_id) if knowledge_type_id else None,
+            contributed_by_employee_id=user.id,
+            scope_type=scope_type or ScopeType.GLOBAL.value,
+            scope_id=uuid.UUID(scope_id) if scope_id else None,
+        )
+        source = await repo.create(source)
+        await db.flush()
+
+        for did in dept_uuids:
+            db.add(SourceDepartment(source_id=source.id, department_id=did))
+        await db.flush()
+
+        minio_key = f"sources/{source.id}/original/{extracted.filename}"
+        storage_service.upload_file(
+            object_name=minio_key,
+            data=extracted.data,
+            content_type=_guess_content_type(extracted.filename),
+        )
+        source.minio_key = minio_key
+        await db.flush()
+
+        await log_audit(db, user, "create", "source", str(source.id), reason=source.title)
+        created_sources.append(source)
+
+    await db.commit()
+
+    pool = await get_arq_pool()
+    for source in created_sources:
+        job = await pool.enqueue_job("ingest_file_task", str(source.id))
+        if job:
+            source.job_id = job.job_id
+        logger.info(
+            f"Enqueued ingestion job {job.job_id if job else 'N/A'} "
+            f"for zip-extracted source {source.id} ({source.file_name})"
+        )
+
+    await db.commit()
+
+    return {
+        "created": len(created_sources),
+        "skipped": result.skipped,
+        "source_ids": [str(s.id) for s in created_sources],
+    }
+
+
 @router.post("/sources/url", response_model=SourceResponse)
 async def add_url_source(
     req: SourceCreateURL,

@@ -1,7 +1,7 @@
 # Arkon — Tài liệu Phân tích Thiết kế Hệ thống
 
-**Phiên bản:** 1.0  
-**Ngày:** 2026-05-25  
+**Phiên bản:** 1.2  
+**Ngày:** 2026-05-26  
 
 ---
 
@@ -33,7 +33,8 @@ Arkon là nền tảng **knowledge base (KB) doanh nghiệp được hỗ trợ 
 | **Skill System** | Quản lý gói kỹ năng AI (ZIP packages) với workflow đóng góp và phê duyệt |
 | **RBAC** | Phân quyền hai tầng: global scope + workspace membership |
 | **NotebookLM Integration** | Gửi tài liệu sang Google NotebookLM, nhận artifact ngược lại |
-| **RAG Chatbot** | Chatbot hỏi đáp dựa trên wiki KB — RAG search + LLM generation, có lịch sử hội thoại |
+| **RAG Chatbot** | Chatbot hỏi đáp dựa trên wiki KB — RAG search + LLM generation, có lịch sử hội thoại; hội thoại có thể được tổng hợp thành wiki page (Add to Wiki) |
+| **Chatbot Provider** | AI provider riêng cho chatbot (tùy chọn); nếu không cấu hình sẽ dùng LLM Provider làm fallback |
 | **MCP Server** | Cho phép Claude Desktop/Claude Code truy vấn KB qua 16 tools |
 
 ### 1.3 Người dùng hệ thống
@@ -251,7 +252,7 @@ app/
 | `id` | UUID PK | |
 | `slug` | VARCHAR | Định danh duy nhất trong scope |
 | `title` | VARCHAR | |
-| `page_type` | ENUM | `entity` / `concept` / `topic` / `source` |
+| `page_type` | ENUM | `entity` / `concept` / `topic` / `source` / `synthesis` |
 | `content_md` | TEXT | Nội dung Markdown |
 | `summary` | TEXT | Tóm tắt ngắn |
 | `scope_type` | VARCHAR | `global` / `project` |
@@ -913,10 +914,29 @@ chat_messages
     "llm_model": "gpt-4o",
     "llm_api_key": "sk-...",
     "embedding_provider": "openai",
-    "embedding_model": "text-embedding-3-large"
+    "embedding_model": "text-embedding-3-large",
+    "chatbot_provider": "anthropic",
+    "chatbot_model_id": "claude-3-5-haiku-20241022",
+    "chatbot_api_key": "sk-ant-...",
+    "chatbot_base_url": null
   }
 }
 ```
+`chatbot_*` keys là tùy chọn. Nếu `chatbot_provider` không được cấu hình, chatbot sẽ fallback về LLM Provider.
+
+---
+
+#### `POST /api/settings/test-llm`
+**Auth:** Admin  
+**Mô tả:** Kiểm tra kết nối LLM Provider đang được cấu hình.  
+**Response 200:** `{ok: true, model: "gpt-4o"}`
+
+---
+
+#### `POST /api/settings/test-chatbot`
+**Auth:** Admin  
+**Mô tả:** Kiểm tra kết nối Chatbot AI Provider (hoặc fallback LLM nếu chưa cấu hình chatbot riêng).  
+**Response 200:** `{ok: true, model: "claude-3-5-haiku-20241022"}`
 
 ---
 
@@ -1014,6 +1034,38 @@ Chatbot dựa trên RAG (Retrieval-Augmented Generation) — trả lời câu h�
   "assistant_message": {id, role: "assistant", content, sources: [{slug, title}], created_at}
 }
 ```
+
+---
+
+#### `POST /api/chat/conversations/{id}/to-wiki`
+**Auth:** Owner  
+**Mô tả:** Tổng hợp toàn bộ hội thoại thành một wiki page mới (page_type `synthesis`) bằng LLM.  
+**Body:**
+```json
+{
+  "title": "SQL Injection Prevention Techniques",
+  "page_type": "synthesis",
+  "scope_type": "global"
+}
+```
+`page_type` có thể là `synthesis` / `topic` / `concept` / `entity` / `source`. Mặc định nên dùng `synthesis`.
+
+**Flow:**
+1. Load toàn bộ messages của conversation
+2. Xây dựng transcript Q&A
+3. LLM tổng hợp thành văn xuôi bách khoa (encyclopedic prose) bằng prompt chuyên biệt
+4. Tạo slug từ title + 6-char uuid suffix
+5. `wiki_service.apply_create()` → lưu WikiPage vào DB
+6. `upsert_page_embedding()` nếu embedding model đã cấu hình (non-fatal nếu lỗi)
+
+**Response 200:**
+```json
+{
+  "slug": "sql-injection-prevention-techniques-a1b2c3",
+  "title": "SQL Injection Prevention Techniques"
+}
+```
+**Lỗi:** `400` — không có messages; `422` — page_type không hợp lệ; `504` — LLM timeout (120s)
 
 ---
 
@@ -1320,6 +1372,74 @@ Chatbot dựa trên RAG (Retrieval-Augmented Generation) — trả lời câu h�
 5. Nếu cần khôi phục: click "Rollback to this version"
 6. `POST /api/wiki/pages/{slug}/revisions/{version}/rollback` (Auth: Admin)
 7. Wiki page được khôi phục, revision mới được tạo với `change_type=rollback`
+
+---
+
+### UC-13: Hỏi đáp với RAG Chatbot
+
+**Actor:** Nhân viên (mọi vai trò)  
+**Mục tiêu:** Hỏi câu hỏi và nhận câu trả lời dựa trên nội dung wiki knowledge base
+
+**Tiền điều kiện:**
+- Người dùng đã đăng nhập
+- LLM Provider (hoặc Chatbot Provider) đã được cấu hình
+- Có ít nhất một wiki page đã được embedding
+
+**Luồng chính:**
+1. Người dùng truy cập `/chat`
+2. Click "New Conversation" → `POST /api/chat/conversations`
+3. Gõ câu hỏi vào input, nhấn Send → `POST /api/chat/conversations/{id}/messages`
+4. Hệ thống:
+   a. Embed câu hỏi bằng embedding model
+   b. Tìm kiếm pgvector top-5 wiki pages trong scope (cosine similarity)
+   c. Mở rộng 1-hop qua wiki_links để bổ sung ngữ cảnh
+   d. Xây dựng system prompt với các đoạn wiki (tối đa 2000 chars/page)
+   e. Inject 6 messages gần nhất làm conversation history
+   f. Gọi LLM.generate() → câu trả lời
+   g. Lưu cả user message và assistant message (với sources JSON)
+5. Frontend hiển thị câu trả lời với danh sách wiki sources có thể click
+6. Người dùng có thể hỏi tiếp; lịch sử hội thoại được giữ nguyên
+
+**Luồng thay thế:**
+- *4b.* Không tìm thấy wiki page liên quan → LLM vẫn trả lời nhưng thông báo thiếu ngữ cảnh
+- *4f.* LLM timeout (>120s) → 504 error, message không được lưu
+
+**Hậu điều kiện:** Conversation mới có ít nhất 2 messages (user + assistant)
+
+---
+
+### UC-14: Add Conversation to Wiki
+
+**Actor:** Nhân viên (mọi vai trò)  
+**Mục tiêu:** Chuyển đổi hội thoại chatbot có giá trị thành wiki page để lưu trữ và chia sẻ kiến thức
+
+**Tiền điều kiện:**
+- Hội thoại có ít nhất 1 cặp Q&A (user + assistant message)
+- LLM Provider đã được cấu hình
+
+**Luồng chính:**
+1. Trong màn hình chat, click nút "Add to Wiki" ở header
+2. Dialog hiện ra với:
+   - Trường tiêu đề (pre-filled từ tên conversation)
+   - Chọn page type: `synthesis` (khuyến nghị) / `topic` / `concept` / `entity` / `source`
+3. Người dùng xác nhận, click "Create Wiki Page"
+4. Frontend gọi `POST /api/chat/conversations/{id}/to-wiki` (timeout 120s)
+5. Backend:
+   a. Tải toàn bộ messages, xây dựng transcript
+   b. LLM tổng hợp thành văn xuôi bách khoa có cấu trúc
+   c. Tạo slug duy nhất (title + uuid suffix)
+   d. Lưu WikiPage với `page_type=synthesis`
+   e. Tạo embedding cho page mới (non-fatal)
+6. Dialog chuyển sang success state với nút "View Wiki Page"
+7. Người dùng click để mở wiki page vừa tạo trong tab mới
+
+**Luồng thay thế:**
+- *4a.* LLM timeout hoặc lỗi → hiển thị error message trong dialog, có thể thử lại
+- *5c.* Slug bị trùng (hiếm) → tự động thêm suffix ngẫu nhiên mới
+
+**Hậu điều kiện:**
+- Wiki page mới có `page_type=synthesis` được tạo với nội dung được AI tổng hợp
+- Page xuất hiện trong wiki tree ở nhóm "Syntheses"
 
 ---
 

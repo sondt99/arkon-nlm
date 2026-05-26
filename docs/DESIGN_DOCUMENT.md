@@ -1640,3 +1640,48 @@ Auth: Authorization: Bearer <mcp_token>
 **Cron jobs:**
 - `notebooklm_refresh_session_cron` — mỗi 30 phút: làm mới NLM auth cookies
 - `cleanup_temp_uploads_cron` — mỗi giờ: dọn staging uploads cũ
+
+---
+
+## Nhật ký phiên bản
+
+### v1.2 — 2026-05-26
+
+#### Tính năng mới
+
+**RAG Chatbot (`/chat`)**
+- Thêm 2 bảng DB: `chat_conversations`, `chat_messages` (migration 022)
+- Service `chat_service.py`: `rag_search()` embed câu hỏi → pgvector top-5 → 1-hop wiki_links expansion; `generate_reply()` inject 6 messages history → LLM
+- Router `routers/chat.py` với 7 endpoints: CRUD conversations, list/send messages, synthesize to wiki
+- Frontend `/chat`: sidebar conversations (2-stage delete), message thread với optimistic render, "Add to Wiki" button
+
+**Add to Wiki (chatbot → wiki page)**
+- `POST /api/chat/conversations/{id}/to-wiki`: LLM tổng hợp transcript → WikiPage `page_type=synthesis`
+- Slug generation: `title[:80] + '-' + uuid4().hex[:6]` để đảm bảo uniqueness
+- Embedding tự động sau khi tạo page (non-fatal)
+- Dialog `add-to-wiki-dialog.tsx`: chọn title + page type, success state với link trực tiếp
+
+**Chatbot Provider (Settings)**
+- 9 config keys mới: `chatbot_provider`, `chatbot_model_id`, `chatbot_api_key`, `chatbot_api_key__{provider}`, `chatbot_base_url`
+- `ProviderRegistry.get_chatbot_llm()`: try chatbot config → fallback về `get_llm()`
+- Endpoint `POST /api/settings/test-chatbot`
+- Frontend: section "Chatbot Provider" trong Settings với fallback notice, "LLM fallback" none-option
+
+#### Thay đổi mô hình dữ liệu
+- `wiki_pages.page_type` ENUM mở rộng: thêm `synthesis`
+- `wiki_service.PAGE_TYPES` cập nhật bao gồm `"synthesis"`
+
+#### Thay đổi frontend
+- `wiki-type-badge.tsx`: thêm config `synthesis` (icon `chat_bubble`, màu xanh `#2a7ec2`)
+- `wiki-page-tree.tsx`: thêm `"synthesis"` vào `GROUP_ORDER`, hiển thị nhóm "Syntheses"
+- `sidebar.tsx`: thêm mục "AI Chat" (`/chat`, icon `smart_toy`) vào nav
+- `provider-config-card.tsx`: hỗ trợ `capability="chatbot"`, `fallbackNote` prop, grid 6 cột với none-option
+- `settings/page.tsx`: thêm Chatbot Provider card
+- `types/wiki.ts`: `WikiPageType` bao gồm `"synthesis"`
+- `chat/page.tsx`: thay thế markdown renderer thủ công bằng `react-markdown` + `remark-gfm` — hỗ trợ đầy đủ headings, lists, code blocks, tables, blockquotes, links
+
+---
+
+### v1.1 — (trước 2026-05-26)
+
+Phiên bản ban đầu gồm: Ingestion Pipeline (MRP), Wiki System, Skill System, RBAC, NotebookLM Integration, MCP Server.

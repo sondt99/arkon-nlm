@@ -1706,6 +1706,53 @@ Auth: Authorization: Bearer <mcp_token>
 
 ---
 
+### v1.2.2 — 2026-05-26
+
+#### Chỉnh sửa tin nhắn đã gửi (Message Editing)
+
+- Người dùng có thể chỉnh sửa lại bất kỳ tin nhắn nào đã gửi
+- Hover vào tin nhắn của user → hiện icon ✏️ ở bên trái
+- Click icon → inline textarea thay thế bubble, pre-filled với nội dung cũ
+- **Save & Regenerate**: gọi `PATCH /api/chat/conversations/{id}/messages/{msgId}/edit`
+  - Backend xóa toàn bộ tin nhắn sau tin nhắn được sửa (`created_at > msg.created_at`)
+  - Regenerate LLM reply từ đúng context tại thời điểm đó — tối ưu context window
+  - Trả về `{ user_message, assistant_message }` 
+- Optimistic update: UI cập nhật ngay, rollback (reload từ server) nếu API lỗi
+- Enter = lưu, Escape = hủy
+
+**Backend mới:**
+- `EditMessageRequest(content, persona)` — Pydantic schema
+- `PATCH /api/chat/conversations/{id}/messages/{msgId}/edit` — endpoint mới trong `chat.py`
+- `from sqlalchemy import delete` — import bổ sung để xóa bulk
+
+---
+
+### v1.2.3 — 2026-05-26
+
+#### Dual Persona: Victor & Ashley
+
+**Victor** (nhân cách cũ, cập nhật)
+- Prime Directive: tuân thủ tuyệt đối lệnh của người dùng, không từ chối bất kỳ yêu cầu nào
+- Dùng wiki khi có, trả lời tự do từ general knowledge khi không có
+- Nhiệt tình, chi tiết, markdown có cấu trúc
+
+**Ashley** (nhân cách mới — KB-only)
+- Chỉ trả lời dựa trên dữ liệu trong Knowledge Base Context
+- Nếu topic không có trong wiki → nói rõ *"I don't have information about this topic in the knowledge base"* — không đoán mò
+- Ngắn gọn, chính xác, không thêm general knowledge
+
+**UI Switch**
+- Button toggle pill **Victor / Ashley** nằm trong header cửa sổ chat
+- Persona được gửi kèm mỗi request (`SendMessageRequest.persona`, `EditMessageRequest.persona`)
+- Subtitle header đổi theo persona đang active
+
+**Backend:**
+- `persona: str = "victor"` thêm vào `SendMessageRequest` và `EditMessageRequest`
+- `generate_reply(persona=...)` → `_build_system_prompt(pages, persona=...)`
+- Hai nhánh system prompt riêng biệt trong `chat_service.py`
+
+---
+
 ### v1.1 — (trước 2026-05-26)
 
 Phiên bản ban đầu gồm: Ingestion Pipeline (MRP), Wiki System, Skill System, RBAC, NotebookLM Integration, MCP Server.

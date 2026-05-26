@@ -268,6 +268,7 @@ export default function ChatPage() {
   const [loadingMsgs, setLoadingMsgs] = React.useState(false);
   const [sending, setSending] = React.useState(false);
   const [input, setInput] = React.useState("");
+  const [persona, setPersona] = React.useState<"victor" | "ashley">("victor");
   const [deletingId, setDeletingId] = React.useState<string | null>(null);
   const [editingConvId, setEditingConvId] = React.useState<string | null>(null);
   const [editingTitle, setEditingTitle] = React.useState("");
@@ -381,7 +382,7 @@ export default function ChatPage() {
     try {
       const result = await api<{ user_message: Message; assistant_message: Message }>(
         `/api/chat/conversations/${activeConvId}/messages/${msgId}/edit`,
-        { method: "PATCH", body: { content: text }, timeoutMs: 120_000 }
+        { method: "PATCH", body: { content: text, persona }, timeoutMs: 120_000 }
       );
       setMessages((prev) => [
         ...prev.slice(0, msgIndex),
@@ -445,7 +446,7 @@ export default function ChatPage() {
     try {
       const result = await api<{ user_message: Message; assistant_message: Message }>(
         `/api/chat/conversations/${convId}/messages`,
-        { method: "POST", body: { content: text }, timeoutMs: 120_000 }
+        { method: "POST", body: { content: text, persona }, timeoutMs: 120_000 }
       );
 
       setMessages((prev) => [
@@ -616,12 +617,45 @@ export default function ChatPage() {
             </span>
             <div className="flex flex-col min-w-0 flex-1">
               <span className="text-sm font-semibold truncate">
-                {activeConv ? activeConv.title : "Victor"}
+                {activeConv ? activeConv.title : (persona === "victor" ? "Victor" : "Ashley")}
               </span>
               <span className="text-xs text-muted-foreground">
-                Ask Victor anything about the knowledge base
+                {persona === "ashley"
+                  ? "Ashley answers strictly from the knowledge base"
+                  : "Ask Victor anything about the knowledge base"}
               </span>
             </div>
+
+            {/* Persona toggle */}
+            <div className="shrink-0 flex items-center rounded-lg border border-border bg-muted/30 p-0.5 text-xs gap-0.5">
+              <button
+                onClick={() => setPersona("victor")}
+                className={cn(
+                  "flex items-center gap-1 px-2.5 py-1 rounded-md transition-colors",
+                  persona === "victor"
+                    ? "bg-background shadow-sm text-foreground font-medium"
+                    : "text-muted-foreground hover:text-foreground"
+                )}
+                title="Victor — free-form, obedient assistant"
+              >
+                <span className="material-symbols-outlined" style={{ fontSize: 13, fontVariationSettings: "'FILL' 1, 'wght' 300" }}>smart_toy</span>
+                Victor
+              </button>
+              <button
+                onClick={() => setPersona("ashley")}
+                className={cn(
+                  "flex items-center gap-1 px-2.5 py-1 rounded-md transition-colors",
+                  persona === "ashley"
+                    ? "bg-background shadow-sm text-foreground font-medium"
+                    : "text-muted-foreground hover:text-foreground"
+                )}
+                title="Ashley — strict KB-only answers"
+              >
+                <span className="material-symbols-outlined" style={{ fontSize: 13, fontVariationSettings: "'FILL' 1, 'wght' 300" }}>school</span>
+                Ashley
+              </button>
+            </div>
+
             {/* Add to Wiki button — only when a conversation with messages exists */}
             {activeConvId && messages.length > 0 && (
               <button

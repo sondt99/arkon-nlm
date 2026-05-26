@@ -17,7 +17,7 @@ from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
-from sqlalchemy import select
+from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.ai.registry import ProviderRegistry
@@ -84,6 +84,12 @@ class RenameConversationRequest(BaseModel):
 
 class SendMessageRequest(BaseModel):
     content: str
+    persona: str = "victor"
+
+
+class EditMessageRequest(BaseModel):
+    content: str
+    persona: str = "victor"
 
 
 # ---------------------------------------------------------------------------
@@ -199,6 +205,7 @@ async def send_message(
             registry=registry,
             conversation=conv,
             question=body.content.strip(),
+            persona=body.persona,
         )
     except Exception as exc:
         # Save error as assistant message so the UI shows feedback
@@ -220,6 +227,83 @@ async def send_message(
 
     return {
         "user_message": MessageOut.from_orm(user_msg),
+        "assistant_message": MessageOut.from_orm(assistant_msg),
+    }
+
+
+# ---------------------------------------------------------------------------
+# Edit a user message → regenerate from that point
+# ---------------------------------------------------------------------------
+
+@router.patch("/chat/conversations/{conversation_id}/messages/{message_id}/edit", status_code=200)
+async def edit_message(
+    conversation_id: uuid.UUID,
+    message_id: uuid.UUID,
+    body: EditMessageRequest,
+    db: AsyncSession = Depends(get_db),
+    current_user: Employee = Depends(get_current_user),
+) -> dict:
+    """
+    Edit a user message and regenerate the assistant reply.
+    All messages after the edited message are deleted, then the LLM
+    generates a fresh response with the corrected context.
+    """
+    if not body.content.strip():
+        raise HTTPException(status_code=422, detail="Message content cannot be empty")
+
+    conv = await _get_owned_conversation(db, conversation_id, current_user.id)
+
+    # Load and validate the target message
+    msg_result = await db.execute(
+        select(ChatMessage).where(
+            ChatMessage.id == message_id,
+            ChatMessage.conversation_id == conversation_id,
+        )
+    )
+    msg = msg_result.scalar_one_or_none()
+    if not msg or msg.role != "user":
+        raise HTTPException(status_code=404, detail="User message not found")
+
+    # Update the message content
+    msg.content = body.content.strip()
+
+    # Delete all messages that came after this one
+    await db.execute(
+        delete(ChatMessage).where(
+            ChatMessage.conversation_id == conversation_id,
+            ChatMessage.created_at > msg.created_at,
+        )
+    )
+    await db.flush()
+
+    # Regenerate assistant reply with updated context
+    try:
+        registry = ProviderRegistry(db)
+        answer, sources = await chat_service.generate_reply(
+            session=db,
+            registry=registry,
+            conversation=conv,
+            question=body.content.strip(),
+            persona=body.persona,
+        )
+    except Exception as exc:
+        answer = f"Sorry, I encountered an error: {exc}"
+        sources = []
+
+    assistant_msg = await chat_service.save_message(
+        session=db,
+        conversation_id=conv.id,
+        role="assistant",
+        content=answer,
+        sources=sources or None,
+    )
+
+    await db.commit()
+    await db.refresh(msg)
+    await db.refresh(assistant_msg)
+
+    return {
+        "user_message": MessageOut.from_orm(msg),
         "assistant_message": MessageOut.from_orm(assistant_msg),
     }
 

@@ -65,13 +65,38 @@ async def rag_search(
     return pages
 
 
-def _build_system_prompt(pages: list[WikiPage]) -> str:
+def _build_system_prompt(pages: list[WikiPage], persona: str = "victor") -> str:
     blocks = []
     for p in pages:
         snippet = p.content_md[:3000] if len(p.content_md) > 3000 else p.content_md
         blocks.append(f"### {p.title}\n{snippet}")
     context = "\n\n".join(blocks) if blocks else "(No relevant knowledge base pages found.)"
 
+    if persona == "ashley":
+        return f"""You are Ashley, a precise and reliable enterprise knowledge assistant.
+
+## Core Principle
+You answer ONLY from the Knowledge Base Context provided below. \
+You do not use general knowledge, make assumptions, or speculate beyond what the \
+documents explicitly state.
+
+## Answering Rules
+- If the answer is in the Knowledge Base Context, answer accurately and cite the \
+  page title(s).
+- If the topic is partially covered, answer only what the context supports — do not \
+  fill gaps with assumptions.
+- If the topic is not covered at all, respond clearly: \
+  "I don't have information about this topic in the knowledge base." \
+  Do not attempt to answer from outside knowledge.
+- Never fabricate facts, names, numbers, or events.
+- Be concise and factual. Use markdown (bullet lists, bold, headings) only when it \
+  adds clarity.
+
+## Knowledge Base Context
+
+{context}"""
+
+    # Default: Victor
     return f"""You are Victor, an enterprise knowledge assistant with a distinctive personality: \
 intelligent, endlessly curious, and passionate about sharing knowledge.
 
@@ -113,6 +138,7 @@ async def generate_reply(
     registry: ProviderRegistry,
     conversation: ChatConversation,
     question: str,
+    persona: str = "victor",
 ) -> tuple[str, list[dict]]:
     """
     Run RAG search + LLM generation.
@@ -126,7 +152,7 @@ async def generate_reply(
         scope_id=conversation.scope_id,
     )
 
-    system_prompt = _build_system_prompt(pages)
+    system_prompt = _build_system_prompt(pages, persona=persona)
 
     # Last 6 messages for history context (excluding any that don't exist yet)
     history_stmt = (

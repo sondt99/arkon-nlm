@@ -3,6 +3,7 @@
 import React from "react";
 import { api } from "@/lib/api";
 import { cn } from "@/lib/utils";
+import { AddToWikiDialog } from "./add-to-wiki-dialog";
 
 type Conversation = {
   id: string;
@@ -162,6 +163,7 @@ export default function ChatPage() {
   const [sending, setSending] = React.useState(false);
   const [input, setInput] = React.useState("");
   const [deletingId, setDeletingId] = React.useState<string | null>(null);
+  const [wikiDialogOpen, setWikiDialogOpen] = React.useState(false);
   const bottomRef = React.useRef<HTMLDivElement>(null);
   const textareaRef = React.useRef<HTMLTextAreaElement>(null);
 
@@ -411,7 +413,7 @@ export default function ChatPage() {
             <span className="material-symbols-outlined text-primary" style={{ fontSize: 20 }}>
               smart_toy
             </span>
-            <div className="flex flex-col min-w-0">
+            <div className="flex flex-col min-w-0 flex-1">
               <span className="text-sm font-semibold truncate">
                 {activeConv ? activeConv.title : "Arkon Knowledge Assistant"}
               </span>
@@ -419,6 +421,17 @@ export default function ChatPage() {
                 Ask anything about the knowledge base
               </span>
             </div>
+            {/* Add to Wiki button — only when a conversation with messages exists */}
+            {activeConvId && messages.length > 0 && (
+              <button
+                onClick={() => setWikiDialogOpen(true)}
+                className="shrink-0 flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-border text-xs font-medium text-muted-foreground hover:border-primary/40 hover:text-primary hover:bg-primary/5 transition-colors"
+                title="Save this conversation to the Knowledge Wiki"
+              >
+                <span className="material-symbols-outlined" style={{ fontSize: 15 }}>auto_stories</span>
+                Add to Wiki
+              </button>
+            )}
           </div>
 
           {/* Messages */}
@@ -528,6 +541,15 @@ export default function ChatPage() {
           </div>
         </div>
       </div>
+
+      {/* Add to Wiki dialog */}
+      {wikiDialogOpen && activeConvId && (
+        <AddToWikiDialog
+          conversationId={activeConvId}
+          defaultTitle={activeConv?.title ?? "Chat Synthesis"}
+          onClose={() => setWikiDialogOpen(false)}
+        />
+      )}
     </div>
   );
 }

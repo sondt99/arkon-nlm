@@ -8,7 +8,7 @@ import { api } from "@/lib/api";
 import { WikiPageSummary } from "@/types/wiki";
 import { wikiTypeIcon, wikiTypeColor, wikiTypeGroupLabel } from "./wiki-type-badge";
 
-const GROUP_ORDER = ["entity", "concept", "topic", "source"];
+const GROUP_ORDER = ["entity", "concept", "topic", "source", "synthesis"];
 
 function useDebounce<T>(value: T, delay: number): T {
   const [debounced, setDebounced] = React.useState(value);

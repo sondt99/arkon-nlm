@@ -8,6 +8,7 @@ const TYPE_CONFIG: Record<
   concept: { icon: "lightbulb", label: "Concept", color: "#8c7b6b", bg: "rgba(140,123,107,0.1)" },
   topic: { icon: "topic", label: "Topic", color: "#6b8c7b", bg: "rgba(107,140,123,0.1)" },
   source: { icon: "description", label: "Source", color: "#7b6b8c", bg: "rgba(123,107,140,0.1)" },
+  synthesis: { icon: "chat_bubble", label: "Synthesis", color: "#2a7ec2", bg: "rgba(42,126,194,0.1)" },
   index: { icon: "list_alt", label: "Index", color: "#78706a", bg: "rgba(120,112,106,0.1)" },
   log: { icon: "history", label: "Log", color: "#78706a", bg: "rgba(120,112,106,0.1)" },
 };
@@ -41,6 +42,7 @@ export function wikiTypeGroupLabel(type: string): string {
     concept: "Concepts",
     topic: "Topics",
     source: "Sources",
+    synthesis: "Syntheses",
     index: "Index",
     log: "Log",
   };

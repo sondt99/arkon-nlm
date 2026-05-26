@@ -1,4 +1,4 @@
-export type WikiPageType = "entity" | "concept" | "topic" | "source" | "index" | "log";
+export type WikiPageType = "entity" | "concept" | "topic" | "source" | "synthesis" | "index" | "log";
 
 export type WikiPageSummary = {
   slug: string;

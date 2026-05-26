@@ -28,7 +28,7 @@ INDEX_SLUG = "_index"
 LOG_SLUG = "_log"
 
 # Recognized page types — used for filtering and prompt hints to the compiler.
-PAGE_TYPES = {"entity", "concept", "source", "topic", "index", "log"}
+PAGE_TYPES = {"entity", "concept", "source", "topic", "synthesis", "index", "log"}
 
 # `[[slug]]` or `[[slug|display text]]` — captures the slug only.
 _WIKILINK_RE = re.compile(r"\[\[([^\]\|]+)(?:\|[^\]]*)?]]")

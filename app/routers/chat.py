@@ -2,14 +2,16 @@
 Chat REST router — RAG-based knowledge assistant conversations.
 
 Endpoints:
-  GET    /api/chat/conversations          - list user's conversations
-  POST   /api/chat/conversations          - create new conversation
-  DELETE /api/chat/conversations/{id}     - delete conversation
-  PATCH  /api/chat/conversations/{id}     - rename conversation
-  GET    /api/chat/conversations/{id}/messages  - list messages
-  POST   /api/chat/conversations/{id}/messages  - send message (RAG + LLM)
+  GET    /api/chat/conversations                       - list user's conversations
+  POST   /api/chat/conversations                       - create new conversation
+  DELETE /api/chat/conversations/{id}                  - delete conversation
+  PATCH  /api/chat/conversations/{id}                  - rename conversation
+  GET    /api/chat/conversations/{id}/messages         - list messages
+  POST   /api/chat/conversations/{id}/messages         - send message (RAG + LLM)
+  POST   /api/chat/conversations/{id}/to-wiki          - synthesize conversation → wiki page
 """
 
+import re
 import uuid
 from typing import Optional
 
@@ -220,6 +222,136 @@ async def send_message(
         "user_message": MessageOut.from_orm(user_msg),
         "assistant_message": MessageOut.from_orm(assistant_msg),
     }
+
+
+# ---------------------------------------------------------------------------
+# Convert conversation → wiki page
+# ---------------------------------------------------------------------------
+
+class ToWikiRequest(BaseModel):
+    title: str
+    page_type: str = "synthesis"
+    scope_type: str = "global"
+    scope_id: Optional[uuid.UUID] = None
+
+
+class ToWikiResult(BaseModel):
+    slug: str
+    title: str
+
+
+@router.post("/chat/conversations/{conversation_id}/to-wiki", status_code=201)
+async def conversation_to_wiki(
+    conversation_id: uuid.UUID,
+    body: ToWikiRequest,
+    db: AsyncSession = Depends(get_db),
+    current_user: Employee = Depends(get_current_user),
+) -> ToWikiResult:
+    """
+    Synthesize a chat conversation into a wiki page using the chatbot LLM.
+    Creates a new WikiPage and stores its embedding for RAG search.
+    """
+    if not body.title.strip():
+        raise HTTPException(status_code=422, detail="Title is required")
+
+    conv = await _get_owned_conversation(db, conversation_id, current_user.id)
+
+    # Load all messages
+    msg_stmt = (
+        select(ChatMessage)
+        .where(ChatMessage.conversation_id == conv.id)
+        .order_by(ChatMessage.created_at.asc())
+    )
+    result = await db.execute(msg_stmt)
+    messages = result.scalars().all()
+
+    if not messages:
+        raise HTTPException(status_code=422, detail="Conversation has no messages to save")
+
+    # Build Q&A text
+    qa_lines = []
+    for m in messages:
+        label = "Q" if m.role == "user" else "A"
+        qa_lines.append(f"**{label}:** {m.content}")
+    qa_text = "\n\n".join(qa_lines)
+
+    # LLM synthesis
+    registry = ProviderRegistry(db)
+    try:
+        llm = await registry.get_chatbot_llm()
+        synthesis_prompt = (
+            f"Given the following Q&A conversation, write a concise, encyclopedic wiki page "
+            f"about the topic '{body.title.strip()}'.\n\n"
+            "Requirements:\n"
+            "- Write in prose, NOT Q&A format\n"
+            "- Start with a 1-2 sentence introduction paragraph\n"
+            "- Use ## headings to organize key concepts and insights\n"
+            "- Extract facts, definitions, and actionable insights from the conversation\n"
+            "- End with a ## Summary section with bullet points of key takeaways\n"
+            "- Output ONLY the markdown body (no YAML front matter)\n\n"
+            f"Conversation:\n---\n{qa_text}\n---"
+        )
+        system = "You are a technical wiki editor. Write structured, encyclopedic content."
+        content_md = await llm.generate(synthesis_prompt, system=system, temperature=0.3)
+    except Exception as exc:
+        # Fallback: format as structured Q&A if LLM fails
+        content_md = f"## Overview\n\nThis page was created from a chat conversation.\n\n## Q&A\n\n{qa_text}"
+        raise HTTPException(
+            status_code=503,
+            detail=f"LLM synthesis failed: {exc}. Configure a chatbot provider in Settings.",
+        )
+
+    # Generate summary (first non-empty line of content)
+    summary_line = next(
+        (l.lstrip("#").strip() for l in content_md.splitlines() if l.strip() and not l.startswith("#")),
+        body.title.strip(),
+    )
+    summary = summary_line[:300]
+
+    # Generate unique slug
+    base_slug = re.sub(r"[^a-z0-9]+", "-", body.title.strip().lower()).strip("-")[:80]
+    slug = f"{base_slug}-{uuid.uuid4().hex[:6]}"
+
+    # Create WikiPage
+    from app.services import wiki_service
+    try:
+        page = await wiki_service.apply_create(
+            session=db,
+            slug=slug,
+            title=body.title.strip(),
+            page_type=body.page_type if body.page_type in wiki_service.PAGE_TYPES else "synthesis",
+            content_md=content_md,
+            summary=summary,
+            knowledge_type_slugs=[],
+            source_ids=[],
+            scope_type=body.scope_type,
+            scope_id=body.scope_id,
+        )
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"Failed to create wiki page: {exc}")
+
+    # Store embedding so the page appears in RAG search
+    try:
+        from app.ai.embedding_catalog import get_spec
+        from app.services.embedding_storage import (
+            compute_content_hash,
+            embedding_input_text,
+            upsert_page_embedding,
+        )
+
+        spec_id = await registry.get_active_embedding_spec_id()
+        if spec_id:
+            spec = get_spec(spec_id)
+            emb_provider = await registry.get_embedding(task="document")
+            text = embedding_input_text(page.title, summary, content_md)
+            vector = await emb_provider.embed(text)
+            content_hash = compute_content_hash(page.title, summary, content_md)
+            await upsert_page_embedding(db, page.id, spec, vector, content_hash)
+    except Exception:
+        pass  # Embedding failure is non-fatal; page is still created
+
+    await db.commit()
+    return ToWikiResult(slug=slug, title=body.title.strip())
 
 
 # ---------------------------------------------------------------------------

@@ -1753,6 +1753,18 @@ Auth: Authorization: Bearer <mcp_token>
 
 ---
 
+### v1.2.4 — 2026-05-26
+
+#### Cập nhật nhân cách Ashley
+
+- Ashley không còn ngắn gọn/lạnh lùng — giờ thân thiện, ấm áp, giải thích chi tiết dễ hiểu
+- Dùng ví dụ, analogy, step-by-step khi cần để người dùng nắm rõ vấn đề
+- Structured markdown: headings, bold, bullet list
+- Vẫn giữ **KB-only**: không dùng general knowledge; nếu không có trong wiki → thông báo nhẹ nhàng và gợi ý người dùng bổ sung wiki
+- Ashley là **default persona** khi mở trang chat
+
+---
+
 ### v1.1 — (trước 2026-05-26)
 
 Phiên bản ban đầu gồm: Ingestion Pipeline (MRP), Wiki System, Skill System, RBAC, NotebookLM Integration, MCP Server.

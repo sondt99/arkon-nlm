@@ -364,19 +364,34 @@ async def conversation_to_wiki(
     try:
         llm = await registry.get_chatbot_llm()
         synthesis_prompt = (
-            f"Given the following Q&A conversation, write a concise, encyclopedic wiki page "
-            f"about the topic '{body.title.strip()}'.\n\n"
-            "Requirements:\n"
-            "- Write in prose, NOT Q&A format\n"
-            "- Start with a 1-2 sentence introduction paragraph\n"
-            "- Use ## headings to organize key concepts and insights\n"
-            "- Extract facts, definitions, and actionable insights from the conversation\n"
-            "- End with a ## Summary section with bullet points of key takeaways\n"
-            "- Output ONLY the markdown body (no YAML front matter)\n\n"
+            f"Convert the following Q&A conversation into a well-structured wiki page "
+            f"titled '{body.title.strip()}'.\n\n"
+            "## Your job: reorganise, NOT summarise\n"
+            "The user saved this conversation because every detail in it matters. "
+            "Your task is to restructure the content into logical sections — "
+            "do NOT condense, paraphrase away, or omit anything.\n\n"
+            "## Hard rules\n"
+            "- **Preserve ALL code blocks exactly as written.** Copy every code snippet "
+            "verbatim inside a fenced code block with the correct language tag. "
+            "Never summarise, shorten, or describe code — include it in full.\n"
+            "- **Preserve ALL technical explanations in full.** Do not reduce a "
+            "multi-paragraph explanation to a single sentence.\n"
+            "- **Preserve ALL numbered steps, lists, and examples** exactly as given.\n"
+            "- Rewrite only the framing (remove Q/A labels, merge related answers, "
+            "add section headings). The substance must be 100% intact.\n\n"
+            "## Structure\n"
+            "- Start with a 1–2 sentence introduction.\n"
+            "- Use `##` headings to group related topics from the conversation.\n"
+            "- End with a `## Key Takeaways` section — bullet points of the main points "
+            "(but the full detail stays in the sections above).\n"
+            "- Output ONLY the markdown body (no YAML front matter).\n\n"
             f"Conversation:\n---\n{qa_text}\n---"
         )
-        system = "You are a technical wiki editor. Write structured, encyclopedic content."
-        content_md = await llm.generate(synthesis_prompt, system=system, temperature=0.3)
+        system = (
+            "You are a technical wiki editor. Your goal is faithful, lossless restructuring. "
+            "When in doubt, include more — never less. Code blocks must be reproduced verbatim."
+        )
+        content_md = await llm.generate(synthesis_prompt, system=system, temperature=0.2)
     except Exception as exc:
         # Fallback: format as structured Q&A if LLM fails
         content_md = f"## Overview\n\nThis page was created from a chat conversation.\n\n## Q&A\n\n{qa_text}"

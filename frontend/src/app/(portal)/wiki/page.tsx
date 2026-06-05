@@ -13,7 +13,7 @@ import { ScopeBadge } from "@/components/shared/scope-badge";
 import { WikiSearchDialog } from "@/components/wiki/wiki-search-dialog";
 import { EmptyState } from "@/components/shared/empty-state";
 
-const TYPE_TABS = ["all", "entity", "concept", "topic", "source"] as const;
+const TYPE_TABS = ["all", "entity", "concept", "topic", "source", "synthesis"] as const;
 
 export default function WikiIndexPage() {
   const [indexMd, setIndexMd] = React.useState<string | null>(null);
@@ -61,7 +61,7 @@ export default function WikiIndexPage() {
     const list = activeTab === "all"
       ? allPages
       : allPages.filter((p) => p.page_type === activeTab);
-    return list.slice(0, 24);
+    return list;
   }, [allPages, activeTab]);
 
   return (

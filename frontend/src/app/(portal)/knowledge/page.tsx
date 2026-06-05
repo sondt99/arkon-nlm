@@ -75,7 +75,7 @@ export default function KnowledgePage() {
   const [typeDialogOpen, setTypeDialogOpen] = useState(false);
   const [editType, setEditType] = useState<KnowledgeType | null>(null);
 
-  const loadSources = useCallback(async (silent = false, p = 1, s = "") => {
+  const loadSources = useCallback(async (silent = false, p = 1, s?: string) => {
     if (!silent) setLoading(true);
     try {
       const params = new URLSearchParams({
@@ -87,7 +87,8 @@ export default function KnowledgePage() {
         if (matchedType) params.set("knowledge_type_id", matchedType.id);
       }
       if (selectedDepartment) params.set("department_id", selectedDepartment);
-      if (s) params.set("search", s);
+      const searchQuery = s !== undefined ? s : search;
+      if (searchQuery) params.set("search", searchQuery);
 
       const data = await api<PaginatedSources>(`/api/sources?${params}`);
       setSources(data.items);
@@ -100,7 +101,7 @@ export default function KnowledgePage() {
       if (!silent) setLoading(false);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [selectedType, selectedDepartment, types]);
+  }, [selectedType, selectedDepartment, types, search]);
 
   // Polling cho trạng thái tài liệu
   useEffect(() => {

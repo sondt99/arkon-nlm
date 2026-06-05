@@ -7,7 +7,7 @@ import { WikiPageSummary } from "@/types/wiki";
 import { Dialog, DialogContent } from "@/components/ui/dialog";
 import { wikiTypeIcon, wikiTypeColor, wikiTypeGroupLabel } from "./wiki-type-badge";
 
-const GROUP_ORDER = ["entity", "concept", "topic", "source"];
+const GROUP_ORDER = ["entity", "concept", "topic", "source", "synthesis"];
 
 function useDebounce<T>(value: T, delay: number): T {
   const [debounced, setDebounced] = React.useState(value);
@@ -61,7 +61,7 @@ export function WikiSearchDialog({
 
   const grouped = React.useMemo(() => {
     const map = new Map<string, WikiPageSummary[]>();
-    for (const p of filtered.slice(0, 60)) {
+    for (const p of filtered) {
       if (!map.has(p.page_type)) map.set(p.page_type, []);
       map.get(p.page_type)!.push(p);
     }

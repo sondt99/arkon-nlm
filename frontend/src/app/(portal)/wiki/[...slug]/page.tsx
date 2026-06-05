@@ -205,7 +205,7 @@ export default function WikiPageViewer() {
         {/* Left: Page Tree */}
         <WikiPageTree
           activeSlug={fullSlug}
-          pagesUrl={isScoped ? `/api/projects/${scopeId}/wiki?limit=200` : undefined}
+          pagesUrl={isScoped ? `/api/projects/${scopeId}/wiki?limit=2000` : undefined}
           linkQueryParams={isScoped ? `?scopeType=${scopeType}&scopeId=${scopeId}` : undefined}
         />
 

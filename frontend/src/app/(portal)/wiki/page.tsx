@@ -25,7 +25,7 @@ export default function WikiIndexPage() {
   React.useEffect(() => {
     Promise.all([
       api<{ content_md: string }>("/api/wiki/index"),
-      api<WikiPageSummary[]>("/api/wiki/pages?limit=200"),
+      api<WikiPageSummary[]>("/api/wiki/pages?limit=2000"),
     ])
       .then(([idx, pages]) => {
         setIndexMd(idx.content_md || null);

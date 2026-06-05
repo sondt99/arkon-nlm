@@ -671,7 +671,7 @@ async def add_workspace_url_source(
 async def list_workspace_wiki(
     project_id: str,
     page_type: str | None = None,
-    limit: int = 100,
+    limit: int = 2000,
     db: AsyncSession = Depends(get_db),
     current_user: Employee = Depends(get_current_user),
 ):

@@ -63,7 +63,7 @@ export function WikiPageTree({
   const debouncedSearch = useDebounce(search, 150);
 
   const loadPages = React.useCallback(() => {
-    const url = pagesUrl || "/api/wiki/pages?limit=200";
+    const url = pagesUrl || "/api/wiki/pages?limit=2000";
     api<WikiPageSummary[]>(url)
       .then((data) => setPages(Array.isArray(data) ? data : []))
       .catch(() => setPages([]))

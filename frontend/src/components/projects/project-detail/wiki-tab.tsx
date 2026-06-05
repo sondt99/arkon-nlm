@@ -48,7 +48,7 @@ export function WikiTab({ project, wikiPages, wikiLoading, wikiIndexMd }: Props)
     <div className="flex gap-0 -mx-6 md:-mx-8 -mb-6 md:-mb-8 flex-1 min-h-0 border-t border-border overflow-hidden">
       {/* Page Tree sidebar — scoped to workspace */}
       <WikiPageTree
-        pagesUrl={`/api/projects/${project.id}/wiki?limit=200`}
+        pagesUrl={`/api/projects/${project.id}/wiki?limit=2000`}
         activeSlug={selectedWikiSlug ?? undefined}
         onPageSelect={(slug) => {
           setSelectedWikiSlug(slug);

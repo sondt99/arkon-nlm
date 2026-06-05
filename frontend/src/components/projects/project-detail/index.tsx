@@ -49,7 +49,7 @@ export function ProjectDetail({ project, isAdmin, onBack }: Props) {
   const loadWiki = useCallback(async () => {
     setWikiLoading(true);
     try {
-      const pages = await api<WikiPageSummary[]>(`/api/projects/${project.id}/wiki?limit=200`);
+      const pages = await api<WikiPageSummary[]>(`/api/projects/${project.id}/wiki?limit=2000`);
       setWikiPages(pages);
       
       try {

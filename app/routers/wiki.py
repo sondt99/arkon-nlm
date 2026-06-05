@@ -133,7 +133,7 @@ def _build_wiki_scope_filter(user: Employee):
 async def list_wiki_pages(
     page_type: Optional[str] = Query(None),
     knowledge_type_slug: Optional[str] = Query(None),
-    limit: int = Query(50, ge=1, le=500),
+    limit: int = Query(50, ge=1, le=5000),
     offset: int = Query(0, ge=0),
     db: AsyncSession = Depends(get_db),
     user: Employee = require_permission("wiki:read"),

@@ -33,7 +33,7 @@ export function WikiSearchDialog({
 
   React.useEffect(() => {
     if (!open) return;
-    api<WikiPageSummary[]>("/api/wiki/pages?limit=300")
+    api<WikiPageSummary[]>("/api/wiki/pages?limit=2000")
       .then((d) => setPages(Array.isArray(d) ? d : []))
       .catch(() => setPages([]));
   }, [open]);

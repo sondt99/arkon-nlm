@@ -1,7 +1,7 @@
 # Arkon — Tài liệu Phân tích Thiết kế Hệ thống
 
-**Phiên bản:** 1.2  
-**Ngày:** 2026-05-26  
+**Phiên bản:** 1.2.8  
+**Ngày:** 2026-06-05  
 
 ---
 
@@ -1811,6 +1811,73 @@ Auth: Authorization: Bearer <mcp_token>
 - Hard rule: numbered steps, lists, examples phải giữ nguyên
 - System prompt: *"When in doubt, include more — never less"*
 - Temperature hạ `0.3` → `0.2` để output trung thành hơn với bản gốc
+
+---
+
+### v1.2.7 — 2026-06-05
+
+#### Fix: Wiki page list bị giới hạn 200 trang
+
+**Vấn đề**: Khi upload nhiều tài liệu, các topic cũ biến mất khỏi wiki tree và sidebar hiển thị đúng 200 pages.
+
+**Nguyên nhân**: Frontend hardcode `?limit=200` ở tất cả các call lấy danh sách wiki pages. Backend sort theo `updated_at DESC` — wiki pages mới đẩy trang cũ ra khỏi top 200. Trang không bị xóa khỏi DB nhưng không hiển thị.
+
+**Fix:**
+- Backend `GET /api/wiki/pages`: tăng cap từ `le=500` → `le=5000`
+- Backend `GET /api/projects/{id}/wiki`: tăng default limit từ `100` → `2000`
+- Frontend: tất cả 6 chỗ hardcode `?limit=200` / `?limit=300` đều tăng lên `?limit=2000`
+  - `wiki-page-tree.tsx` (default URL)
+  - `wiki/page.tsx`
+  - `wiki/[...slug]/page.tsx` (scoped view)
+  - `projects/project-detail/index.tsx`
+  - `projects/project-detail/wiki-tab.tsx`
+  - `wiki-search-dialog.tsx` (từ 300 → 2000)
+
+---
+
+### v1.2.8 — 2026-06-05
+
+#### Fix: Search KB không ra kết quả khi filter
+
+**Vấn đề 1 — Synthesis pages ẩn hoàn toàn**
+
+Pages được tạo từ "Add to Wiki" (type `synthesis`) không xuất hiện ở bất kỳ đâu trong wiki UI.
+
+**Nguyên nhân**: Khi thêm feature "Add to Wiki" (v1.2), type `synthesis` được thêm vào backend và `wiki-page-tree.tsx` nhưng bị bỏ sót ở hai file khác:
+- `wiki/page.tsx` — `TYPE_TABS` chỉ có `["all", "entity", "concept", "topic", "source"]`
+- `wiki-search-dialog.tsx` — `GROUP_ORDER` cũng thiếu `"synthesis"`
+
+**Fix**: Thêm `"synthesis"` vào cả `TYPE_TABS` và `GROUP_ORDER`.
+
+---
+
+**Vấn đề 2 — Tab filter chỉ hiển thị 24 kết quả**
+
+Click vào tab "Entity" / "Concept" / v.v. trên trang wiki index chỉ thấy tối đa 24 pages dù thực tế có nhiều hơn.
+
+**Nguyên nhân**: `displayPages` trong `wiki/page.tsx` bị slice cứng `list.slice(0, 24)` trước khi render grid.
+
+**Fix**: Bỏ `.slice(0, 24)`, hiển thị toàn bộ kết quả sau filter.
+
+---
+
+**Vấn đề 3 — Search dialog giới hạn 60 kết quả**
+
+Tìm kiếm Cmd+K chỉ hiển thị tối đa 60 kết quả kể cả khi có nhiều page match.
+
+**Nguyên nhân**: `filtered.slice(0, 60)` trong `wiki-search-dialog.tsx` trước khi group.
+
+**Fix**: Bỏ `.slice(0, 60)`.
+
+---
+
+**Vấn đề 4 — Filter xóa search query**
+
+Khi người dùng tìm kiếm tài liệu (ví dụ: "meeting notes") rồi chọn filter Knowledge Type, kết quả tìm kiếm bị mất — API call mới không có `search` param.
+
+**Nguyên nhân**: `loadSources` useCallback trong `knowledge/page.tsx` không có `search` trong deps list. Khi filter thay đổi, useEffect gọi `loadSources()` với `s=""` (default), bỏ qua search query đang active.
+
+**Fix**: Thêm `search` vào deps của `useCallback`; trong hàm dùng `const searchQuery = s !== undefined ? s : search` để ưu tiên tham số tường minh (khi `handleSearch` gọi trực tiếp) rồi fallback về state (khi filter thay đổi).
 
 ---
 

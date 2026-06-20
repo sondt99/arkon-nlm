@@ -484,10 +484,21 @@ async def nlm_chat_ask(
     storage = _storage_path()
     state_file = (storage / "storage_state.json") if storage is not None else None
     async with await NotebookLMClient.from_storage(path=state_file, timeout=120) as client:
+        # NotebookLM's chat API expects an explicit source selection.  An empty
+        # list is not consistently treated as "all sources" and can make the UI
+        # ask the user to select a source before it will answer.  Arkon owns this
+        # selection: use every source that has finished processing.
+        sources = await client.sources.list(notebook_id)
+        source_ids = [source.id for source in sources if source.status == 2]
+        if not source_ids:
+            raise ValueError(
+                "This notebook has no ready sources yet. Add a source or wait for processing to finish."
+            )
+
         result = await client.chat.ask(
             notebook_id, question,
             conversation_id=conversation_id,
-            source_ids=[],  # skip extra GET_NOTEBOOK round-trip; NLM uses all sources by default
+            source_ids=source_ids,
         )
         return {
             "answer": result.answer,

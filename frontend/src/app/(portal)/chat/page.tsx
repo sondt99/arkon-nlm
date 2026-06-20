@@ -3,6 +3,7 @@
 import React from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
+import { Check, Copy } from "lucide-react";
 import { api } from "@/lib/api";
 import { cn } from "@/lib/utils";
 import { AddToWikiDialog } from "./add-to-wiki-dialog";
@@ -27,28 +28,89 @@ type Message = {
 // ---------------------------------------------------------------------------
 // Markdown renderer — uses react-markdown + remark-gfm
 // ---------------------------------------------------------------------------
+async function copyText(text: string) {
+  if (navigator.clipboard?.writeText) {
+    await navigator.clipboard.writeText(text);
+    return;
+  }
+  const textarea = document.createElement("textarea");
+  textarea.value = text;
+  textarea.style.position = "fixed";
+  textarea.style.opacity = "0";
+  document.body.appendChild(textarea);
+  textarea.select();
+  document.execCommand("copy");
+  textarea.remove();
+}
+
+function CopyAction({ text, label = "Copy", compact = false }: { text: string; label?: string; compact?: boolean }) {
+  const [copied, setCopied] = React.useState(false);
+
+  const handleCopy = async () => {
+    try {
+      await copyText(text);
+      setCopied(true);
+      window.setTimeout(() => setCopied(false), 1600);
+    } catch {
+      setCopied(false);
+    }
+  };
+
+  return (
+    <button
+      type="button"
+      onClick={handleCopy}
+      className={cn(
+        "inline-flex items-center gap-1.5 rounded-md border transition-colors",
+        compact
+          ? "border-white/10 bg-white/[0.06] px-2 py-1 text-[10px] text-emerald-50/65 hover:bg-white/10 hover:text-white"
+          : "border-transparent px-1.5 py-1 text-[10px] text-muted-foreground hover:border-border hover:bg-muted/60 hover:text-foreground"
+      )}
+      title={copied ? "Copied" : label}
+      aria-label={copied ? "Copied" : label}
+    >
+      {copied ? <Check className="size-3" /> : <Copy className="size-3" />}
+      <span>{copied ? "Copied" : label}</span>
+    </button>
+  );
+}
+
+function CodeBlock({ code, language = "code" }: { code: string; language?: string }) {
+  return (
+    <div className="group/code my-3 overflow-hidden rounded-xl border border-emerald-400/15 bg-[#06110d] shadow-lg shadow-black/10">
+      <div className="flex items-center justify-between border-b border-white/10 bg-white/[0.035] px-3 py-1.5">
+        <span className="font-mono text-[9px] font-semibold uppercase tracking-[0.16em] text-emerald-300/70">{language}</span>
+        <CopyAction text={code} label="Copy code" compact />
+      </div>
+      <pre className="overflow-x-auto px-4 py-3.5">
+        <code className="whitespace-pre font-mono text-xs leading-6 text-emerald-50/90">{code}</code>
+      </pre>
+    </div>
+  );
+}
+
 function ChatMarkdown({ content }: { content: string }) {
   return (
     <ReactMarkdown
       remarkPlugins={[remarkGfm]}
       components={{
         h1: ({ children }) => (
-          <h1 className="text-base font-bold mt-3 mb-1.5 text-foreground">{children}</h1>
+          <h1 className="mb-2 mt-5 text-lg font-bold tracking-tight text-foreground first:mt-0">{children}</h1>
         ),
         h2: ({ children }) => (
-          <h2 className="text-sm font-bold mt-3 mb-1 text-foreground">{children}</h2>
+          <h2 className="mb-1.5 mt-4 text-base font-bold tracking-tight text-foreground first:mt-0">{children}</h2>
         ),
         h3: ({ children }) => (
-          <h3 className="text-sm font-semibold mt-2 mb-0.5 text-foreground">{children}</h3>
+          <h3 className="mb-1 mt-3 text-sm font-semibold text-foreground first:mt-0">{children}</h3>
         ),
         p: ({ children }) => (
-          <p className="text-sm leading-relaxed mb-2 last:mb-0">{children}</p>
+          <p className="mb-3 text-sm leading-7 last:mb-0">{children}</p>
         ),
         ul: ({ children }) => (
-          <ul className="text-sm leading-relaxed mb-2 ml-4 list-disc space-y-0.5">{children}</ul>
+          <ul className="mb-3 ml-5 list-disc space-y-1 text-sm leading-6 marker:text-primary/70">{children}</ul>
         ),
         ol: ({ children }) => (
-          <ol className="text-sm leading-relaxed mb-2 ml-4 list-decimal space-y-0.5">{children}</ol>
+          <ol className="mb-3 ml-5 list-decimal space-y-1 text-sm leading-6 marker:font-mono marker:text-primary/70">{children}</ol>
         ),
         li: ({ children }) => <li className="leading-relaxed">{children}</li>,
         strong: ({ children }) => <strong className="font-semibold text-foreground">{children}</strong>,
@@ -66,28 +128,28 @@ function ChatMarkdown({ content }: { content: string }) {
         code: ({ className, children, ...props }) => {
           const isBlock = !!className;
           if (isBlock) {
-            return (
-              <div className="relative group/code my-2">
-                <pre className="bg-muted/60 border border-border rounded-lg px-4 py-3 overflow-x-auto">
-                  <code className="text-xs font-mono text-foreground whitespace-pre">
-                    {children}
-                  </code>
-                </pre>
-              </div>
-            );
+            const code = String(children).replace(/\n$/, "");
+            const language = className?.replace("language-", "") || "code";
+            return <CodeBlock code={code} language={language} />;
           }
           return (
             <code
-              className="bg-muted border border-border/50 px-1.5 py-0.5 rounded text-xs font-mono text-foreground"
+              className="rounded-md border border-primary/15 bg-primary/[0.07] px-1.5 py-0.5 font-mono text-xs text-primary"
               {...props}
             >
               {children}
             </code>
           );
         },
-        pre: ({ children }) => <>{children}</>,
+        pre: ({ children }) => {
+          const child = React.Children.toArray(children)[0];
+          if (React.isValidElement<{ className?: string; children?: React.ReactNode }>(child) && !child.props.className) {
+            return <CodeBlock code={String(child.props.children ?? "").replace(/\n$/, "")} />;
+          }
+          return <>{children}</>;
+        },
         blockquote: ({ children }) => (
-          <blockquote className="border-l-2 border-primary/40 pl-3 my-2 text-muted-foreground italic text-sm">
+          <blockquote className="my-3 rounded-r-lg border-l-2 border-primary/50 bg-primary/[0.045] py-2 pl-3 pr-3 text-sm italic text-muted-foreground">
             {children}
           </blockquote>
         ),
@@ -126,6 +188,7 @@ function MessageBubble({
   onEditChange,
   onEditSave,
   onEditCancel,
+  isStreaming = false,
 }: {
   msg: Message;
   isEditing?: boolean;
@@ -134,6 +197,7 @@ function MessageBubble({
   onEditChange?: (val: string) => void;
   onEditSave?: () => void;
   onEditCancel?: () => void;
+  isStreaming?: boolean;
 }) {
   const isUser = msg.role === "user";
   const editRef = React.useRef<HTMLTextAreaElement>(null);
@@ -227,9 +291,17 @@ function MessageBubble({
               ) : (
                 <div className="min-w-0">
                   <ChatMarkdown content={msg.content} />
+                  {isStreaming && (
+                    <span className="ml-0.5 inline-block h-4 w-1 animate-pulse rounded-full bg-primary align-middle" aria-label="AI is writing" />
+                  )}
                 </div>
               )}
             </div>
+            {!isStreaming && msg.content && (
+              <div className={cn("mt-1 flex opacity-60 transition-opacity group-hover/msg:opacity-100", isUser ? "justify-end" : "justify-start")}>
+                <CopyAction text={msg.content} label={isUser ? "Copy message" : "Copy response"} />
+              </div>
+            )}
           </div>
         )}
 
@@ -267,6 +339,7 @@ export default function ChatPage() {
   const [loadingConvs, setLoadingConvs] = React.useState(true);
   const [loadingMsgs, setLoadingMsgs] = React.useState(false);
   const [sending, setSending] = React.useState(false);
+  const [revealingId, setRevealingId] = React.useState<string | null>(null);
   const [input, setInput] = React.useState("");
   const [persona, setPersona] = React.useState<"victor" | "ashley">("ashley");
   const [deletingId, setDeletingId] = React.useState<string | null>(null);
@@ -278,6 +351,34 @@ export default function ChatPage() {
   const bottomRef = React.useRef<HTMLDivElement>(null);
   const textareaRef = React.useRef<HTMLTextAreaElement>(null);
   const editInputRef = React.useRef<HTMLInputElement>(null);
+  const skipMessageLoadRef = React.useRef<string | null>(null);
+  const revealVersionRef = React.useRef(0);
+
+  const revealAssistantMessage = React.useCallback(async (message: Message) => {
+    const version = ++revealVersionRef.current;
+    const content = message.content || "";
+    const reduceMotion = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+
+    setRevealingId(message.id);
+    if (reduceMotion || content.length < 32) {
+      setMessages((prev) => prev.map((m) => (m.id === message.id ? message : m)));
+      setRevealingId(null);
+      return;
+    }
+
+    const chunkSize = Math.max(3, Math.ceil(content.length / 120));
+    for (let end = chunkSize; end < content.length; end += chunkSize) {
+      if (revealVersionRef.current !== version) return;
+      const visible = content.slice(0, end);
+      setMessages((prev) => prev.map((m) => (m.id === message.id ? { ...m, content: visible } : m)));
+      await new Promise((resolve) => window.setTimeout(resolve, 16));
+    }
+
+    if (revealVersionRef.current === version) {
+      setMessages((prev) => prev.map((m) => (m.id === message.id ? message : m)));
+      setRevealingId(null);
+    }
+  }, []);
 
   const loadConversations = React.useCallback(() => {
     api<Conversation[]>("/api/chat/conversations")
@@ -299,8 +400,16 @@ export default function ChatPage() {
   }, []);
 
   React.useEffect(() => {
-    if (activeConvId) loadMessages(activeConvId);
-    else setMessages([]);
+    revealVersionRef.current += 1;
+    setRevealingId(null);
+    if (activeConvId) {
+      if (skipMessageLoadRef.current === activeConvId) {
+        skipMessageLoadRef.current = null;
+        setLoadingMsgs(false);
+        return;
+      }
+      loadMessages(activeConvId);
+    } else setMessages([]);
   }, [activeConvId, loadMessages]);
 
   // Scroll to bottom when messages change
@@ -315,6 +424,7 @@ export default function ChatPage() {
         body: { title: "New conversation" },
       });
       setConversations((prev) => [conv, ...prev]);
+      skipMessageLoadRef.current = conv.id;
       setActiveConvId(conv.id);
       setMessages([]);
     } catch {}
@@ -387,8 +497,9 @@ export default function ChatPage() {
       setMessages((prev) => [
         ...prev.slice(0, msgIndex),
         result.user_message,
-        result.assistant_message,
+        { ...result.assistant_message, content: "", sources: null },
       ]);
+      await revealAssistantMessage(result.assistant_message);
     } catch {
       // Rollback: reload from server
       loadMessages(activeConvId);
@@ -415,6 +526,20 @@ export default function ChatPage() {
     const text = input.trim();
     if (!text || sending) return;
 
+    setInput("");
+    setSending(true);
+
+    // Render the user message before any network request, including the first
+    // conversation creation request.
+    const tempUserMsg: Message = {
+      id: `temp-${Date.now()}`,
+      role: "user",
+      content: text,
+      sources: null,
+      created_at: new Date().toISOString(),
+    };
+    setMessages((prev) => [...prev, tempUserMsg]);
+
     let convId = activeConvId;
     if (!convId) {
       try {
@@ -424,24 +549,23 @@ export default function ChatPage() {
         });
         convId = conv.id;
         setConversations((prev) => [conv, ...prev]);
+        skipMessageLoadRef.current = conv.id;
         setActiveConvId(conv.id);
       } catch {
+        setMessages((prev) => [
+          ...prev,
+          {
+            id: `err-${Date.now()}`,
+            role: "assistant",
+            content: "I couldn't start this conversation. Please check the connection and try again.",
+            sources: null,
+            created_at: new Date().toISOString(),
+          },
+        ]);
+        setSending(false);
         return;
       }
     }
-
-    setInput("");
-    setSending(true);
-
-    // Optimistic user message
-    const tempUserMsg: Message = {
-      id: `temp-${Date.now()}`,
-      role: "user",
-      content: text,
-      sources: null,
-      created_at: new Date().toISOString(),
-    };
-    setMessages((prev) => [...prev, tempUserMsg]);
 
     try {
       const result = await api<{ user_message: Message; assistant_message: Message }>(
@@ -452,8 +576,9 @@ export default function ChatPage() {
       setMessages((prev) => [
         ...prev.filter((m) => m.id !== tempUserMsg.id),
         result.user_message,
-        result.assistant_message,
+        { ...result.assistant_message, content: "", sources: null },
       ]);
+      await revealAssistantMessage(result.assistant_message);
 
       // Update conversation title in sidebar
       setConversations((prev) =>
@@ -491,10 +616,10 @@ export default function ChatPage() {
   const activeConv = conversations.find((c) => c.id === activeConvId);
 
   return (
-    <div className="flex flex-col flex-1 min-h-0 -mx-6 md:-mx-8 lg:-mx-10 -mb-6 md:-mb-8 lg:-mb-10 border-t border-border">
+    <div className="-mx-4 -mb-4 flex min-h-0 flex-1 flex-col border-t border-border sm:-mx-6 sm:-mb-6 md:-mx-8 md:-mb-8 lg:-mx-10 lg:-mb-10">
       <div className="flex flex-1 min-h-0">
         {/* ── Conversation sidebar ── */}
-        <div className="w-64 shrink-0 border-r border-border bg-card/30 flex flex-col overflow-hidden">
+        <div className="hidden w-64 shrink-0 flex-col overflow-hidden border-r border-border bg-card/30 md:flex">
           <div className="flex items-center gap-2 px-4 py-3 border-b border-border">
             <span className="text-xs font-semibold text-muted-foreground uppercase tracking-wider flex-1">
               Conversations
@@ -670,8 +795,8 @@ export default function ChatPage() {
           </div>
 
           {/* Messages */}
-          <div className="flex-1 overflow-y-auto px-6 py-6 min-h-0">
-            {!activeConvId ? (
+          <div className="min-h-0 flex-1 overflow-y-auto px-4 py-5 sm:px-6 sm:py-6">
+            {!activeConvId && messages.length === 0 ? (
               <div className="h-full flex flex-col items-center justify-center gap-4 text-center">
                 <div className="w-16 h-16 rounded-2xl bg-primary/10 flex items-center justify-center">
                   <span className="material-symbols-outlined text-primary text-3xl">smart_toy</span>
@@ -702,7 +827,7 @@ export default function ChatPage() {
                   ))}
                 </div>
               </div>
-            ) : loadingMsgs ? (
+            ) : loadingMsgs && messages.length === 0 ? (
               <div className="flex items-center justify-center h-32">
                 <span className="material-symbols-outlined text-3xl text-muted-foreground animate-spin">
                   progress_activity
@@ -733,19 +858,23 @@ export default function ChatPage() {
                     }
                     onEditChange={setEditingMsgContent}
                     onEditSave={handleEditMsgSave}
-                    onEditCancel={() => setEditingMsgId(null)}
+                     onEditCancel={() => setEditingMsgId(null)}
+                    isStreaming={revealingId === msg.id}
                   />
                 ))}
-                {sending && (
+                {sending && !revealingId && (
                   <div className="flex gap-3 max-w-3xl">
                     <div className="w-7 h-7 shrink-0 rounded-full flex items-center justify-center bg-muted border border-border">
                       <span className="material-symbols-outlined text-sm">smart_toy</span>
                     </div>
                     <div className="rounded-2xl rounded-tl-sm px-4 py-3 bg-card border border-border">
-                      <div className="flex gap-1 items-center h-5">
+                      <div className="flex items-center gap-2 h-5">
+                        <span className="font-mono text-[10px] uppercase tracking-wider text-muted-foreground">Searching knowledge</span>
+                        <div className="flex gap-1">
                         <span className="w-1.5 h-1.5 rounded-full bg-muted-foreground/50 animate-bounce" style={{ animationDelay: "0ms" }} />
                         <span className="w-1.5 h-1.5 rounded-full bg-muted-foreground/50 animate-bounce" style={{ animationDelay: "150ms" }} />
                         <span className="w-1.5 h-1.5 rounded-full bg-muted-foreground/50 animate-bounce" style={{ animationDelay: "300ms" }} />
+                        </div>
                       </div>
                     </div>
                   </div>
@@ -756,7 +885,7 @@ export default function ChatPage() {
           </div>
 
           {/* Input */}
-          <div className="shrink-0 border-t border-border px-6 py-4">
+          <div className="shrink-0 border-t border-border px-4 py-3 sm:px-6 sm:py-4">
             <div className="flex items-end gap-3 bg-background border border-border rounded-2xl px-4 py-3 focus-within:border-primary/50 transition-colors">
               <textarea
                 ref={textareaRef}

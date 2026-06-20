@@ -4,6 +4,7 @@ import { useEffect } from "react";
 import { useRouter } from "next/navigation";
 import { useAuth } from "@/lib/auth";
 import { Sidebar } from "@/components/layout/sidebar";
+import { MobileHeader } from "@/components/layout/mobile-header";
 import { Skeleton } from "@/components/ui/skeleton";
 
 /* Mimics the actual sidebar + content layout so there's no layout shift on load */
@@ -11,7 +12,7 @@ function AppShellSkeleton() {
   return (
     <div className="h-screen flex bg-background overflow-hidden">
       {/* Sidebar skeleton */}
-      <div className="hidden md:flex flex-col h-full w-[240px] shrink-0 bg-[#f7f5f2] border-r border-black/[0.04]">
+      <div className="hidden md:flex flex-col h-full w-[252px] shrink-0 bg-sidebar border-r border-sidebar-border">
         {/* Org header */}
         <div className="pt-2 px-3 py-2 mb-1">
           <div className="flex items-center gap-2.5 px-1.5 py-1.5">
@@ -22,7 +23,7 @@ function AppShellSkeleton() {
             </div>
           </div>
         </div>
-        <div className="mx-3 border-t border-black/[0.04] my-1" />
+        <div className="mx-3 border-t border-sidebar-border my-1" />
         {/* Nav items */}
         <div className="flex-1 px-3 py-2 space-y-1">
           <Skeleton className="h-7 w-full rounded-md" />
@@ -45,7 +46,7 @@ function AppShellSkeleton() {
             ))}
           </div>
         </div>
-        <div className="px-3 py-2 border-t border-black/[0.04]">
+        <div className="px-3 py-2 border-t border-sidebar-border">
           <Skeleton className="h-2 w-28" />
         </div>
       </div>
@@ -101,13 +102,16 @@ export default function PortalLayout({ children }: { children: React.ReactNode }
   if (!user) return null;
 
   return (
-    <div className="h-screen flex bg-background overflow-hidden">
-      <Sidebar />
-      <main className="flex-1 flex flex-col h-screen overflow-hidden min-w-0">
-        <div className="p-6 md:p-8 lg:p-10 pt-4! w-full flex-1 min-h-0 flex flex-col gap-8 overflow-y-auto">
-          {children}
-        </div>
-      </main>
+    <div className="app-shell h-screen overflow-hidden bg-background">
+      <MobileHeader />
+      <div className="flex min-h-0 flex-1 overflow-hidden">
+        <Sidebar />
+        <main className="flex min-w-0 flex-1 flex-col overflow-hidden">
+          <div className="app-content flex min-h-0 w-full flex-1 flex-col gap-6 overflow-y-auto p-4 sm:p-6 md:gap-8 md:p-8 lg:p-10 lg:pt-6">
+            {children}
+          </div>
+        </main>
+      </div>
     </div>
   );
 }

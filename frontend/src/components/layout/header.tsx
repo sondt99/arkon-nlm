@@ -1,6 +1,6 @@
 "use client";
 
-
+import Image from "next/image";
 import { useRouter } from "next/navigation";
 import { useAuth } from "@/lib/auth";
 import {
@@ -22,9 +22,14 @@ export function Header() {
   };
 
   return (
-    <header className="sticky top-0 z-30 bg-background/95 backdrop-blur-sm border-b border-border h-14 flex items-center justify-end px-6">
-        {/* Spacer */}
-        <div />
+    <header className="sticky top-0 z-30 bg-background/95 backdrop-blur-sm border-b border-border h-14 flex items-center justify-between px-6">
+        <div className="flex items-center gap-2.5">
+          <Image src="/arkon-icon-v2.png" alt="Arkon" width={28} height={28} className="rounded-md" />
+          <div className="hidden sm:block">
+            <p className="font-heading text-base font-semibold leading-none text-foreground">Arkon <span className="font-mono text-[9px] text-primary">v2</span></p>
+            <p className="font-mono text-[8px] uppercase tracking-[0.18em] text-primary">secure node</p>
+          </div>
+        </div>
 
         {/* Right */}
         <div className="flex items-center gap-3">

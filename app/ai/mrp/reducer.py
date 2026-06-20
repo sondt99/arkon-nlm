@@ -13,6 +13,7 @@ Steps:
 """
 
 import asyncio
+from difflib import SequenceMatcher
 import json
 import re
 import string
@@ -35,8 +36,8 @@ if TYPE_CHECKING:
 
 MERGE_THRESHOLD = 0.90      # cosine sim → auto-merge entities
 AMBIGUOUS_LOW = 0.75        # cosine sim → send to LLM for disambiguation
-KB_UPDATE_THRESHOLD = 0.85  # sim → UPDATE existing wiki page
-KB_MAYBE_THRESHOLD = 0.60   # sim → MAYBE update (LLM confirms)
+KB_UPDATE_THRESHOLD = 0.82  # high-confidence semantic match
+KB_MAYBE_THRESHOLD = 0.48   # send uncertain matches to the LLM reranker
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -47,6 +48,32 @@ _PUNCT_TABLE = str.maketrans("", "", string.punctuation)
 
 def _normalize(name: str) -> str:
     return name.lower().strip().translate(_PUNCT_TABLE)
+
+
+def _slug_tail(slug: str) -> str:
+    """Return the human-comparable final segment of a wiki slug."""
+    return _normalize((slug or "").rsplit("/", 1)[-1].replace("-", " "))
+
+
+def _candidate_dict(page, similarity: float, method: str = "semantic") -> dict:
+    return {
+        "slug": page.slug,
+        "title": page.title,
+        "page_type": page.page_type,
+        "summary": (page.summary or "")[:500],
+        "similarity": round(float(similarity), 4),
+        "match_method": method,
+    }
+
+
+def _lexical_similarity(left: str, right: str) -> float:
+    a, b = _normalize(left), _normalize(right)
+    if not a or not b:
+        return 0.0
+    sequence = SequenceMatcher(None, a, b).ratio()
+    a_tokens, b_tokens = set(a.split()), set(b.split())
+    token_score = len(a_tokens & b_tokens) / max(len(a_tokens | b_tokens), 1)
+    return max(sequence, token_score)
 
 
 def _cosine(a: list[float], b: list[float]) -> float:
@@ -313,6 +340,7 @@ async def reconcile_with_kb(
     concepts: list[dict],
     embedding_provider: EmbeddingProvider,
     source,
+    llm: Optional[LLMProvider] = None,
 ) -> dict[str, dict]:
     """
     For each canonical entity/concept, search existing wiki pages.
@@ -331,45 +359,130 @@ async def reconcile_with_kb(
     if not all_items:
         return reconciliation
 
-    # Batch-embed all query texts in a single API call, then search DB sequentially.
+    # Exact title/slug-tail matching is deterministic and considerably more
+    # reliable than comparing a short concept name with a full-page embedding.
+    existing_pages = await wiki_service.list_pages(
+        session, limit=10_000, scope_type=scope_type, scope_id=scope_id,
+    )
+    exact_by_title: dict[str, list] = {}
+    exact_by_slug: dict[str, list] = {}
+    for page in existing_pages:
+        exact_by_title.setdefault(_normalize(page.title or ""), []).append(page)
+        exact_by_slug.setdefault(_slug_tail(page.slug), []).append(page)
+
+    unresolved: list[tuple[str, str, dict]] = []
+    for item_type, name, item in all_items:
+        norm = _normalize(name)
+        matches = [
+            page for page in (exact_by_title.get(norm, []) or exact_by_slug.get(norm, []))
+            if page.page_type != "source"
+        ]
+        # A document source with the same title is not the same thing as an
+        # entity/concept page. Prefer type-compatible knowledge pages.
+        compatible = [p for p in matches if p.page_type == item_type]
+        target = compatible or matches
+        if target:
+            page = target[0]
+            reconciliation[name] = {
+                "action": "UPDATE",
+                "page_slug": page.slug,
+                "page_title": page.title,
+                "page_type": page.page_type,
+                "similarity": 1.0,
+                "confidence": 1.0,
+                "match_method": "exact_title" if _normalize(page.title or "") == norm else "exact_slug",
+                "reason": "Exact normalized title/slug match",
+                "candidates": [_candidate_dict(page, 1.0, "exact")],
+            }
+        else:
+            unresolved.append((item_type, name, item))
+
+    if not unresolved:
+        return reconciliation
+
+    # Batch-embed unresolved query texts, then search DB sequentially.
     # Sequential DB access avoids concurrent AsyncSession errors.
     query_texts = [
         (f"{name}: {item['definition_excerpt'][:200]}" if itype == "concept" and item.get("definition_excerpt") else name)[:4000]
-        for itype, name, item in all_items
+        for itype, name, item in unresolved
     ]
     try:
         vectors = await embedding_provider.embed_batch(query_texts)
     except Exception as exc:
         logger.warning(f"MRP REDUCE kb reconcile embed_batch failed: {exc}. All items → CREATE.")
-        return {name: {"action": "CREATE", "page_slug": None, "similarity": 0.0} for _, name, _ in all_items}
+        for _, name, _ in unresolved:
+            reconciliation[name] = {
+                "action": "CREATE", "page_slug": None, "similarity": 0.0,
+                "confidence": 0.0, "match_method": "embedding_error", "candidates": [],
+            }
+        return reconciliation
 
-    for (_, name, _), vec in zip(all_items, vectors):
+    for ((item_type, name, _), vec) in zip(unresolved, vectors):
         try:
             hits = await wiki_service.search_pages_semantic(
                 session, vec, top_k=3, scope_type=scope_type, scope_id=scope_id,
             )
         except Exception as exc:
             logger.debug(f"MRP REDUCE kb reconcile failed for '{name}': {exc}")
-            reconciliation[name] = {"action": "CREATE", "page_slug": None, "similarity": 0.0}
+            reconciliation[name] = {"action": "CREATE", "page_slug": None, "similarity": 0.0,
+                                    "confidence": 0.0, "match_method": "search_error", "candidates": []}
             continue
 
         if not hits:
-            reconciliation[name] = {"action": "CREATE", "page_slug": None, "similarity": 0.0}
+            reconciliation[name] = {"action": "CREATE", "page_slug": None, "similarity": 0.0,
+                                    "confidence": 0.0, "match_method": "no_candidate", "candidates": []}
             continue
 
-        top_page, top_sim = hits[0]
-        if top_sim >= KB_UPDATE_THRESHOLD:
-            reconciliation[name] = {"action": "UPDATE", "page_slug": top_page.slug, "similarity": top_sim}
-        elif top_sim >= KB_MAYBE_THRESHOLD:
-            reconciliation[name] = {"action": "MAYBE", "page_slug": top_page.slug, "similarity": top_sim,
-                                    "_page_title": top_page.title}
+        semantic_scores = {page.slug: float(sim) for page, sim in hits}
+        page_lookup = {page.slug: page for page in existing_pages}
+        candidate_scores: dict[str, tuple[float, float, float]] = {}
+        for page, sim in hits:
+            lexical = _lexical_similarity(name, page.title or "")
+            candidate_scores[page.slug] = (max(float(sim), lexical * 0.82), float(sim), lexical)
+        for page in existing_pages:
+            if page.page_type == "source":
+                continue
+            lexical = _lexical_similarity(name, page.title or "")
+            if lexical < 0.45:
+                continue
+            semantic = semantic_scores.get(page.slug, 0.0)
+            candidate_scores[page.slug] = (max(semantic, lexical * 0.82), semantic, lexical)
+
+        ranked = sorted(candidate_scores.items(), key=lambda item: item[1][0], reverse=True)[:5]
+        top_slug, (top_score, top_semantic, top_lexical) = ranked[0]
+        top_page = page_lookup[top_slug]
+        candidates = []
+        for slug, (score, semantic, lexical) in ranked:
+            candidate = _candidate_dict(page_lookup[slug], score, "hybrid")
+            candidate["semantic_similarity"] = round(semantic, 4)
+            candidate["lexical_similarity"] = round(lexical, 4)
+            candidates.append(candidate)
+
+        if top_score >= KB_UPDATE_THRESHOLD and top_semantic >= 0.72 and top_lexical >= 0.72:
+            reconciliation[name] = {
+                "action": "UPDATE", "page_slug": top_page.slug, "page_title": top_page.title,
+                "page_type": top_page.page_type, "similarity": top_score, "confidence": top_score,
+                "match_method": "hybrid_high", "reason": "High semantic and title similarity",
+                "candidates": candidates,
+            }
+        elif top_score >= KB_MAYBE_THRESHOLD:
+            reconciliation[name] = {
+                "action": "MAYBE", "page_slug": top_page.slug, "page_title": top_page.title,
+                "page_type": top_page.page_type, "similarity": top_score, "confidence": top_score,
+                "match_method": "hybrid_maybe", "candidates": candidates,
+                "item_type": item_type,
+            }
         else:
-            reconciliation[name] = {"action": "CREATE", "page_slug": None, "similarity": top_sim}
+            reconciliation[name] = {
+                "action": "CREATE", "page_slug": None, "similarity": top_score,
+                "confidence": 1 - max(top_score, 0), "match_method": "hybrid_low",
+                "reason": "No sufficiently similar existing page", "candidates": candidates,
+            }
 
     # Batch-resolve MAYBE items with LLM
     maybe_items = [(name, rec) for name, rec in reconciliation.items() if rec["action"] == "MAYBE"]
     if maybe_items:
-        await _resolve_maybe_items(reconciliation, maybe_items, embedding_provider)
+        await _resolve_maybe_items(reconciliation, maybe_items, llm)
 
     return reconciliation
 
@@ -377,11 +490,61 @@ async def reconcile_with_kb(
 async def _resolve_maybe_items(
     reconciliation: dict,
     maybe_items: list[tuple[str, dict]],
-    embedding_provider,  # not used but kept for future re-ranking
+    llm: Optional[LLMProvider],
 ):
-    """Downgrade unresolved MAYBE items to CREATE (conservative default)."""
-    for name, _ in maybe_items:
-        reconciliation[name]["action"] = "CREATE"
+    """Ask one bounded LLM call to decide uncertain KB matches."""
+    if llm is None:
+        for name, _ in maybe_items:
+            reconciliation[name].update(
+                action="CREATE", page_slug=None, match_method="maybe_unresolved",
+                reason="No LLM available to confirm the uncertain match",
+            )
+        return
+
+    payload = []
+    for name, rec in maybe_items[:40]:
+        payload.append({
+            "name": name,
+            "item_type": rec.get("item_type"),
+            "candidates": rec.get("candidates", [])[:3],
+        })
+    prompt = (
+        "Decide whether each extracted wiki item is the SAME subject as one existing candidate. "
+        "Do not match merely related topics. Return a JSON array with name, decision (UPDATE or CREATE), "
+        "target_slug (required for UPDATE), confidence (0..1), and reason. Only choose target_slug from "
+        "that item's candidates.\n\n" + json.dumps(payload, ensure_ascii=False)
+    )
+    decisions: dict[str, dict] = {}
+    try:
+        raw = await asyncio.wait_for(
+            llm.generate(prompt, system="You are a conservative knowledge-base entity resolver. Return JSON only.", temperature=0.0),
+            timeout=90,
+        )
+        cleaned = re.sub(r"^```(?:json)?\s*", "", raw.strip(), flags=re.IGNORECASE)
+        cleaned = re.sub(r"\s*```$", "", cleaned)
+        parsed = json.loads(cleaned)
+        if isinstance(parsed, list):
+            decisions = {str(d.get("name")): d for d in parsed if isinstance(d, dict)}
+    except Exception as exc:
+        logger.warning(f"MRP REDUCE MAYBE resolution failed: {exc}")
+
+    for name, rec in maybe_items:
+        decision = decisions.get(name, {})
+        allowed = {c.get("slug") for c in rec.get("candidates", [])}
+        target = decision.get("target_slug")
+        confidence = float(decision.get("confidence") or 0)
+        if decision.get("decision") == "UPDATE" and target in allowed and confidence >= 0.65:
+            candidate = next(c for c in rec["candidates"] if c.get("slug") == target)
+            rec.update(
+                action="UPDATE", page_slug=target, page_title=candidate.get("title"),
+                page_type=candidate.get("page_type"), confidence=confidence,
+                match_method="semantic_llm", reason=decision.get("reason") or "LLM confirmed same subject",
+            )
+        else:
+            rec.update(
+                action="CREATE", page_slug=None, confidence=max(confidence, 0.5),
+                match_method="semantic_llm", reason=decision.get("reason") or "Uncertain candidate rejected",
+            )
 
 
 # ---------------------------------------------------------------------------
@@ -524,6 +687,125 @@ async def run_planning_call(
     return plan
 
 
+def enforce_reconciliation(plan: dict, reconciliation: dict[str, dict]) -> dict:
+    """Make deterministic KB matches authoritative over planner creativity.
+
+    A planner may group several extracted names onto one new page. If some of
+    those names map to different existing pages, split them into individual
+    UPDATE operations and keep the unmatched names on the original CREATE.
+    """
+    normalized = {_normalize(name): (name, rec) for name, rec in reconciliation.items()}
+    output: list[dict] = []
+    covered_updates: set[str] = set()
+
+    for original in plan.get("pages", []):
+        page = dict(original)
+        names = [str(n) for n in page.get("entity_names", []) if str(n).strip()]
+        update_groups: dict[str, list[tuple[str, dict]]] = {}
+        unmatched: list[str] = []
+        for name in names:
+            found = normalized.get(_normalize(name))
+            if found and found[1].get("action") == "UPDATE" and found[1].get("page_slug"):
+                update_groups.setdefault(found[1]["page_slug"], []).append((name, found[1]))
+            else:
+                unmatched.append(name)
+
+        if update_groups:
+            for slug, group in update_groups.items():
+                rec = group[0][1]
+                covered_updates.add(slug)
+                output.append({
+                    **page,
+                    "action": "UPDATE",
+                    "slug": slug,
+                    "title": rec.get("page_title") or page.get("title") or group[0][0],
+                    "page_type": rec.get("page_type") or page.get("page_type", "concept"),
+                    "entity_names": [name for name, _ in group],
+                    "match_confidence": rec.get("confidence"),
+                    "match_method": rec.get("match_method"),
+                    "match_reason": rec.get("reason"),
+                    "candidates": rec.get("candidates", []),
+                })
+            if unmatched:
+                first = normalized.get(_normalize(unmatched[0]))
+                rec = first[1] if first else {}
+                output.append({
+                    **page, "action": "CREATE", "entity_names": unmatched,
+                    "match_confidence": rec.get("confidence"),
+                    "match_method": rec.get("match_method"),
+                    "match_reason": rec.get("reason"),
+                    "candidates": rec.get("candidates", []),
+                })
+        else:
+            # UPDATE is only valid when reconciliation produced that exact slug.
+            # Source pages normally have no entity_names and remain CREATE.
+            if str(page.get("action", "CREATE")).upper() == "UPDATE":
+                valid = any(
+                    rec.get("action") == "UPDATE" and rec.get("page_slug") == page.get("slug")
+                    for rec in reconciliation.values()
+                )
+                if not valid:
+                    page["action"] = "CREATE"
+            first = normalized.get(_normalize(names[0])) if names else None
+            rec = first[1] if first else {}
+            output.append({
+                **page,
+                "match_confidence": page.get("match_confidence", rec.get("confidence")),
+                "match_method": page.get("match_method", rec.get("match_method")),
+                "match_reason": page.get("match_reason", rec.get("reason")),
+                "candidates": page.get("candidates", rec.get("candidates", [])),
+            })
+
+    # Multiple extracted names may resolve to the same existing page. Keep one
+    # writer operation per target so concurrent writes cannot overwrite each
+    # other during the same plan.
+    consolidated: list[dict] = []
+    update_index: dict[str, int] = {}
+    for page in output:
+        if page.get("action") == "UPDATE" and page.get("slug"):
+            slug = str(page["slug"])
+            if slug in update_index:
+                current = consolidated[update_index[slug]]
+                current["entity_names"] = list(dict.fromkeys([
+                    *(current.get("entity_names") or []), *(page.get("entity_names") or []),
+                ]))
+                current["priority"] = min(int(current.get("priority") or 99), int(page.get("priority") or 99))
+                continue
+            update_index[slug] = len(consolidated)
+        consolidated.append(page)
+    output = consolidated
+
+    # Do not let the planner silently omit a confirmed update.
+    next_priority = max((int(p.get("priority") or 0) for p in output), default=0) + 1
+    for name, rec in reconciliation.items():
+        slug = rec.get("page_slug")
+        if rec.get("action") != "UPDATE" or not slug:
+            continue
+        if slug in covered_updates:
+            target = next((item for item in output if item.get("action") == "UPDATE" and item.get("slug") == slug), None)
+            if target is not None:
+                target["entity_names"] = list(dict.fromkeys([*(target.get("entity_names") or []), name]))
+            continue
+        output.append({
+            "action": "UPDATE",
+            "slug": slug,
+            "title": rec.get("page_title") or name,
+            "page_type": rec.get("page_type") or "concept",
+            "entity_names": [name],
+            "related_kb_pages": [],
+            "priority": next_priority,
+            "match_confidence": rec.get("confidence"),
+            "match_method": rec.get("match_method"),
+            "match_reason": rec.get("reason"),
+            "candidates": rec.get("candidates", []),
+        })
+        next_priority += 1
+
+    plan["pages"] = output
+    plan["estimated_page_count"] = len(output)
+    return plan
+
+
 # ---------------------------------------------------------------------------
 # Phase 2 orchestrator
 # ---------------------------------------------------------------------------
@@ -534,6 +816,7 @@ async def run_reduce_phase(
     chunk_extracts: list,
     llm: LLMProvider,
     embedding_provider: EmbeddingProvider,
+    query_embedding_provider: Optional[EmbeddingProvider],
     kt_name: Optional[str],
     kt_desc: Optional[str],
     tracker: ProgressTracker,
@@ -576,13 +859,24 @@ async def run_reduce_phase(
 
     # 2.5 KB reconciliation
     reconciliation: dict[str, dict] = {}
-    if embedding_provider is not None:
+    reconcile_embedding = query_embedding_provider or embedding_provider
+    if reconcile_embedding is not None:
         try:
             reconciliation = await reconcile_with_kb(
-                session, canonical_entities, canonical_concepts, embedding_provider, source,
+                session, canonical_entities, canonical_concepts, reconcile_embedding, source, llm,
             )
         except Exception as exc:
             logger.warning(f"MRP REDUCE KB reconciliation failed: {exc}. All items will be CREATE.")
+
+    action_counts = {
+        action: sum(1 for rec in reconciliation.values() if rec.get("action") == action)
+        for action in ("CREATE", "UPDATE", "MAYBE")
+    }
+    method_counts: dict[str, int] = {}
+    for rec in reconciliation.values():
+        method = str(rec.get("match_method") or "unknown")
+        method_counts[method] = method_counts.get(method, 0) + 1
+    logger.info(f"MRP REDUCE reconciliation actions={action_counts} methods={method_counts}")
 
     await tracker.update(76, "Generating compilation plan...")
 
@@ -598,6 +892,13 @@ async def run_reduce_phase(
         kt_name=kt_name,
         kt_desc=kt_desc,
     )
+
+    plan_dict = enforce_reconciliation(plan_dict, reconciliation)
+    plan_dict["reconciliation"] = reconciliation
+    plan_dict["reconciliation_summary"] = {
+        **action_counts,
+        "match_methods": method_counts,
+    }
 
     # Attach claim evidence to plan (so REFINE can access claims per entity)
     plan_dict["_claims"] = raw_claims

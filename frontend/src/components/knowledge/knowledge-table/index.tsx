@@ -234,8 +234,9 @@ export function KnowledgeTable({
                         variant="outline"
                         className="text-[10px] font-medium h-5 px-2"
                         style={{
-                          borderColor: source.knowledge_type_color,
-                          color: source.knowledge_type_color,
+                          borderColor: `color-mix(in srgb, ${source.knowledge_type_color} 45%, var(--border))`,
+                          color: `color-mix(in srgb, ${source.knowledge_type_color} 65%, var(--foreground))`,
+                          backgroundColor: `color-mix(in srgb, ${source.knowledge_type_color} 12%, var(--card))`,
                         }}
                       >
                         {source.knowledge_type_name}

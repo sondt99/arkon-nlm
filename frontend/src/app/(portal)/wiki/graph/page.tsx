@@ -10,7 +10,7 @@ import { Sheet, SheetContent, SheetHeader, SheetTitle, SheetClose } from "@/comp
 import { WikiContent } from "@/components/wiki/wiki-content";
 import { Button } from "@/components/ui/button";
 
-const PAGE_TYPES = ["entity", "concept", "topic", "source"];
+const PAGE_TYPES = ["entity", "concept", "topic", "source", "synthesis", "index", "log"];
 
 export default function WikiGraphPage() {
   const router = useRouter();
@@ -123,12 +123,12 @@ export default function WikiGraphPage() {
   return (
     <>
       <div
-        className="relative flex flex-col -mx-6 md:-mx-8 lg:-mx-10 !-mt-4 -mb-6 md:-mb-8 lg:-mb-10 bg-background"
+        className="relative flex flex-col -mx-4 sm:-mx-6 md:-mx-8 lg:-mx-10 !-mt-4 -mb-6 md:-mb-8 lg:-mb-10 overflow-hidden bg-background"
         style={{ height: "100vh" }}
       >
         {/* Header Bar */}
-        <div className="flex items-center justify-between px-5 py-2.5 border-b border-border bg-card/80 backdrop-blur-sm shrink-0">
-          <div className="flex items-center gap-3">
+        <div className="z-20 flex shrink-0 flex-col gap-2 border-b border-border bg-card/85 px-3 py-2.5 shadow-[0_8px_32px_rgba(0,0,0,.08)] backdrop-blur-xl lg:flex-row lg:items-center lg:justify-between lg:px-5">
+          <div className="flex min-w-0 items-center gap-2 sm:gap-3">
             <button
               onClick={() => router.push(isScoped ? `/workspaces` : "/wiki")}
               className="text-muted-foreground hover:text-foreground transition-colors p-1 rounded-md hover:bg-accent/50"
@@ -136,27 +136,30 @@ export default function WikiGraphPage() {
             >
               <span className="material-symbols-outlined text-base">arrow_back</span>
             </button>
-            <div className="flex items-center gap-2">
-              <span className="material-symbols-outlined text-base text-muted-foreground">hub</span>
-              <span className="text-sm font-semibold text-foreground">
+            <div className="flex min-w-0 items-center gap-2">
+              <span className="material-symbols-outlined text-lg text-primary">hub</span>
+              <div className="min-w-0">
+                <span className="block truncate text-sm font-semibold text-foreground">
                 {isScoped ? "Workspace Graph" : "Knowledge Graph"}
-              </span>
+                </span>
+                <span className="hidden font-mono text-[8px] uppercase tracking-[0.2em] text-primary/70 sm:block">live topology · arkon v2</span>
+              </div>
             </div>
             {graphData.nodes.length > 0 && (
-              <div className="flex items-center gap-1.5 text-xs text-muted-foreground ml-1">
-                <span className="rounded-md bg-muted px-2 py-0.5 tabular-nums font-medium">
+              <div className="ml-auto flex items-center gap-1.5 text-xs text-muted-foreground lg:ml-1">
+                <span className="rounded-md border border-border bg-background/60 px-2 py-0.5 font-mono text-[10px] tabular-nums">
                   {filteredData?.nodes.length ?? 0} pages
                 </span>
-                <span className="rounded-md bg-muted px-2 py-0.5 tabular-nums font-medium">
+                <span className="hidden rounded-md border border-border bg-background/60 px-2 py-0.5 font-mono text-[10px] tabular-nums sm:inline">
                   {filteredData?.edges.length ?? 0} links
                 </span>
               </div>
             )}
           </div>
 
-          <div className="flex items-center gap-2">
+          <div className="flex min-w-0 items-center gap-2 overflow-x-auto pb-0.5 lg:overflow-visible lg:pb-0">
             {/* Search */}
-            <div className="flex items-center gap-2 bg-background border border-border rounded-lg px-2.5 py-1.5">
+            <div className="flex shrink-0 items-center gap-2 rounded-lg border border-border bg-background/70 px-2.5 py-1.5 shadow-inner shadow-black/5 focus-within:border-primary/40 focus-within:ring-2 focus-within:ring-primary/10">
               <span className="material-symbols-outlined text-sm text-muted-foreground">search</span>
               <input
                 type="text"
@@ -169,7 +172,7 @@ export default function WikiGraphPage() {
                   );
                   setHighlightSlug(match?.slug ?? null);
                 }}
-                className="w-36 text-xs bg-transparent outline-none text-foreground placeholder:text-muted-foreground"
+                className="w-32 bg-transparent text-xs text-foreground outline-none placeholder:text-muted-foreground sm:w-44"
               />
               {searchQuery && (
                 <button
@@ -182,7 +185,7 @@ export default function WikiGraphPage() {
             </div>
 
             {/* Type filter chips */}
-            <div className="flex items-center gap-1 border-l border-border pl-2 ml-1">
+            <div className="flex shrink-0 items-center gap-1 border-l border-border pl-2 ml-1">
               {PAGE_TYPES.map((type) => {
                 const active = activeTypes.has(type);
                 const color = wikiTypeColor(type);
@@ -190,7 +193,7 @@ export default function WikiGraphPage() {
                   <button
                     key={type}
                     onClick={() => toggleType(type)}
-                    className="flex items-center gap-1.5 rounded-lg px-2 py-1 text-xs transition-all border"
+                    className="flex items-center gap-1.5 rounded-lg border px-2 py-1 text-xs transition-all duration-200 hover:-translate-y-px"
                     style={{
                       background: active ? `${color}14` : "transparent",
                       color: active ? color : "var(--color-muted-foreground, #78706a)",
@@ -205,7 +208,7 @@ export default function WikiGraphPage() {
                     <span className="material-symbols-outlined" style={{ fontSize: 12 }}>
                       {wikiTypeIcon(type)}
                     </span>
-                    <span className="hidden sm:inline">{wikiTypeGroupLabel(type)}</span>
+                    <span className="hidden xl:inline">{wikiTypeGroupLabel(type)}</span>
                   </button>
                 );
               })}
@@ -215,7 +218,7 @@ export default function WikiGraphPage() {
 
         {/* Search results dropdown */}
         {searchQuery && searchMatches.length > 0 && (
-          <div className="absolute top-[52px] right-5 z-20 bg-card border border-border rounded-xl shadow-lg py-1 max-h-48 overflow-y-auto w-64">
+          <div className="absolute right-3 top-[104px] z-30 max-h-56 w-72 overflow-y-auto rounded-xl border border-border bg-card/95 py-1 shadow-2xl backdrop-blur-xl lg:right-5 lg:top-[52px]">
             {searchMatches.slice(0, 8).map((n) => (
               <button
                 key={n.slug}
@@ -264,6 +267,13 @@ export default function WikiGraphPage() {
                 height={undefined}
                 onNodeClick={(slug) => setPreviewSlug(slug)}
               />
+              <div className="pointer-events-none absolute bottom-4 left-1/2 hidden -translate-x-1/2 items-center gap-3 rounded-full border border-border bg-card/80 px-3 py-1.5 font-mono text-[9px] uppercase tracking-wider text-muted-foreground shadow-lg backdrop-blur-md md:flex">
+                <span>scroll · zoom</span>
+                <span className="h-3 border-l border-border" />
+                <span>drag · navigate</span>
+                <span className="h-3 border-l border-border" />
+                <span>click · inspect</span>
+              </div>
               {/* Progressive loading progress bar */}
               {loadProgress && loadProgress.loaded < loadProgress.total && (
                 <div className="absolute top-0 left-0 right-0 z-10">

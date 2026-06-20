@@ -80,12 +80,12 @@ export function AuditTable({ logs, loading }: Props) {
               <TableCell>
                 <Badge
                   variant="outline"
-                  className={`text-xs font-mono font-normal ${
+                  className={`tone-badge font-mono font-normal ${
                     log.action.toLowerCase() === "create"
-                      ? "border-green-200 text-green-700 bg-green-50/50"
+                      ? "tone-teal"
                       : log.action.toLowerCase() === "delete"
-                      ? "border-red-200 text-red-700 bg-red-50/50"
-                      : "border-blue-200 text-blue-700 bg-blue-50/50"
+                      ? "tone-danger"
+                      : "tone-blue"
                   }`}
                 >
                   {log.action}
@@ -105,10 +105,10 @@ export function AuditTable({ logs, loading }: Props) {
                 <div className="flex flex-col items-start gap-1">
                   <Badge
                     variant="outline"
-                    className={`text-xs ${
+                    className={`tone-badge ${
                       log.decision.toLowerCase() === "allow"
-                        ? "border-green-200 text-green-700 bg-green-50/50"
-                        : "border-red-200 text-red-700 bg-red-50/50"
+                        ? "tone-teal"
+                        : "tone-danger"
                     }`}
                   >
                     {log.decision.toUpperCase()}

@@ -43,10 +43,142 @@ type Props = {
   onNodeClick?: (slug: string) => void;
 };
 
-const EDGE_COLOR = "rgba(120,112,106,0.35)";
-const EDGE_HIGHLIGHT = "#c2652a";
-const LABEL_COLOR = "#3a302a";
-const BG_COLOR = "#faf5ee";
+type GraphPalette = {
+  bg: string;
+  card: string;
+  foreground: string;
+  muted: string;
+  border: string;
+  primary: string;
+  grid: string;
+};
+
+const FALLBACK_PALETTE: GraphPalette = {
+  bg: "#050c0a",
+  card: "#0a1511",
+  foreground: "#d8eee3",
+  muted: "#789487",
+  border: "rgba(80,224,154,.14)",
+  primary: "#21e68a",
+  grid: "rgba(33,230,138,.035)",
+};
+
+function readGraphPalette(): GraphPalette {
+  if (typeof document === "undefined") return FALLBACK_PALETTE;
+  const styles = getComputedStyle(document.documentElement);
+  const value = (name: string, fallback: string) => styles.getPropertyValue(name).trim() || fallback;
+  return {
+    bg: value("--background", FALLBACK_PALETTE.bg),
+    card: value("--card", FALLBACK_PALETTE.card),
+    foreground: value("--foreground", FALLBACK_PALETTE.foreground),
+    muted: value("--muted-foreground", FALLBACK_PALETTE.muted),
+    border: value("--border", FALLBACK_PALETTE.border),
+    primary: value("--primary", FALLBACK_PALETTE.primary),
+    grid: value("--grid-line", FALLBACK_PALETTE.grid),
+  };
+}
+
+function traceNodeShape(
+  ctx: CanvasRenderingContext2D,
+  type: string,
+  x: number,
+  y: number,
+  radius: number
+) {
+  ctx.beginPath();
+  if (type === "concept") {
+    ctx.moveTo(x, y - radius * 1.18);
+    ctx.lineTo(x + radius, y);
+    ctx.lineTo(x, y + radius * 1.18);
+    ctx.lineTo(x - radius, y);
+    ctx.closePath();
+  } else if (type === "topic") {
+    for (let i = 0; i < 6; i++) {
+      const angle = Math.PI / 6 + (i * Math.PI) / 3;
+      const px = x + Math.cos(angle) * radius * 1.08;
+      const py = y + Math.sin(angle) * radius * 1.08;
+      i === 0 ? ctx.moveTo(px, py) : ctx.lineTo(px, py);
+    }
+    ctx.closePath();
+  } else if (type === "source") {
+    ctx.roundRect(x - radius * 0.88, y - radius * 1.08, radius * 1.76, radius * 2.16, radius * 0.3);
+  } else if (type === "synthesis") {
+    ctx.roundRect(x - radius * 1.18, y - radius * 0.78, radius * 2.36, radius * 1.56, radius * 0.62);
+  } else if (type === "index") {
+    ctx.rect(x - radius * 0.9, y - radius * 0.9, radius * 1.8, radius * 1.8);
+  } else if (type === "log") {
+    ctx.arc(x, y, radius, 0, Math.PI * 2);
+  } else {
+    ctx.arc(x, y, radius, 0, Math.PI * 2);
+  }
+}
+
+function drawNodeMark(
+  ctx: CanvasRenderingContext2D,
+  type: string,
+  x: number,
+  y: number,
+  radius: number
+) {
+  if (radius < 7) return;
+  ctx.save();
+  ctx.strokeStyle = "rgba(255,255,255,.72)";
+  ctx.fillStyle = "rgba(255,255,255,.78)";
+  ctx.lineWidth = Math.max(1, radius * 0.11);
+  ctx.lineCap = "round";
+  if (type === "entity") {
+    ctx.beginPath();
+    ctx.arc(x, y - radius * 0.25, radius * 0.2, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.beginPath();
+    ctx.arc(x, y + radius * 0.38, radius * 0.38, Math.PI, 0);
+    ctx.stroke();
+  } else if (type === "topic") {
+    ctx.beginPath();
+    ctx.arc(x, y, radius * 0.16, 0, Math.PI * 2);
+    ctx.fill();
+    for (let i = 0; i < 3; i++) {
+      const angle = -Math.PI / 2 + (i * Math.PI * 2) / 3;
+      ctx.beginPath();
+      ctx.moveTo(x + Math.cos(angle) * radius * 0.25, y + Math.sin(angle) * radius * 0.25);
+      ctx.lineTo(x + Math.cos(angle) * radius * 0.5, y + Math.sin(angle) * radius * 0.5);
+      ctx.stroke();
+    }
+  } else if (type === "source" || type === "index") {
+    for (const offset of [-0.32, 0, 0.32]) {
+      ctx.beginPath();
+      ctx.moveTo(x - radius * 0.42, y + radius * offset);
+      ctx.lineTo(x + radius * 0.42, y + radius * offset);
+      ctx.stroke();
+    }
+  } else if (type === "concept") {
+    ctx.beginPath();
+    ctx.arc(x, y - radius * 0.08, radius * 0.24, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.beginPath();
+    ctx.moveTo(x, y + radius * 0.2);
+    ctx.lineTo(x, y + radius * 0.46);
+    ctx.stroke();
+  } else if (type === "synthesis") {
+    ctx.beginPath();
+    ctx.arc(x - radius * 0.34, y, radius * 0.12, 0, Math.PI * 2);
+    ctx.arc(x, y, radius * 0.12, 0, Math.PI * 2);
+    ctx.arc(x + radius * 0.34, y, radius * 0.12, 0, Math.PI * 2);
+    ctx.fill();
+  } else if (type === "log") {
+    ctx.beginPath();
+    ctx.moveTo(x, y);
+    ctx.lineTo(x, y - radius * 0.42);
+    ctx.moveTo(x, y);
+    ctx.lineTo(x + radius * 0.32, y + radius * 0.18);
+    ctx.stroke();
+  } else {
+    ctx.beginPath();
+    ctx.arc(x, y, radius * 0.22, 0, Math.PI * 2);
+    ctx.fill();
+  }
+  ctx.restore();
+}
 
 export function WikiGraph({
   nodes: rawNodes,
@@ -59,6 +191,7 @@ export function WikiGraph({
   const router = useRouter();
   const containerRef = React.useRef<HTMLDivElement>(null);
   const fgRef = React.useRef<ForceGraphInstance>(null);
+  const [palette, setPalette] = React.useState<GraphPalette>(FALLBACK_PALETTE);
   const [dimensions, setDimensions] = React.useState({ w: 800, h: height ?? 400 });
   // Hover state lives in a ref so canvas redraw callbacks can read it without
   // re-rendering the whole component (which would otherwise reset the sim).
@@ -76,6 +209,18 @@ export function WikiGraph({
     scopeType?: string;
     scopeName?: string | null;
   } | null>(null);
+
+  React.useEffect(() => {
+    const sync = () => setPalette(readGraphPalette());
+    sync();
+    const observer = new MutationObserver(sync);
+    observer.observe(document.documentElement, { attributes: true, attributeFilter: ["class", "style"] });
+    window.addEventListener("arkon-theme-change", sync);
+    return () => {
+      observer.disconnect();
+      window.removeEventListener("arkon-theme-change", sync);
+    };
+  }, []);
 
   // Measure container.
   React.useEffect(() => {
@@ -236,6 +381,17 @@ export function WikiGraph({
     }
   }, [mini, rawNodes.length]);
 
+  React.useEffect(() => {
+    if (!centerSlug) return;
+    const timer = window.setTimeout(() => {
+      const node = nodes.find((item) => item.id === centerSlug);
+      if (node?.x === undefined || node?.y === undefined) return;
+      fgRef.current?.centerAt(node.x, node.y, 500);
+      fgRef.current?.zoom(2, 500);
+    }, 180);
+    return () => window.clearTimeout(timer);
+  }, [centerSlug, nodes]);
+
   // Stable graphData reference — react-force-graph treats a new object literal
   // as a data change and resets simulation state, which is what was causing
   // nodes to drift away on every hover.
@@ -265,40 +421,53 @@ export function WikiGraph({
       const isDimmed = !!hovered && !neighborSet?.has(n.id);
       const isCenter = n.id === centerSlug;
 
-      // Hover glow.
-      if (isHovered) {
-        ctx.beginPath();
-        ctx.fillStyle = color;
-        ctx.globalAlpha = 0.12;
-        ctx.arc(n.x, n.y, r * 1.8, 0, 2 * Math.PI);
+      // Soft signal glow for the focused node.
+      if (isHovered || isCenter) {
+        ctx.save();
+        ctx.shadowColor = isHovered ? color : palette.primary;
+        ctx.shadowBlur = isHovered ? 22 : 14;
+        ctx.fillStyle = isHovered ? color : palette.primary;
+        ctx.globalAlpha = isHovered ? 0.18 : 0.1;
+        traceNodeShape(ctx, n.page_type, n.x, n.y, r * (isHovered ? 1.9 : 1.65));
         ctx.fill();
-        ctx.globalAlpha = 1;
+        ctx.restore();
       }
 
       // Background ring to occlude edges behind the node.
       if (!isDimmed) {
-        ctx.beginPath();
-        ctx.fillStyle = BG_COLOR;
-        ctx.arc(n.x, n.y, (isHovered ? r * 1.3 : r) + 1, 0, 2 * Math.PI);
+        ctx.fillStyle = palette.bg;
+        traceNodeShape(ctx, n.page_type, n.x, n.y, (isHovered ? r * 1.3 : r) + 1.5);
         ctx.fill();
       }
 
       // Node body.
-      ctx.beginPath();
       ctx.fillStyle = color;
       ctx.globalAlpha = isDimmed ? 0.15 : 1;
-      ctx.arc(n.x, n.y, isHovered ? r * 1.3 : r, 0, 2 * Math.PI);
+      const displayRadius = isHovered ? r * 1.3 : r;
+      traceNodeShape(ctx, n.page_type, n.x, n.y, displayRadius);
       ctx.fill();
       ctx.globalAlpha = 1;
 
       // Border.
       ctx.lineWidth = isCenter ? 2.5 : isHovered ? 2 : 1;
       ctx.strokeStyle = isCenter
-        ? "#3a302a"
+        ? palette.primary
         : isHovered
           ? color
-          : "rgba(255,255,255,0.85)";
+          : palette.card;
       ctx.stroke();
+
+      if (!mini && !isDimmed && (n.degree ?? 0) >= 5) {
+        ctx.save();
+        ctx.setLineDash([2, 2]);
+        ctx.strokeStyle = isHovered ? color : palette.border;
+        ctx.lineWidth = 1;
+        traceNodeShape(ctx, n.page_type, n.x, n.y, displayRadius + 3.5);
+        ctx.stroke();
+        ctx.restore();
+      }
+
+      if (!mini && !isDimmed) drawNodeMark(ctx, n.page_type, n.x, n.y, displayRadius);
 
       // Label visibility: hide in mini, hide on dimmed, hide when zoom too low
       // (Obsidian-style declutter), always show on hover and on center.
@@ -308,19 +477,32 @@ export function WikiGraph({
         (isHovered || isCenter || globalScale >= 1.2 || (n.degree ?? 0) >= 4);
       if (labelVisible) {
         const fontSize = isHovered ? 12 : 11;
-        ctx.font = `${isHovered ? 600 : 400} ${fontSize}px sans-serif`;
-        ctx.fillStyle = LABEL_COLOR;
+        ctx.font = `${isHovered ? 650 : 500} ${fontSize}px Manrope, sans-serif`;
+        ctx.fillStyle = palette.foreground;
         ctx.globalAlpha = isHovered || isCenter ? 1 : 0.7;
         ctx.textBaseline = "middle";
         ctx.textAlign = "left";
         const text = n.title.length > 24 ? n.title.slice(0, 22) + "…" : n.title;
-        ctx.fillText(text, n.x + r + 5, n.y);
+        const labelX = n.x + r * 1.3 + 6;
+        const labelWidth = ctx.measureText(text).width;
+        ctx.save();
+        ctx.globalAlpha = isHovered || isCenter ? 0.94 : 0.78;
+        ctx.fillStyle = palette.card;
+        ctx.strokeStyle = palette.border;
+        ctx.lineWidth = 1 / Math.max(globalScale, 1);
+        ctx.beginPath();
+        ctx.roundRect(labelX - 4, n.y - fontSize / 2 - 3, labelWidth + 8, fontSize + 6, 4);
+        ctx.fill();
+        ctx.stroke();
+        ctx.restore();
+        ctx.fillStyle = palette.foreground;
+        ctx.fillText(text, labelX, n.y);
         ctx.globalAlpha = 1;
       }
     },
     // hoverVersion bump → callback ref changes → react-force-graph repaints.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [mini, centerSlug, hoverVersion]
+    [mini, centerSlug, hoverVersion, palette]
   );
 
   // --- Custom link colour/width — also bump on hover to trigger repaint ---
@@ -328,14 +510,14 @@ export function WikiGraph({
     (rawLink: object) => {
       const hovered = hoveredIdRef.current;
       const l = rawLink as Link;
-      if (!hovered) return EDGE_COLOR;
+      if (!hovered) return palette.border;
       const s = typeof l.source === "string" ? l.source : l.source.id;
       const t = typeof l.target === "string" ? l.target : l.target.id;
       const hot = s === hovered || t === hovered;
-      return hot ? EDGE_HIGHLIGHT : "rgba(120,112,106,0.08)";
+      return hot ? palette.primary : palette.grid;
     },
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [hoverVersion]
+    [hoverVersion, palette]
   );
   const linkWidth = React.useCallback(
     (rawLink: object) => {
@@ -353,6 +535,20 @@ export function WikiGraph({
   // --- Scope hulls (workspace boundaries) drawn beneath nodes ---
   const drawScopeHulls = React.useCallback(
     (ctx: CanvasRenderingContext2D) => {
+      if (!mini) {
+        ctx.save();
+        ctx.strokeStyle = palette.grid;
+        ctx.lineWidth = 1;
+        ctx.beginPath();
+        for (let p = -2400; p <= 2400; p += 80) {
+          ctx.moveTo(p, -2400);
+          ctx.lineTo(p, 2400);
+          ctx.moveTo(-2400, p);
+          ctx.lineTo(2400, p);
+        }
+        ctx.stroke();
+        ctx.restore();
+      }
       if (mini) return;
       // Group project-scoped nodes by scope_name.
       const groups: Record<string, Node[]> = {};
@@ -431,7 +627,7 @@ export function WikiGraph({
         ctx.restore();
       });
     },
-    [mini, nodes]
+    [mini, nodes, palette]
   );
 
   const handleNodeClick = React.useCallback(
@@ -494,7 +690,7 @@ export function WikiGraph({
     <div
       ref={containerRef}
       className={`relative w-full overflow-hidden ${mini ? "rounded-xl border border-border" : ""}`}
-      style={{ height: height ?? "100%", background: BG_COLOR }}
+      style={{ height: height ?? "100%", background: palette.bg }}
       onMouseMove={(e) => {
         const rect = containerRef.current?.getBoundingClientRect();
         if (!rect) return;
@@ -508,7 +704,7 @@ export function WikiGraph({
         width={dimensions.w}
         height={dimensions.h}
         graphData={graphData}
-        backgroundColor={BG_COLOR}
+        backgroundColor={palette.bg}
         nodeId="id"
         nodeRelSize={1}
         nodeCanvasObject={drawNode}
@@ -522,6 +718,17 @@ export function WikiGraph({
         }}
         linkColor={linkColor}
         linkWidth={linkWidth}
+        linkDirectionalParticles={(rawLink: object) => {
+          const hovered = hoveredIdRef.current;
+          if (!hovered) return 0;
+          const link = rawLink as Link;
+          const source = typeof link.source === "string" ? link.source : link.source.id;
+          const target = typeof link.target === "string" ? link.target : link.target.id;
+          return source === hovered || target === hovered ? 2 : 0;
+        }}
+        linkDirectionalParticleColor={() => palette.primary}
+        linkDirectionalParticleWidth={1.8}
+        linkDirectionalParticleSpeed={0.004}
         onNodeClick={handleNodeClick}
         onNodeHover={handleNodeHover}
         onRenderFramePre={drawScopeHulls}
@@ -576,8 +783,11 @@ export function WikiGraph({
 
       {/* Legend */}
       {!mini && (
-        <div className="absolute bottom-3 left-3 rounded-xl border border-border bg-card/90 backdrop-blur-sm px-3 py-2.5 text-xs shadow-sm max-w-[240px]">
-          <div className="mb-1.5 font-semibold text-foreground text-xs">Node Types</div>
+        <div className="absolute bottom-3 left-3 max-h-[calc(100%-1.5rem)] max-w-[220px] overflow-y-auto rounded-xl border border-border bg-card/85 px-3 py-2.5 text-xs shadow-xl shadow-black/10 backdrop-blur-xl">
+          <div className="mb-2 flex items-center gap-2 font-mono text-[9px] font-semibold uppercase tracking-[0.16em] text-primary">
+            <span className="size-1.5 animate-pulse rounded-full bg-primary" />
+            Graph signals
+          </div>
           <div className="flex flex-col gap-1">
             {Object.entries(typeCounts)
               .sort((a, b) => b[1] - a[1])

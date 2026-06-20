@@ -3,7 +3,7 @@
 // genId() requires a secure context (HTTPS/localhost); fall back for plain HTTP
 function genId(): string {
   if (typeof crypto !== "undefined" && typeof crypto.randomUUID === "function") {
-    return genId();
+    return crypto.randomUUID();
   }
   return "xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx".replace(/[xy]/g, (c) => {
     const r = (Math.random() * 16) | 0;
@@ -12,6 +12,9 @@ function genId(): string {
 }
 
 import { useCallback, useEffect, useRef, useState } from "react";
+import ReactMarkdown from "react-markdown";
+import remarkGfm from "remark-gfm";
+import { Check, Copy } from "lucide-react";
 import { api, apiUpload, ApiError, getToken } from "@/lib/api";
 import { PageHeader } from "@/components/shared/page-header";
 import { Button } from "@/components/ui/button";
@@ -43,6 +46,71 @@ import {
   type ReportFormat,
 } from "@/types/notebooklm";
 import { PlanReviewDialog } from "@/components/knowledge/knowledge-table/plan-review-dialog";
+
+async function copyChatText(text: string) {
+  if (navigator.clipboard?.writeText) return navigator.clipboard.writeText(text);
+  const node = document.createElement("textarea");
+  node.value = text;
+  node.style.position = "fixed";
+  node.style.opacity = "0";
+  document.body.appendChild(node);
+  node.select();
+  document.execCommand("copy");
+  node.remove();
+}
+
+function ChatCopyButton({ text, label = "Copy" }: { text: string; label?: string }) {
+  const [copied, setCopied] = useState(false);
+  return (
+    <button
+      type="button"
+      onClick={async () => {
+        await copyChatText(text);
+        setCopied(true);
+        window.setTimeout(() => setCopied(false), 1500);
+      }}
+      className="inline-flex items-center gap-1 rounded-md px-1.5 py-1 text-[10px] text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+      aria-label={copied ? "Copied" : label}
+    >
+      {copied ? <Check className="size-3" /> : <Copy className="size-3" />}
+      {copied ? "Copied" : label}
+    </button>
+  );
+}
+
+function NotebookChatMarkdown({ text }: { text: string }) {
+  return (
+    <ReactMarkdown
+      remarkPlugins={[remarkGfm]}
+      components={{
+        p: ({ children }) => <p className="mb-2 leading-6 last:mb-0">{children}</p>,
+        h1: ({ children }) => <h1 className="mb-2 mt-4 text-lg font-bold first:mt-0">{children}</h1>,
+        h2: ({ children }) => <h2 className="mb-2 mt-4 text-base font-bold first:mt-0">{children}</h2>,
+        h3: ({ children }) => <h3 className="mb-1.5 mt-3 font-semibold first:mt-0">{children}</h3>,
+        ul: ({ children }) => <ul className="mb-2 ml-5 list-disc space-y-1">{children}</ul>,
+        ol: ({ children }) => <ol className="mb-2 ml-5 list-decimal space-y-1">{children}</ol>,
+        a: ({ href, children }) => <a href={href} target="_blank" rel="noreferrer" className="text-primary underline underline-offset-2">{children}</a>,
+        code: ({ className, children }) => {
+          const code = String(children).replace(/\n$/, "");
+          if (!className) return <code className="rounded bg-primary/10 px-1 py-0.5 font-mono text-xs text-primary">{children}</code>;
+          return (
+            <div className="my-3 overflow-hidden rounded-xl border border-emerald-400/20 bg-[#06110d]">
+              <div className="flex items-center justify-between border-b border-white/10 px-3 py-1.5 text-emerald-200/70">
+                <span className="font-mono text-[9px] uppercase tracking-widest">{className.replace("language-", "") || "code"}</span>
+                <ChatCopyButton text={code} label="Copy code" />
+              </div>
+              <pre className="overflow-x-auto p-3"><code className="font-mono text-xs leading-6 text-emerald-50">{code}</code></pre>
+            </div>
+          );
+        },
+        pre: ({ children }) => <>{children}</>,
+        blockquote: ({ children }) => <blockquote className="my-2 border-l-2 border-primary/50 pl-3 text-muted-foreground">{children}</blockquote>,
+      }}
+    >
+      {text}
+    </ReactMarkdown>
+  );
+}
 
 /* ─── Import Cookies dialog ──────────────────────────────────────────────── */
 
@@ -572,7 +640,7 @@ function SourcesTab({
 
   return (
     <div className="flex-1 flex flex-col min-h-0">
-      <div className="flex items-center justify-between px-6 py-3 border-b border-black/[0.06] shrink-0">
+      <div className="flex items-center justify-between px-6 py-3 border-b border-border shrink-0">
         <span className="text-[12px] text-muted-foreground">
           {sources.length} source{sources.length !== 1 ? "s" : ""}
         </span>
@@ -603,7 +671,7 @@ function SourcesTab({
             {sources.map((src) => (
               <div
                 key={src.id}
-                className="group flex items-center gap-3 rounded-lg border border-black/[0.06] bg-white px-3 py-2.5"
+                className="group flex items-center gap-3 rounded-lg border border-border bg-card px-3 py-2.5"
               >
                 <span className="material-symbols-outlined text-[18px] text-muted-foreground/50 shrink-0" style={{ fontVariationSettings: "'FILL' 0, 'wght' 300" }}>
                   {src.url ? "link" : "article"}
@@ -792,7 +860,7 @@ function PreviewDialog({
                   ? opt.correct
                     ? "border-green-300 bg-green-50 text-green-800"
                     : "border-border/40 bg-muted/10 text-muted-foreground"
-                  : "border-border bg-white"
+                  : "border-border bg-card"
               )}>
                 <span className={cn("w-5 h-5 rounded-full border text-[11px] font-bold flex items-center justify-center shrink-0",
                   isRevealed && opt.correct ? "border-green-500 bg-green-500 text-white" : "border-border text-muted-foreground"
@@ -889,7 +957,7 @@ function PreviewDialog({
     if (previewData?.kind === "report") {
       return (
         <div
-          className="prose prose-sm max-w-none overflow-y-auto rounded-lg border border-border bg-white px-6 py-5"
+          className="prose prose-sm max-w-none overflow-y-auto rounded-lg border border-border bg-card px-6 py-5 dark:prose-invert"
           style={{ maxHeight: "72vh" }}
           dangerouslySetInnerHTML={{ __html: mdToHtml(previewData.markdown) }}
         />
@@ -911,7 +979,7 @@ function PreviewDialog({
             </thead>
             <tbody>
               {rows.map((row, ri) => (
-                <tr key={ri} className={ri % 2 === 0 ? "bg-white" : "bg-muted/20"}>
+                <tr key={ri} className={ri % 2 === 0 ? "bg-card" : "bg-muted/20"}>
                   {row.map((cell, ci) => (
                     <td key={ci} className="px-3 py-1.5 border-b border-border/30 align-top">{cell}</td>
                   ))}
@@ -1077,7 +1145,7 @@ function StudioTab({
 
   return (
     <div className="flex-1 flex flex-col min-h-0">
-      <div className="flex items-center justify-between px-6 py-3 border-b border-black/[0.06] shrink-0">
+      <div className="flex items-center justify-between px-6 py-3 border-b border-border shrink-0">
         <span className="text-[12px] text-muted-foreground">
           {artifacts.length} artifact{artifacts.length !== 1 ? "s" : ""}
         </span>
@@ -1119,7 +1187,7 @@ function StudioTab({
               const track = ingestTracks.get(art.id);
 
               return (
-                <div key={art.id} className="flex items-start gap-3 rounded-lg border border-black/[0.06] bg-white p-3">
+                <div key={art.id} className="flex items-start gap-3 rounded-lg border border-border bg-card p-3">
                   <span
                     className="material-symbols-outlined text-[22px] text-muted-foreground/60 shrink-0 mt-0.5"
                     style={{ fontVariationSettings: "'FILL' 0, 'wght' 300, 'GRAD' 0, 'opsz' 22" }}
@@ -1255,7 +1323,7 @@ function StudioTab({
 
 /* ─── Chat tab ───────────────────────────────────────────────────────────── */
 
-function ChatTab({ notebookId, notebookTitle }: { notebookId: string; notebookTitle: string }) {
+function ChatTab({ notebookId, notebookTitle, sourceCount }: { notebookId: string; notebookTitle: string; sourceCount: number }) {
   type IngestTrack = { sourceId: string; status: string };
 
   const [messages, setMessages] = useState<ChatMessage[]>([]);
@@ -1271,7 +1339,12 @@ function ChatTab({ notebookId, notebookTitle }: { notebookId: string; notebookTi
 
   useEffect(() => { ingestTrackRef.current = ingestTrack; }, [ingestTrack]);
 
-  useEffect(() => { setIngestTrack(null); }, [notebookId]);
+  useEffect(() => {
+    setIngestTrack(null);
+    setMessages([]);
+    setConversationId(null);
+    setInput("");
+  }, [notebookId]);
 
   useEffect(() => {
     if (ingestPollRef.current) clearInterval(ingestPollRef.current);
@@ -1391,19 +1464,21 @@ function ChatTab({ notebookId, notebookTitle }: { notebookId: string; notebookTi
 
   return (
     <div className="flex-1 flex flex-col min-h-0">
-      <div className="flex items-center justify-between px-6 py-2.5 border-b border-black/[0.06] shrink-0">
-        <span className="text-[12px] text-muted-foreground">
-          {messages.length > 0 ? `${messages.length} message${messages.length !== 1 ? "s" : ""}` : "Chat"}
-        </span>
+      <div className="flex items-center justify-between gap-3 border-b border-border px-4 py-2.5 sm:px-6 shrink-0">
+        <div className="flex min-w-0 items-center gap-2 text-[12px] text-muted-foreground">
+          <span className="size-2 shrink-0 rounded-full bg-emerald-500 shadow-[0_0_8px_rgba(16,185,129,.65)]" />
+          <span className="truncate">Tự động dùng {sourceCount} nguồn trong notebook</span>
+          {messages.length > 0 && <span className="hidden sm:inline">· {messages.length} tin nhắn</span>}
+        </div>
         {wikiButton}
       </div>
 
-      <div className="flex-1 overflow-y-auto px-6 py-4 space-y-4">
+      <div className="flex-1 overflow-y-auto px-3 py-4 sm:px-6 space-y-4">
         {messages.length === 0 ? (
           <div className="flex flex-col items-center justify-center h-full text-center py-12">
             <span className="material-symbols-outlined text-[40px] text-muted-foreground/20 mb-3">chat</span>
-            <p className="text-[14px] text-muted-foreground font-medium">Ask anything about your sources</p>
-            <p className="text-[12px] text-muted-foreground/60 mt-1">NotebookLM will answer based on the notebook sources.</p>
+            <p className="text-[14px] text-foreground font-medium">Hỏi bất kỳ điều gì về notebook</p>
+            <p className="max-w-md text-[12px] text-muted-foreground mt-1">Arkon tự chọn toàn bộ nguồn đã xử lý. Bạn không cần tích từng nguồn trước khi hỏi.</p>
           </div>
         ) : (
           messages.map((msg) => (
@@ -1413,22 +1488,30 @@ function ChatTab({ notebookId, notebookTitle }: { notebookId: string; notebookTi
               )}
               <div
                 className={cn(
-                  "max-w-[80%] rounded-2xl px-4 py-2.5 text-[13px]",
+                  "group/message relative max-w-[92%] rounded-2xl px-4 py-3 text-[13px] sm:max-w-[82%]",
                   msg.role === "user"
                     ? "bg-primary text-primary-foreground rounded-br-sm"
-                    : "bg-black/[0.04] text-foreground rounded-bl-sm"
+                    : "border border-border/70 bg-card text-foreground shadow-sm rounded-bl-sm"
                 )}
               >
-                <p className="whitespace-pre-wrap leading-relaxed">{msg.text}</p>
+                {msg.role === "assistant"
+                  ? <NotebookChatMarkdown text={msg.text} />
+                  : <p className="whitespace-pre-wrap leading-relaxed">{msg.text}</p>}
                 {msg.references && msg.references.length > 0 && (
-                  <div className="mt-2 pt-2 border-t border-black/10 space-y-1">
-                    {msg.references.slice(0, 3).map((ref, i) => (
-                      <p key={i} className="text-[11px] text-foreground/50 line-clamp-2">
-                        [{ref.citation_number ?? i + 1}] {ref.cited_text}
-                      </p>
-                    ))}
-                  </div>
+                  <details className="mt-3 border-t border-border pt-2">
+                    <summary className="cursor-pointer text-[11px] font-medium text-primary">{msg.references.length} nguồn trích dẫn</summary>
+                    <div className="mt-2 space-y-1.5">
+                      {msg.references.map((ref, i) => (
+                        <p key={`${ref.source_id}-${i}`} className="rounded-md bg-muted/50 px-2 py-1.5 text-[11px] leading-5 text-muted-foreground">
+                          [{ref.citation_number ?? i + 1}] {ref.cited_text || "Nguồn tham chiếu"}
+                        </p>
+                      ))}
+                    </div>
+                  </details>
                 )}
+                <div className={cn("mt-1 flex justify-end", msg.role === "user" && "[&_button]:text-primary-foreground/70")}>
+                  <ChatCopyButton text={msg.text} label="Copy" />
+                </div>
               </div>
               {msg.role === "user" && (
                 <span className="material-symbols-outlined text-[18px] text-muted-foreground/40 shrink-0 mt-1">person</span>
@@ -1439,15 +1522,20 @@ function ChatTab({ notebookId, notebookTitle }: { notebookId: string; notebookTi
         {sending && (
           <div className="flex gap-3 justify-start">
             <span className="material-symbols-outlined text-[18px] text-primary/60 shrink-0 mt-1">smart_toy</span>
-            <div className="bg-black/[0.04] rounded-2xl rounded-bl-sm px-4 py-2.5">
-              <span className="material-symbols-outlined text-[14px] animate-spin text-muted-foreground">progress_activity</span>
+            <div className="flex items-center gap-2 rounded-2xl rounded-bl-sm border border-border bg-card px-4 py-2.5 shadow-sm">
+              <span className="flex gap-1" aria-label="NotebookLM đang trả lời">
+                <i className="size-1.5 animate-pulse rounded-full bg-primary [animation-delay:-.3s]" />
+                <i className="size-1.5 animate-pulse rounded-full bg-primary [animation-delay:-.15s]" />
+                <i className="size-1.5 animate-pulse rounded-full bg-primary" />
+              </span>
+              <span className="text-[11px] text-muted-foreground">Đang đọc {sourceCount} nguồn…</span>
             </div>
           </div>
         )}
         <div ref={bottomRef} />
       </div>
 
-      <div className="shrink-0 px-6 py-3 border-t border-black/[0.06] flex items-end gap-2">
+      <div className="shrink-0 border-t border-border bg-background/80 px-3 py-3 backdrop-blur sm:px-6 flex items-end gap-2">
         {conversationId && (
           <button
             className="shrink-0 text-muted-foreground/50 hover:text-muted-foreground text-[11px] underline underline-offset-2"
@@ -1465,7 +1553,7 @@ function ChatTab({ notebookId, notebookTitle }: { notebookId: string; notebookTi
           }}
           placeholder="Ask a question… (Enter to send, Shift+Enter for new line)"
           rows={2}
-          className="flex-1 rounded-xl border border-border bg-white px-4 py-2.5 text-[13px] text-foreground placeholder:text-muted-foreground/50 focus:outline-none focus:ring-2 focus:ring-primary/30 resize-none"
+          className="flex-1 rounded-xl border border-border bg-card px-4 py-2.5 text-[13px] text-foreground placeholder:text-muted-foreground/50 focus:outline-none focus:ring-2 focus:ring-primary/30 resize-none"
           disabled={sending}
         />
         <Button
@@ -1713,8 +1801,8 @@ export default function NotebookLMPage() {
 
       <div className="flex flex-1 min-h-0">
         {/* ── Notebook list (left panel) ── */}
-        <div className="w-64 shrink-0 border-r border-black/[0.06] flex flex-col">
-          <div className="px-4 py-3 border-b border-black/[0.06]">
+        <div className="w-64 shrink-0 border-r border-border flex flex-col">
+          <div className="px-4 py-3 border-b border-border">
             <p className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground/60">Notebooks</p>
           </div>
           <div className="flex-1 overflow-y-auto py-1">
@@ -1787,7 +1875,7 @@ export default function NotebookLMPage() {
           ) : (
             <>
               {/* Notebook header + tabs */}
-              <div className="shrink-0 border-b border-black/[0.06]">
+              <div className="shrink-0 border-b border-border">
                 <div className="px-6 pt-3 pb-0">
                   <h2 className="text-[15px] font-semibold truncate">{selectedNotebook.title}</h2>
                 </div>
@@ -1827,7 +1915,11 @@ export default function NotebookLMPage() {
                 />
               )}
               {tab === "chat" && (
-                <ChatTab notebookId={selectedId!} notebookTitle={selectedNotebook?.title ?? ""} />
+                <ChatTab
+                  notebookId={selectedId!}
+                  notebookTitle={selectedNotebook?.title ?? ""}
+                  sourceCount={selectedNotebook?.sources_count ?? 0}
+                />
               )}
             </>
           )}

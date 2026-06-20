@@ -2,6 +2,7 @@
 
 import React from "react";
 import { api } from "@/lib/api";
+import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
@@ -12,6 +13,15 @@ import {
 import { Badge } from "@/components/ui/badge";
 import { Source } from "./types";
 
+type PlanCandidate = {
+  slug: string;
+  title: string;
+  page_type: string;
+  summary?: string;
+  similarity: number;
+  match_method?: string;
+};
+
 type PlanPage = {
   action: "CREATE" | "UPDATE";
   slug: string;
@@ -20,6 +30,10 @@ type PlanPage = {
   entity_names?: string[];
   priority?: number;
   related_kb_pages?: string[];
+  match_confidence?: number;
+  match_method?: string;
+  match_reason?: string;
+  candidates?: PlanCandidate[];
 };
 
 type PlanData = {
@@ -155,6 +169,50 @@ function EditForm({
         />
       </div>
 
+      {(draft.candidates?.length ?? 0) > 0 && (
+        <div className="rounded-lg border border-border bg-muted/25 p-2.5">
+          <p className="mb-2 text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">
+            Existing page candidates
+          </p>
+          <div className="space-y-1.5">
+            {draft.candidates!.slice(0, 3).map((candidate) => (
+              <button
+                key={candidate.slug}
+                type="button"
+                onClick={() => setDraft((current) => ({
+                  ...current,
+                  action: "UPDATE",
+                  slug: candidate.slug,
+                  title: candidate.title,
+                  page_type: candidate.page_type,
+                  match_confidence: candidate.similarity,
+                  match_method: candidate.match_method || "reviewer_selected",
+                  match_reason: "Reviewer selected an existing candidate",
+                }))}
+                className={cn(
+                  "flex w-full items-start gap-2 rounded-md border px-2.5 py-2 text-left transition-colors",
+                  draft.action === "UPDATE" && draft.slug === candidate.slug
+                    ? "border-primary/50 bg-primary/10"
+                    : "border-border bg-background hover:border-primary/30 hover:bg-primary/5"
+                )}
+              >
+                <span className="material-symbols-outlined mt-0.5 text-[14px] text-primary">merge</span>
+                <span className="min-w-0 flex-1">
+                  <span className="block truncate text-xs font-medium">{candidate.title}</span>
+                  <span className="block truncate font-mono text-[9px] text-muted-foreground">{candidate.slug}</span>
+                  {candidate.summary && (
+                    <span className="mt-1 line-clamp-2 block text-[10px] leading-4 text-muted-foreground">
+                      {candidate.summary}
+                    </span>
+                  )}
+                </span>
+                <span className="font-mono text-[10px] text-primary">{Math.round(candidate.similarity * 100)}%</span>
+              </button>
+            ))}
+          </div>
+        </div>
+      )}
+
       <div className="flex items-center justify-end gap-2">
         <Button variant="ghost" size="sm" onClick={onCancel}>
           Cancel
@@ -212,6 +270,22 @@ function PlanPageRow({
             {page.entity_names.slice(0, 6).join(", ")}
             {page.entity_names.length > 6 &&
               ` +${page.entity_names.length - 6} more`}
+          </p>
+        )}
+        {(page.match_reason || page.match_confidence !== undefined) && (
+          <div className="mt-2 flex items-start gap-2 rounded-md border border-border/70 bg-muted/30 px-2.5 py-2 text-[10px] text-muted-foreground">
+            <span className="material-symbols-outlined text-[13px] text-primary">troubleshoot</span>
+            <span className="min-w-0 flex-1">
+              {page.match_reason || page.match_method || "Knowledge-base reconciliation"}
+            </span>
+            {page.match_confidence !== undefined && (
+              <span className="shrink-0 font-mono text-primary">{Math.round(page.match_confidence * 100)}%</span>
+            )}
+          </div>
+        )}
+        {(page.candidates?.length ?? 0) > 0 && page.action === "CREATE" && (
+          <p className="mt-1.5 text-[10px] text-amber-600 dark:text-amber-300">
+            {page.candidates!.length} trang cũ gần giống — Edit để chọn nếu đây là cùng một concept.
           </p>
         )}
       </div>

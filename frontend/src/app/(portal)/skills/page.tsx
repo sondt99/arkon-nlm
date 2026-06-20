@@ -318,7 +318,7 @@ export default function SkillsPage() {
                   <button
                     id="force-submit-button"
                     onClick={handleSubmitContribution}
-                    className="h-8 px-4 flex items-center justify-center bg-[#c2652a] text-white rounded-lg font-bold text-xs uppercase tracking-wider hover:opacity-90 shadow-lg transition-all"
+                    className="h-8 px-4 flex items-center justify-center bg-primary text-primary-foreground rounded-lg font-bold text-xs uppercase tracking-wider hover:bg-primary/90 shadow-lg transition-all"
                   >
                     Contribute
                   </button>
@@ -394,7 +394,7 @@ export default function SkillsPage() {
                     variant="default"
                     size="sm"
                     onClick={() => handleApprove(reviewContributionId)}
-                    className="h-8 gap-2 bg-[#c2652a] text-white hover:opacity-90 shadow-lg transition-all font-bold"
+                    className="h-8 gap-2 bg-primary text-primary-foreground hover:bg-primary/90 shadow-lg transition-all font-bold"
                   >
                     <span className="material-symbols-outlined text-sm">check_circle</span>
                     Approve & Merge

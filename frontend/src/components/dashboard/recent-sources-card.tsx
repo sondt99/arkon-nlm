@@ -75,8 +75,9 @@ export function RecentSourcesCard() {
                   <Badge
                     variant="outline"
                     style={{
-                      borderColor: source.knowledge_type_color,
-                      color: source.knowledge_type_color,
+                      borderColor: `color-mix(in srgb, ${source.knowledge_type_color} 45%, var(--border))`,
+                      color: `color-mix(in srgb, ${source.knowledge_type_color} 65%, var(--foreground))`,
+                      backgroundColor: `color-mix(in srgb, ${source.knowledge_type_color} 12%, var(--card))`,
                     }}
                     className="text-xs"
                   >
@@ -95,15 +96,15 @@ export function RecentSourcesCard() {
 
 function StatusBadge({ status }: { status: string }) {
   const variants: Record<string, string> = {
-    ready: "bg-green-50 text-green-700",
-    processing: "bg-yellow-50 text-yellow-700",
-    error: "bg-destructive/10 text-destructive",
-    pending: "bg-secondary text-muted-foreground",
+    ready: "tone-badge tone-teal",
+    processing: "tone-badge tone-amber",
+    error: "tone-badge tone-danger",
+    pending: "tone-badge tone-neutral",
   };
 
   return (
     <span
-      className={`text-xs px-2 py-0.5 rounded-full font-medium ${
+      className={`${
         variants[status] || variants.pending
       }`}
     >

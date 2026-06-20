@@ -97,10 +97,10 @@ export function ProjectList({ projects, loading, isAdmin, onEdit, onOpen, onRefr
               <div className="flex items-center gap-1.5 shrink-0">
                 <Badge
                   variant="outline"
-                  className={`text-xs ${
+                  className={`tone-badge ${
                     project.workspace_type === "customer"
-                      ? "text-violet-600 border-violet-300"
-                      : "text-sky-600 border-sky-300"
+                      ? "tone-violet"
+                      : "tone-blue"
                   }`}
                 >
                   {project.workspace_type === "customer" ? "Customer" : "Project"}
@@ -109,8 +109,8 @@ export function ProjectList({ projects, loading, isAdmin, onEdit, onOpen, onRefr
                   variant="outline"
                   className={
                     project.status === "active"
-                      ? "text-green-600 border-green-300"
-                      : "text-muted-foreground border-muted"
+                      ? "tone-badge tone-teal"
+                      : "tone-badge tone-neutral"
                   }
                 >
                   {project.status}

@@ -1057,6 +1057,8 @@ async def nlm_chat(
         result = await nlm_chat_ask(nlm_id, body.question, body.conversation_id)
         logger.info(f"NLM chat OK: answer_len={len(result.get('answer',''))}")
         return result
+    except ValueError as e:
+        raise HTTPException(status_code=409, detail=str(e))
     except Exception as e:
         logger.error(f"NLM chat error: {e}")
         raise _nlm_error(e)

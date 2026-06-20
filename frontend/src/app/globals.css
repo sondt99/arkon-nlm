@@ -63,25 +63,25 @@
 }
 
 :root {
-  /* Sahara Warm Palette */
-  --background: #faf5ee;
-  --foreground: #3a302a;
-  --card: #f6f0e8;
-  --card-foreground: #3a302a;
-  --popover: #f6f0e8;
-  --popover-foreground: #3a302a;
-  --primary: #c2652a;
+  /* Arkon Light — clean lab terminal */
+  --background: #f2f7f4;
+  --foreground: #10251c;
+  --card: #fbfdfc;
+  --card-foreground: #10251c;
+  --popover: #ffffff;
+  --popover-foreground: #10251c;
+  --primary: #087f5b;
   --primary-foreground: #ffffff;
-  --secondary: #ece6dc;
-  --secondary-foreground: #605850;
-  --muted: #ece6dc;
-  --muted-foreground: #78706a;
-  --accent: #ece6dc;
-  --accent-foreground: #3a302a;
-  --destructive: #c0392b;
-  --border: rgba(216, 208, 200, 0.6);
-  --input: rgba(216, 208, 200, 0.6);
-  --ring: #c2652a;
+  --secondary: #e4eee8;
+  --secondary-foreground: #284a3c;
+  --muted: #e6efea;
+  --muted-foreground: #64766e;
+  --accent: #dcf5e8;
+  --accent-foreground: #075e45;
+  --destructive: #d13b4a;
+  --border: rgba(22, 91, 64, 0.15);
+  --input: rgba(22, 91, 64, 0.2);
+  --ring: #0aa574;
   /* Charts */
   --chart-1: #c2652a;
   --chart-2: #e08850;
@@ -90,22 +90,142 @@
   --chart-5: #78706a;
   --radius: 0.625rem;
   /* Sidebar */
-  --sidebar: #faf5ee;
-  --sidebar-foreground: #3a302a;
-  --sidebar-primary: #c2652a;
+  --sidebar: #edf4f0;
+  --sidebar-foreground: #173a2b;
+  --sidebar-primary: #087f5b;
   --sidebar-primary-foreground: #ffffff;
-  --sidebar-accent: rgba(194, 101, 42, 0.1);
-  --sidebar-accent-foreground: #c2652a;
-  --sidebar-border: rgba(216, 208, 200, 0.6);
-  --sidebar-ring: #c2652a;
+  --sidebar-accent: rgba(8, 127, 91, 0.1);
+  --sidebar-accent-foreground: #087f5b;
+  --sidebar-border: rgba(22, 91, 64, 0.13);
+  --sidebar-ring: #0aa574;
   /* Sahara extras */
-  --sahara: #c2652a;
+  --sahara: #087f5b;
   --sahara-foreground: #ffffff;
-  --sahara-container: #e08850;
-  --sahara-muted: #f0a878;
-  --surface: #f6f0e8;
-  --surface-variant: #ece6dc;
+  --sahara-container: #0aa574;
+  --sahara-muted: #51cf99;
+  --surface: #fbfdfc;
+  --surface-variant: #e6efea;
+  --grid-line: rgba(8, 127, 91, 0.045);
+  --glow: rgba(10, 165, 116, 0.12);
 }
+
+.dark {
+  --background: #050c0a;
+  --foreground: #d8eee3;
+  --card: #0a1511;
+  --card-foreground: #d8eee3;
+  --popover: #0c1914;
+  --popover-foreground: #d8eee3;
+  --primary: #21e68a;
+  --primary-foreground: #02150c;
+  --secondary: #10231b;
+  --secondary-foreground: #b7d8c7;
+  --muted: #0f2019;
+  --muted-foreground: #789487;
+  --accent: #0d2b20;
+  --accent-foreground: #68f0ae;
+  --destructive: #ff6375;
+  --border: rgba(80, 224, 154, 0.14);
+  --input: rgba(80, 224, 154, 0.2);
+  --ring: #21e68a;
+  --chart-1: #21e68a;
+  --chart-2: #25c9e8;
+  --chart-3: #a2f5c9;
+  --chart-4: #127a51;
+  --chart-5: #789487;
+  --sidebar: #07110d;
+  --sidebar-foreground: #c9e5d6;
+  --sidebar-primary: #21e68a;
+  --sidebar-primary-foreground: #02150c;
+  --sidebar-accent: rgba(33, 230, 138, 0.1);
+  --sidebar-accent-foreground: #68f0ae;
+  --sidebar-border: rgba(80, 224, 154, 0.12);
+  --sidebar-ring: #21e68a;
+  --sahara: #21e68a;
+  --sahara-foreground: #02150c;
+  --sahara-container: #128a59;
+  --sahara-muted: #68f0ae;
+  --surface: #0a1511;
+  --surface-variant: #0f2019;
+  --grid-line: rgba(33, 230, 138, 0.035);
+  --glow: rgba(33, 230, 138, 0.1);
+}
+
+/* Data classification colors. These are intentionally separate from the
+   green product accent, with opaque same-hue surfaces to prevent color mixing. */
+:root {
+  --tone-blue-fg: #1d4ed8;
+  --tone-blue-bg: #e8f0ff;
+  --tone-blue-border: #b9cffd;
+  --tone-violet-fg: #6d28d9;
+  --tone-violet-bg: #f1eafe;
+  --tone-violet-border: #d7c5fb;
+  --tone-amber-fg: #9a5700;
+  --tone-amber-bg: #fff3d6;
+  --tone-amber-border: #f4d38b;
+  --tone-teal-fg: #08756a;
+  --tone-teal-bg: #dcf5ef;
+  --tone-teal-border: #9eddd0;
+  --tone-pink-fg: #b42363;
+  --tone-pink-bg: #fde8f1;
+  --tone-pink-border: #f5b9d1;
+  --tone-cyan-fg: #0e7490;
+  --tone-cyan-bg: #e0f5fa;
+  --tone-cyan-border: #a5dfe9;
+  --tone-slate-fg: #526171;
+  --tone-slate-bg: #edf1f4;
+  --tone-slate-border: #ccd5dc;
+}
+
+.dark {
+  --tone-blue-fg: #9fc5ff;
+  --tone-blue-bg: #102447;
+  --tone-blue-border: #294f86;
+  --tone-violet-fg: #cbb5ff;
+  --tone-violet-bg: #261b43;
+  --tone-violet-border: #513a7d;
+  --tone-amber-fg: #ffd078;
+  --tone-amber-bg: #35260d;
+  --tone-amber-border: #6d501d;
+  --tone-teal-fg: #7ce7d4;
+  --tone-teal-bg: #0c302a;
+  --tone-teal-border: #25645a;
+  --tone-pink-fg: #ffaad0;
+  --tone-pink-bg: #3b1728;
+  --tone-pink-border: #74324f;
+  --tone-cyan-fg: #86dff2;
+  --tone-cyan-bg: #102f38;
+  --tone-cyan-border: #286271;
+  --tone-slate-fg: #b8c5cf;
+  --tone-slate-bg: #1b252b;
+  --tone-slate-border: #3b4952;
+}
+
+.scope-badge,
+.wiki-type-badge,
+.tone-badge {
+  display: inline-flex;
+  align-items: center;
+  overflow: visible;
+  white-space: nowrap;
+  border: 1px solid;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 650;
+  line-height: 1.25rem;
+}
+
+.scope-badge { padding: 0 0.625rem; }
+.wiki-type-badge { gap: 0.25rem; padding: 0 0.5rem; }
+.tone-badge { padding: 0 0.5rem; }
+.scope-badge--global, .wiki-type--synthesis, .tone-blue { color: var(--tone-blue-fg); background: var(--tone-blue-bg); border-color: var(--tone-blue-border); }
+.scope-badge--department, .wiki-type--source, .tone-violet { color: var(--tone-violet-fg); background: var(--tone-violet-bg); border-color: var(--tone-violet-border); }
+.scope-badge--workspace, .wiki-type--concept, .tone-amber { color: var(--tone-amber-fg); background: var(--tone-amber-bg); border-color: var(--tone-amber-border); }
+.scope-badge--team, .tone-teal { color: var(--tone-teal-fg); background: var(--tone-teal-bg); border-color: var(--tone-teal-border); }
+.wiki-type--entity { color: var(--tone-pink-fg); background: var(--tone-pink-bg); border-color: var(--tone-pink-border); }
+.wiki-type--topic, .tone-cyan { color: var(--tone-cyan-fg); background: var(--tone-cyan-bg); border-color: var(--tone-cyan-border); }
+.scope-badge--neutral, .wiki-type--neutral, .tone-neutral { color: var(--tone-slate-fg); background: var(--tone-slate-bg); border-color: var(--tone-slate-border); }
+.tone-danger { color: var(--destructive); background: color-mix(in srgb, var(--destructive) 12%, var(--card)); border-color: color-mix(in srgb, var(--destructive) 35%, var(--border)); }
 
 @layer base {
   * {
@@ -114,6 +234,11 @@
 
   body {
     @apply bg-background text-foreground antialiased;
+    background-image:
+      radial-gradient(circle at 82% -10%, var(--glow), transparent 34rem),
+      linear-gradient(var(--grid-line) 1px, transparent 1px),
+      linear-gradient(90deg, var(--grid-line) 1px, transparent 1px);
+    background-size: auto, 32px 32px, 32px 32px;
   }
 
   html {
@@ -138,9 +263,107 @@
   font-variation-settings: 'FILL' 1, 'wght' 400, 'GRAD' 0, 'opsz' 24;
 }
 
+/* Never rotate the raw Material Symbols ligature text while its webfont is
+   loading. Convert every spinning material icon into a font-independent CSS
+   loader so strings such as `progress_activity` cannot flash on screen. */
+.material-symbols-outlined.animate-spin {
+  position: relative;
+  display: inline-block;
+  width: 1em;
+  height: 1em;
+  overflow: hidden;
+  color: transparent !important;
+  animation: none !important;
+  vertical-align: -0.125em;
+}
+
+.material-symbols-outlined.animate-spin::after {
+  content: "";
+  position: absolute;
+  inset: 10%;
+  border: max(2px, 0.08em) solid color-mix(in srgb, var(--primary) 24%, transparent);
+  border-top-color: var(--primary);
+  border-radius: 999px;
+  animation: arkon-spinner 700ms linear infinite;
+}
+
+@keyframes arkon-spinner {
+  to { transform: rotate(360deg); }
+}
+
 /* Sahara shadow utility */
 .shadow-sahara {
-  box-shadow: 0 2px 16px rgba(58, 48, 42, 0.04);
+  box-shadow: 0 12px 36px rgba(2, 24, 15, 0.06), 0 0 0 1px var(--grid-line);
+}
+
+.dark .shadow-sahara {
+  box-shadow: 0 16px 44px rgba(0, 0, 0, 0.28), 0 0 24px rgba(33, 230, 138, 0.025);
+}
+
+.app-shell {
+  display: flex;
+  flex-direction: column;
+  background: transparent;
+}
+
+.app-content {
+  position: relative;
+  isolation: isolate;
+}
+
+.app-content::before {
+  content: "ARKON // SECURE KNOWLEDGE GRID";
+  position: fixed;
+  right: 1.25rem;
+  bottom: 0.75rem;
+  z-index: -1;
+  color: var(--primary);
+  font-family: var(--font-mono);
+  font-size: 9px;
+  letter-spacing: 0.18em;
+  opacity: 0.2;
+  pointer-events: none;
+}
+
+[data-slot="card"],
+[data-slot="dialog-content"],
+[data-slot="dropdown-menu-content"] {
+  backdrop-filter: blur(18px);
+}
+
+[data-slot="card"] {
+  background: color-mix(in srgb, var(--card) 92%, transparent);
+  transition: border-color 160ms ease, box-shadow 160ms ease, transform 160ms ease;
+}
+
+[data-slot="card"]:hover {
+  box-shadow: 0 16px 40px rgba(2, 24, 15, 0.09), 0 0 0 1px color-mix(in srgb, var(--primary) 18%, transparent);
+}
+
+[data-slot="button"]:not(:disabled) {
+  transition: transform 140ms ease, box-shadow 140ms ease, background-color 140ms ease;
+}
+
+[data-slot="button"]:not(:disabled):hover {
+  box-shadow: 0 0 18px color-mix(in srgb, var(--primary) 16%, transparent);
+}
+
+input, textarea, select {
+  background-color: color-mix(in srgb, var(--background) 78%, transparent) !important;
+}
+
+::selection {
+  color: var(--primary-foreground);
+  background: var(--primary);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    scroll-behavior: auto !important;
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
 }
 
 /* ─── Notion-style sidebar scrollbar ─── */

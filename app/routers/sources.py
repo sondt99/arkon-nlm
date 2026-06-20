@@ -749,16 +749,66 @@ async def approve_compilation_plan(
 
     if body.modified_plan:
         # Preserve internal keys from original plan
-        internal_keys = {k: plan.plan_json[k] for k in ("_claims", "_entities", "_concepts") if k in plan.plan_json}
+        internal_keys = {
+            k: plan.plan_json[k]
+            for k in ("_claims", "_entities", "_concepts", "reconciliation")
+            if k in plan.plan_json
+        }
         merged = {**body.modified_plan, **internal_keys}
         plan.plan_json = merged
+
+    source = await db.get(Source, source_id)
+    if source is None:
+        raise HTTPException(status_code=404, detail="Source not found")
+
+    # Validate reviewer edits and reconcile races with plans that committed
+    # after this plan was generated.
+    from app.ai.mrp.reducer import _normalize
+    from app.services import wiki_service
+
+    existing_pages = await wiki_service.list_pages(
+        db, limit=10_000,
+        scope_type=source.scope_type or "global", scope_id=source.scope_id,
+    )
+    by_slug = {page.slug: page for page in existing_pages}
+    by_title = {
+        _normalize(page.title or ""): page
+        for page in existing_pages if page.page_type != "source"
+    }
+    validated_pages = []
+    for raw_page in (plan.plan_json or {}).get("pages", []):
+        page = dict(raw_page)
+        action = str(page.get("action", "CREATE")).upper()
+        slug = str(page.get("slug", "")).strip()
+        title = str(page.get("title", "")).strip()
+        if action not in ("CREATE", "UPDATE") or not slug or not title:
+            raise HTTPException(
+                status_code=422,
+                detail=f"Invalid plan page: action, slug and title are required ({title or slug})",
+            )
+        if action == "UPDATE" and slug not in by_slug:
+            raise HTTPException(status_code=422, detail=f"UPDATE target does not exist in this scope: {slug}")
+        if action == "CREATE":
+            collision = by_slug.get(slug)
+            if collision is None and page.get("page_type") != "source":
+                collision = by_title.get(_normalize(title))
+            if collision is not None:
+                page.update(
+                    action="UPDATE", slug=collision.slug, title=collision.title,
+                    page_type=collision.page_type, match_method="approval_recheck",
+                    match_confidence=1.0,
+                    match_reason="Existing page appeared before plan approval",
+                )
+            else:
+                page["action"] = "CREATE"
+        validated_pages.append(page)
+    plan.plan_json = {**(plan.plan_json or {}), "pages": validated_pages}
 
     plan.status = "approved"
     plan.reviewed_by = user.id
     plan.review_note = body.note
     plan.reviewed_at = datetime.now(timezone.utc)
 
-    source = await db.get(Source, source_id)
     if source:
         source.status = "processing"
         source.progress = 78

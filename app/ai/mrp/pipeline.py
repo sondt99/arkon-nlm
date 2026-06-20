@@ -62,6 +62,15 @@ async def run_commit_phase(
 
     scope_type = source.scope_type or "global"
     scope_id = source.scope_id
+    from app.ai.mrp.reducer import _normalize
+
+    scope_pages = await wiki_service.list_pages(
+        session, limit=10_000, scope_type=scope_type, scope_id=scope_id,
+    )
+    pages_by_title = {
+        _normalize(item.title or ""): item
+        for item in scope_pages if item.page_type != "source"
+    }
 
     pages_created = 0
     pages_updated = 0
@@ -93,9 +102,14 @@ async def run_commit_phase(
                 existing = await wiki_service.get_page_by_slug(
                     session, pr.slug, scope_type=scope_type, scope_id=scope_id
                 )
+                if existing is None and pr.page_type != "source":
+                    existing = pages_by_title.get(_normalize(pr.title))
                 if existing is not None:
                     # Fallback to update
                     pr.action = "UPDATE"
+                    pr.slug = existing.slug
+                    pr.title = existing.title
+                    pr.page_type = existing.page_type
                 else:
                     page = await wiki_service.apply_create(
                         session,
@@ -110,6 +124,8 @@ async def run_commit_phase(
                         scope_id=scope_id,
                     )
                     pages_created += 1
+                    if page.page_type != "source":
+                        pages_by_title[_normalize(page.title or "")] = page
 
             if pr.action == "UPDATE":
                 # UPDATE: merge new content with existing page
@@ -294,8 +310,10 @@ async def run_mrp_pipeline(
     # Provision LLM + embedding
     llm = await registry.get_llm()
     embedding_provider = None
+    query_embedding_provider = None
     try:
         embedding_provider = await registry.get_embedding(task="document")
+        query_embedding_provider = await registry.get_embedding(task="search_query")
     except Exception:
         logger.warning(f"MRP: no embedding provider for source={source_id}")
 
@@ -324,6 +342,7 @@ async def run_mrp_pipeline(
         chunk_extracts=chunk_extracts,
         llm=llm,
         embedding_provider=embedding_provider,
+        query_embedding_provider=query_embedding_provider,
         kt_name=kt_name,
         kt_desc=kt_desc,
         tracker=tracker,

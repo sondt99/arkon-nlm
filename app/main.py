@@ -79,6 +79,13 @@ async def lifespan(app: FastAPI):
         except Exception as e:
             logger.warning(f"Could not seed built-in skills: {e}")
 
+        # Seed default extraction hints for security knowledge types (idempotent)
+        try:
+            from app.scripts.seed_security_kt_hints import seed_security_kt_hints
+            await seed_security_kt_hints()
+        except Exception as e:
+            logger.warning(f"Could not seed security KT extraction hints: {e}")
+
         # Warn if sensitive defaults are unchanged
         if settings.secret_key == "change-me-to-a-random-secret-string":
             logger.warning("⚠️  SECRET_KEY is set to the default value — change it before deploying to production!")

@@ -134,13 +134,14 @@ async def ingest_source(
         source.page_offsets = page_offsets
 
         # --- Step 5: Resolve KnowledgeType context ---
-        kt_slug = kt_name = kt_desc = None
+        kt_slug = kt_name = kt_desc = kt_hints = None
         if source.knowledge_type_id:
             kt = await session.get(KnowledgeType, source.knowledge_type_id)
             if kt:
                 kt_slug = kt.slug
                 kt_name = kt.name
                 kt_desc = kt.description
+                kt_hints = kt.extraction_hints
 
         # --- Step 6: Compile into wiki ---
         result = await compile_source_into_wiki(
@@ -150,6 +151,7 @@ async def ingest_source(
             knowledge_type_slug=kt_slug,
             knowledge_type_name=kt_name,
             knowledge_type_description=kt_desc,
+            knowledge_type_extraction_hints=kt_hints,
         )
 
         source.status = "ready"

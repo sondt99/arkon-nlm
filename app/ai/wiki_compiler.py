@@ -294,6 +294,7 @@ async def compile_source_into_wiki(
     knowledge_type_slug: Optional[str],
     knowledge_type_name: Optional[str],
     knowledge_type_description: Optional[str],
+    knowledge_type_extraction_hints: Optional[str] = None,
 ) -> dict:
     """
     Run the wiki compiler for one source. Persists changes via `session`
@@ -325,7 +326,11 @@ async def compile_source_into_wiki(
         session, embedding_provider, full_text, knowledge_type_slug,
         scope_type=src_scope_type, scope_id=src_scope_id,
     )
-    kt_context = _format_kt_context(knowledge_type_name, knowledge_type_description)
+    kt_context = _format_kt_context(
+        knowledge_type_name,
+        knowledge_type_description,
+        knowledge_type_extraction_hints,
+    )
 
     prompt = PROMPT_TEMPLATE.format(
         kt_context=kt_context,
@@ -539,7 +544,11 @@ def _validate_slug(slug: Any) -> Optional[str]:
     return s
 
 
-def _format_kt_context(name: Optional[str], description: Optional[str]) -> str:
+def _format_kt_context(
+    name: Optional[str],
+    description: Optional[str],
+    extraction_hints: Optional[str] = None,
+) -> str:
     if not name:
         return ""
     line = f'Document category: "{name}"'
@@ -549,6 +558,13 @@ def _format_kt_context(name: Optional[str], description: Optional[str]) -> str:
         "\nFavor entity/concept slugs and labels that fit this category. "
         "Reuse existing pages when the same entities appear under this category."
     )
+    if extraction_hints and extraction_hints.strip():
+        line += (
+            "\n\n## Domain-specific extraction rules"
+            "\nThe rules below apply to this document category and OVERRIDE the general"
+            " keep/drop rules above where they conflict:\n\n"
+            + extraction_hints.strip()
+        )
     return line
 
 

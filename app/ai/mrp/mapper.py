@@ -225,7 +225,7 @@ EXTRACTION_PROMPT_TEMPLATE = """\
 Section path: {section_path}
 Character range in full document: {start_char}–{end_char}
 {context_note}
-
+{domain_note}
 ## Text
 {chunk_text}
 
@@ -237,7 +237,7 @@ Extract all knowledge from this section and return a JSON object with this exact
   "entities": [
     {{
       "name": "string — entity canonical name as it appears in text",
-      "type": "string — one of: person|org|product|regulation|location|system|equipment|other",
+      "type": "string — one of: person|org|product|regulation|location|system|equipment|technique|cve|tool|payload|other",
       "aliases": ["string"],
       "local_offset": 0
     }}
@@ -262,7 +262,7 @@ Extract all knowledge from this section and return a JSON object with this exact
     {{
       "from": "string — source entity/concept name",
       "to": "string — target entity/concept name",
-      "type": "string — e.g. owns|part_of|caused_by|regulates|uses|located_in|other"
+      "type": "string — e.g. owns|part_of|caused_by|regulates|uses|located_in|exploits|bypasses|targets|other"
     }}
   ],
   "topics": ["string"]
@@ -280,7 +280,7 @@ Rules:
 """
 
 
-def _build_extraction_prompt(chunk: DocumentChunk) -> str:
+def _build_extraction_prompt(chunk: DocumentChunk, domain_hints: Optional[str] = None) -> str:
     context_note = (
         f"Note: the first {chunk.overlap_prefix_len} chars are context from the previous "
         "section (before the separator line). local_offset values must start from 0 at "
@@ -288,11 +288,17 @@ def _build_extraction_prompt(chunk: DocumentChunk) -> str:
         if chunk.overlap_prefix_len > 0
         else ""
     )
+    domain_note = (
+        f"## Domain-specific extraction rules\n{domain_hints.strip()}\n"
+        if domain_hints and domain_hints.strip()
+        else ""
+    )
     return EXTRACTION_PROMPT_TEMPLATE.format(
         section_path=chunk.section_path,
         start_char=chunk.start_char,
         end_char=chunk.end_char,
         context_note=context_note,
+        domain_note=domain_note,
         chunk_text=chunk.text,
     )
 
@@ -333,12 +339,16 @@ def _convert_offsets(extract: dict, chunk: DocumentChunk) -> dict:
     return extract
 
 
-async def extract_chunk(llm: LLMProvider, chunk: DocumentChunk) -> dict:
+async def extract_chunk(
+    llm: LLMProvider,
+    chunk: DocumentChunk,
+    domain_hints: Optional[str] = None,
+) -> dict:
     """
     Single LLM call to extract structured knowledge from one chunk.
     Returns extract dict with absolute_offset fields. Raises on failure.
     """
-    prompt = _build_extraction_prompt(chunk)
+    prompt = _build_extraction_prompt(chunk, domain_hints=domain_hints)
     raw = await asyncio.wait_for(
         llm.generate(prompt, system=EXTRACTION_SYSTEM, temperature=0.1),
         timeout=EXTRACT_TIMEOUT,
@@ -359,6 +369,7 @@ async def run_map_phase(
     outline_json: Optional[list],
     tracker: ProgressTracker,
     llm: LLMProvider,
+    domain_hints: Optional[str] = None,
 ) -> tuple[str, list]:
     """
     Run Phase 0 (triage) + Phase 1 (MAP).
@@ -422,7 +433,7 @@ async def run_map_phase(
         async with semaphore:
             row = existing_by_idx[chunk.index]
             try:
-                extract = await extract_chunk(llm, chunk)
+                extract = await extract_chunk(llm, chunk, domain_hints=domain_hints)
                 # Serialize mutations and commits — AsyncSession can't handle concurrent state changes
                 async with commit_lock:
                     row.extract_json = extract
@@ -447,7 +458,7 @@ async def run_map_phase(
         for chunk in error_chunks:
             row = existing_by_idx[chunk.index]
             try:
-                extract = await extract_chunk(llm, chunk)
+                extract = await extract_chunk(llm, chunk, domain_hints=domain_hints)
                 row.extract_json = extract
                 row.status = "done"
                 row.error_message = None

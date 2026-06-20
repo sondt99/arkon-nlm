@@ -900,11 +900,12 @@ async def ingest_map_reduce_task(ctx: dict, source_id: str, auto_approve: bool =
 
             registry = ProviderRegistry(session)
 
-            kt_slug = kt_name = kt_desc = None
+            kt_slug = kt_name = kt_desc = kt_hints = None
             if source.knowledge_type_id:
                 kt = await session.get(KnowledgeType, source.knowledge_type_id)
                 if kt:
                     kt_slug, kt_name, kt_desc = kt.slug, kt.name, kt.description
+                    kt_hints = kt.extraction_hints
 
             result = await run_mrp_pipeline(
                 session=session,
@@ -915,6 +916,7 @@ async def ingest_map_reduce_task(ctx: dict, source_id: str, auto_approve: bool =
                 kt_slug=kt_slug,
                 kt_name=kt_name,
                 kt_desc=kt_desc,
+                kt_extraction_hints=kt_hints,
                 auto_approve=auto_approve,
             )
 
@@ -1013,8 +1015,9 @@ async def ingest_refine_task(ctx: dict, source_id: str):
             return result
 
         except BaseException as e:
-            logger.error(f"REFINE failed for {source_id}: {e}")
-            error_msg = str(e)[:500]
+            error_detail = str(e).strip() or type(e).__name__
+            logger.error(f"REFINE failed for {source_id}: {error_detail}")
+            error_msg = error_detail[:500]
 
             async def _mark_error_refine() -> None:
                 from app.database import async_session_factory as _sf
@@ -1025,7 +1028,7 @@ async def ingest_refine_task(ctx: dict, source_id: str):
                         src.status = "error"
                         src.error_message = error_msg
                         src.progress = 0
-                        src.progress_message = f"Error: {str(e)[:200]}"
+                        src.progress_message = f"Error: {error_detail[:200]}"
                         await err_session.commit()
 
             try:

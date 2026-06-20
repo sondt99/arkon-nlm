@@ -227,7 +227,7 @@ async def run_commit_phase(
 
         except Exception as exc:
             logger.error(f"MRP COMMIT failed for '{pr.slug}': {exc}")
-            # Continue with remaining pages — don't fail entire commit
+            raise
 
     # Regenerate index
     await wiki_service.regenerate_index(session, scope_type=scope_type, scope_id=scope_id)
@@ -312,6 +312,7 @@ async def run_mrp_pipeline(
     kt_slug: Optional[str],
     kt_name: Optional[str],
     kt_desc: Optional[str],
+    kt_extraction_hints: Optional[str] = None,
     auto_approve: bool = False,
 ) -> dict:
     """
@@ -360,6 +361,7 @@ async def run_mrp_pipeline(
         outline_json=source.outline_json,
         tracker=tracker,
         llm=llm,
+        domain_hints=kt_extraction_hints,
     )
 
     if not chunk_extracts:
@@ -531,7 +533,13 @@ async def run_refine_pipeline(
         tracker=tracker,
     )
 
-    # Phase 5: COMMIT
+    # Phase 5: COMMIT. Persist the phase marker separately; all wiki page
+    # writes inside run_commit_phase remain one atomic transaction.
+    src = await session.get(Source, source_id)
+    if src:
+        src.pipeline_phase = "commit"
+    await session.commit()
+
     return await run_commit_phase(
         session=session,
         source=source,

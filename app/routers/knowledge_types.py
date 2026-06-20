@@ -30,6 +30,7 @@ class KnowledgeTypeCreate(BaseModel):
     slug: Optional[str] = None
     color: str = "#6366f1"
     description: Optional[str] = None
+    extraction_hints: Optional[str] = None
 
     @field_validator("slug", mode="before")
     @classmethod
@@ -46,6 +47,7 @@ class KnowledgeTypeOut(BaseModel):
     name: str
     color: str
     description: Optional[str]
+    extraction_hints: Optional[str] = None
     sort_order: int
     source_count: int = 0
 
@@ -83,6 +85,7 @@ async def list_knowledge_types(db: AsyncSession = Depends(get_db)):
             name=t.name,
             color=t.color or "#6366f1",
             description=t.description,
+            extraction_hints=t.extraction_hints,
             sort_order=t.sort_order,
             source_count=counts.get(str(t.id), 0),
         )
@@ -112,6 +115,7 @@ async def create_knowledge_type(body: KnowledgeTypeCreate, db: AsyncSession = De
         name=body.name,
         color=body.color,
         description=body.description,
+        extraction_hints=body.extraction_hints,
         sort_order=max_order + 1,
     )
     db.add(kt)
@@ -123,6 +127,7 @@ async def create_knowledge_type(body: KnowledgeTypeCreate, db: AsyncSession = De
         name=kt.name,
         color=kt.color or "#6366f1",
         description=kt.description,
+        extraction_hints=kt.extraction_hints,
         sort_order=kt.sort_order,
         source_count=0,
     )
@@ -145,6 +150,7 @@ async def update_knowledge_type(
         kt.slug = body.slug
     kt.color = body.color
     kt.description = body.description
+    kt.extraction_hints = body.extraction_hints
     await db.flush()
 
     return KnowledgeTypeOut(
@@ -153,6 +159,7 @@ async def update_knowledge_type(
         name=kt.name,
         color=kt.color or "#6366f1",
         description=kt.description,
+        extraction_hints=kt.extraction_hints,
         sort_order=kt.sort_order,
         source_count=0,
     )

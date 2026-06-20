@@ -498,6 +498,13 @@ class KnowledgeType(Base):
         comment="Hex color for UI badge",
     )
     description: Mapped[Optional[str]] = mapped_column(Text)
+    extraction_hints: Mapped[Optional[str]] = mapped_column(
+        Text, nullable=True,
+        comment=(
+            "Domain-specific Markdown instructions injected into the wiki compiler prompt. "
+            "Overrides general keep/drop rules for specialized domains (e.g. pentest, redteam)."
+        ),
+    )
     sort_order: Mapped[int] = mapped_column(Integer, default=0)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now()

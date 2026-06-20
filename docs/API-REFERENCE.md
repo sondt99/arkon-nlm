@@ -366,24 +366,49 @@ Chấp nhận JWT qua header HOẶC `?token=<jwt>` query param.
 ### GET /api/knowledge-types
 Danh sách tất cả knowledge types.
 
+**Response 200:**
+```json
+[
+  {
+    "id": "uuid",
+    "slug": "pentest",
+    "name": "Pentest",
+    "color": "#ef4444",
+    "description": "Tài liệu pentest và kỹ thuật tấn công",
+    "extraction_hints": "KEEP lệnh platform-specific...",
+    "sort_order": 1,
+    "source_count": 12
+  }
+]
+```
+
 ### POST /api/knowledge-types
-Tạo knowledge type mới. Yêu cầu admin.
+Tạo knowledge type mới. Yêu cầu `documents.create`.
 
 **Body:**
 ```json
 {
   "name": "string",
-  "slug": "string",
-  "description": "string",
-  "icon": "material-symbol-name"
+  "slug": "string (tùy chọn — tự generate từ name nếu bỏ trống)",
+  "color": "#6366f1",
+  "description": "string (tùy chọn) — nhãn ngắn hiển thị UI",
+  "extraction_hints": "string (tùy chọn) — Markdown instructions cho LLM pipeline"
 }
 ```
 
+> **`extraction_hints`**: Hướng dẫn chi tiết được inject vào LLM prompt khi compile tài liệu. Ghi đè rule chung (keep/drop) của pipeline cho domain này. Để `null` với domain thông thường — chỉ cần với domain chuyên biệt (pentest, y tế, pháp lý).
+
 ### PUT /api/knowledge-types/{id}
-Cập nhật knowledge type. Yêu cầu admin.
+Cập nhật knowledge type. Yêu cầu `documents.edit`.
+
+**Body:** Giống POST — tất cả fields đều có thể update, kể cả `extraction_hints`.
+
+Để xóa `extraction_hints` (reset về mặc định): truyền `"extraction_hints": null`.
 
 ### DELETE /api/knowledge-types/{id}
-Xóa knowledge type. Yêu cầu admin.
+Xóa knowledge type. Yêu cầu `documents.delete`.
+
+Sources đang dùng type này sẽ có `knowledge_type_id = NULL` (không bị xóa).
 
 ---
 

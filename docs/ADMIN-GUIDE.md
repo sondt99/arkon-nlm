@@ -232,7 +232,7 @@ Sau khi lưu settings, nhấn **Test LLM** để xác nhận:
 
 ## 6. Quản lý Knowledge Types
 
-Knowledge Types là **taxonomy** để phân loại tài liệu. LLM sử dụng tên và mô tả knowledge type để định hướng cách biên soạn wiki.
+Knowledge Types là **taxonomy** để phân loại tài liệu. LLM sử dụng hai trường để định hướng cách biên soạn wiki: `description` (nhãn ngắn) và `extraction_hints` (hướng dẫn extraction chi tiết).
 
 ### Tạo Knowledge Type
 
@@ -242,43 +242,72 @@ Knowledge Types là **taxonomy** để phân loại tài liệu. LLM sử dụng
 |---|---|
 | Name | Tên ngắn (vd: `SOP`, `Chính sách`, `Kỹ thuật`) |
 | Slug | URL-safe, tự động tạo (vd: `sop`, `chinh-sach`) |
-| Description | **Quan trọng**: Mô tả rõ loại tài liệu nào thuộc type này — LLM sẽ đọc description này khi xử lý |
-| Icon | Biểu tượng giao diện |
+| Description | Nhãn ngắn hiển thị UI, label cho LLM (1-3 câu) |
+| Extraction Hints | **Mới**: Hướng dẫn chi tiết cho LLM — cái gì KEEP, cái gì DROP, cấu trúc wiki page. Ghi đè rule chung khi có xung đột. Để trống với domain thông thường. |
+| Color | Màu badge trên UI |
+
+### Hai cấp độ guidance cho LLM
+
+**`description`** — label ngắn, đủ để LLM nhận diện danh mục:
+```
+Pentest và kỹ thuật tấn công bảo mật — bypass, exploit, redteam TTPs.
+```
+
+**`extraction_hints`** — hướng dẫn đầy đủ cho domain chuyên biệt:
+```markdown
+KEEP lệnh platform-specific nguyên văn (EXEC xp_cmdshell, INTO OUTFILE...)
+KEEP mỗi bypass theo từng platform = concept page riêng biệt
+KEEP CVE IDs, CVSS, tool commands đầy đủ flag
+KHÔNG generalize — tính cụ thể là giá trị
+```
+
+> Với domain thông thường (SOP, chính sách, kỹ thuật), chỉ cần `description` — pipeline mặc định xử lý đủ tốt. Chỉ cần `extraction_hints` với domain chuyên biệt mà rule chung hay lọc mất thông tin quan trọng.
+
+### Auto-seed cho security KTs
+
+Khi khởi động, Arkon **tự động seed** `extraction_hints` cho knowledge types có slug chứa các từ khóa bảo mật:
+
+| Pattern slug | Hints được seed |
+|---|---|
+| `pentest`, `offensive`, `exploit`, `bypass`, `sqli`, `injection` | Pentest hints — giữ platform-specific technique, CVE, payload |
+| `redteam`, `red-team`, `ttp`, `c2`, `implant` | Redteam hints — MITRE ATT&CK IDs, C2 config, OPSEC |
+| `vuln`, `vulnerability`, `cve`, `bugbounty`, `0day` | Vuln research hints — version ranges, PoC, CVSS vector |
+
+Seed chỉ set khi `extraction_hints` đang NULL — **không ghi đè** nếu admin đã chỉnh.
 
 ### Gợi ý Knowledge Types cho doanh nghiệp
 
 ```
 SOP / Quy trình vận hành
-  → Mô tả: Tài liệu mô tả quy trình, hướng dẫn nghiệp vụ từng bước
+  → Description: Tài liệu quy trình, hướng dẫn nghiệp vụ từng bước
+  → Extraction hints: (không cần)
 
 Chính sách / Nội quy
-  → Mô tả: Quy định nội bộ, chính sách nhân sự, nội quy công ty
+  → Description: Quy định nội bộ, chính sách nhân sự, nội quy công ty
+  → Extraction hints: (không cần)
 
 Tài liệu kỹ thuật
-  → Mô tả: Tài liệu kỹ thuật, API docs, hướng dẫn cài đặt
+  → Description: Tài liệu kỹ thuật, API docs, hướng dẫn cài đặt
+  → Extraction hints: (không cần với kỹ thuật thông thường)
 
-Sản phẩm / Dịch vụ  
-  → Mô tả: Thông tin sản phẩm, tính năng, so sánh
+Pentest / Redteam
+  → Description: Tài liệu pentest, kỹ thuật tấn công và bypass bảo mật
+  → Extraction hints: Auto-seed khi slug chứa "pentest"
+
+An ninh mạng (Defensive)
+  → Description: Tài liệu bảo mật phòng thủ, CVE advisories, incident response
+  → Extraction hints: (tùy chọn — có thể thêm nếu cần giữ IOC format cụ thể)
 
 Pháp lý / Hợp đồng
-  → Mô tả: Hợp đồng mẫu, điều khoản, tài liệu pháp lý
-
-Đào tạo / Onboarding
-  → Mô tả: Tài liệu đào tạo nhân viên mới, hướng dẫn onboarding
-
-Báo cáo / Phân tích
-  → Mô tả: Báo cáo kinh doanh, phân tích thị trường, KPIs
-
-An ninh mạng (Cybersecurity)
-  → Mô tả: Tài liệu bảo mật, quy trình ứng phó sự cố, CVE, threat intelligence
+  → Description: Hợp đồng mẫu, điều khoản, tài liệu pháp lý
+  → Extraction hints: (tùy chọn — nếu cần giữ nguyên văn các điều khoản)
 ```
 
-### Tại sao Description quan trọng?
+### Tại sao `extraction_hints` quan trọng với security domain?
 
-LLM đọc description khi xử lý tài liệu để:
-1. Xác định loại kiến thức cần trích xuất (thủ tục? định nghĩa? quy định?)
-2. Định dạng wiki page phù hợp (danh sách bước? prose? bảng?)
-3. Gán slug đúng convention (concept/ hay topic/ hay entity/)
+Pipeline mặc định có rule "drop source-specific framing" để bỏ các đoạn như "In section 3 below..." hay "As mentioned earlier...". Nhưng với tài liệu pentest, câu như _"On SQL Server, run EXEC master..xp_cmdshell"_ bị coi là "platform-specific framing" → bị lọc → wiki chỉ còn "stored procedure bypass" mà không có cú pháp thực thi.
+
+`extraction_hints` override rule này, nói với LLM: **tính cụ thể của từng platform là nội dung cốt lõi, không phải noise**.
 
 > Description tốt → Wiki pages tốt hơn. Hãy viết description rõ ràng, ít nhất 2-3 câu.
 

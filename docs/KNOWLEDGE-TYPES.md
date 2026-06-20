@@ -11,7 +11,8 @@ Khi LLM xử lý tài liệu, nó cần hiểu **loại tri thức** để:
 1. **Trích xuất đúng thực thể**: SOP cần trích xuất "bước thực hiện", còn chính sách cần trích xuất "quy định, điều kiện"
 2. **Định dạng wiki phù hợp**: Quy trình → numbered list; Định nghĩa → prose; So sánh → table
 3. **Chọn slug convention**: Quy trình vận hành → `topic/`, Sản phẩm cụ thể → `entity/`
-4. **Lọc theo MCP scope**: Employee chỉ thấy knowledge types được assign cho MCP token của họ
+4. **Áp dụng domain rules**: Tài liệu pentest cần giữ technique theo từng platform — LLM dùng `extraction_hints` để biết điều này
+5. **Lọc theo MCP scope**: Employee chỉ thấy knowledge types được assign cho MCP token của họ
 
 ---
 
@@ -19,55 +20,99 @@ Khi LLM xử lý tài liệu, nó cần hiểu **loại tri thức** để:
 
 ```
 KnowledgeType
-  id          UUID
-  name        VARCHAR     # "An ninh mạng", "SOP", "Chính sách"
-  slug        VARCHAR     # "an-ninh-mang", "sop", "chinh-sach"
-  description TEXT        # LLM ĐỌC TRƯỜNG NÀY khi xử lý tài liệu
-  icon        VARCHAR     # Material Symbols icon name
+  id                UUID
+  name              VARCHAR     # "An ninh mạng", "SOP", "Chính sách"
+  slug              VARCHAR     # "an-ninh-mang", "sop", "chinh-sach"
+  description       TEXT        # Nhãn/mô tả ngắn hiển thị trên UI
+  extraction_hints  TEXT        # LLM ĐỌC TRƯỜNG NÀY — domain-specific extraction rules
+  color             VARCHAR     # Hex color cho UI badge (#6366f1)
 ```
 
 ---
 
-## Thiết kế Description hiệu quả
+## Hai trường ảnh hưởng đến LLM: `description` vs `extraction_hints`
 
-Description là phần **LLM đọc** để hiểu loại tài liệu. Hãy viết như đang hướng dẫn một chuyên gia mới.
+| Trường | Mục đích | Ai đọc |
+|---|---|---|
+| `description` | Nhãn ngắn, nhận diện danh mục ("Pentest and redteam techniques") | Hiển thị UI + label cho LLM |
+| `extraction_hints` | Hướng dẫn chi tiết: cái gì cần giữ, cái gì cần bỏ, cách tổ chức wiki page | **LLM pipeline đọc trực tiếp** khi compile và extract |
 
-### Template mẫu
+**Nguyên tắc:**
+- `description`: ngắn, nhận diện đủ (1-3 câu)
+- `extraction_hints`: hướng dẫn đầy đủ, **ghi đè** các rule chung của pipeline khi có xung đột
 
+---
+
+## Thiết kế `extraction_hints` hiệu quả
+
+`extraction_hints` là Markdown text được inject vào LLM prompt **sau** các rule chung (keep/drop general heuristics). Rules trong `extraction_hints` có độ ưu tiên cao hơn rules mặc định.
+
+### Khi nào cần `extraction_hints`?
+
+- Domain có kiến thức **rất specific** mà rule chung sẽ "generalize away" (pentest, y tế, luật pháp)
+- Cần entity types đặc biệt ngoài bộ mặc định (`person|org|product|regulation|location|system|equipment|technique|cve|tool|payload`)
+- Cần cấu trúc wiki page khác với template chung
+- Cần giữ lại **platform-specific details** mà LLM hay bỏ vì tưởng là "source framing"
+
+### Template cho `extraction_hints`
+
+```markdown
+Các tài liệu thuộc loại này chứa [mô tả domain].
+
+**Quy tắc giữ lại (bắt buộc):**
+- KEEP [loại thông tin 1] nguyên văn — KHÔNG generalize
+- KEEP [loại thông tin 2] với đầy đủ context
+- KEEP [loại thông tin đặc thù platform/version]
+
+**Quy tắc bỏ:**
+- DROP [loại thông tin không có giá trị cho domain này]
+
+**Loại entity trong domain này:**
+- `technique` — [định nghĩa]
+- `cve` — [định nghĩa]
+
+**Quy ước đặt slug:**
+- concept/<tên-technique>-<platform> cho từng variant
 ```
-[Tên type] là tài liệu về [chủ đề gì].
 
-Loại tri thức cần trích xuất:
-- [Loại thực thể 1] (vd: tên, định nghĩa)
-- [Loại thực thể 2] (vd: bước thực hiện, điều kiện)
-- [Loại thực thể 3] (vd: cảnh báo, ngoại lệ)
+### Ví dụ: SOP thông thường (không cần `extraction_hints`)
 
-Wiki pages nên được tổ chức theo [cách nào].
+SOP là domain đủ chung — pipeline mặc định xử lý tốt. Chỉ cần `description` rõ ràng.
+
+### Ví dụ: Pentest/Redteam (cần `extraction_hints`)
+
+**Description** (ngắn):
+```
+Tài liệu pentest, redteam, kỹ thuật tấn công và bypass bảo mật.
 ```
 
-### Ví dụ description tốt vs xấu
+**Extraction hints** (đầy đủ):
+```markdown
+Các tài liệu này chứa kỹ thuật tấn công bảo mật — pentest, redteam, exploit development.
 
-**Xấu** (quá ngắn, không đủ context):
-```
-Quy trình vận hành tiêu chuẩn.
+**Quy tắc giữ lại (bắt buộc):**
+- KEEP tất cả lệnh/cú pháp theo từng platform nguyên văn.
+  Ví dụ: "EXEC master..xp_cmdshell 'whoami'" trên SQL Server KHÔNG được
+  rút gọn thành "stored procedure execution" — tính cụ thể là giá trị.
+- KEEP kỹ thuật bypass theo từng platform là các concept page riêng biệt
+  (SQLi bypass trên MySQL ≠ SQLi bypass trên MSSQL ≠ Oracle).
+- KEEP CVE IDs, CVSS scores, CWE numbers — đây là khóa chính, không phải metadata.
+- KEEP lệnh tool với đầy đủ flag và option (vd: "sqlmap -u URL --dbs --batch --level=5").
+- KEEP điều kiện version cụ thể (vd: "chỉ hoạt động trên Apache 2.4.49").
+- KEEP payload strings, shellcode, PoC code nguyên văn.
+- KEEP chuỗi bypass WAF/AV theo từng vendor.
+
+**KHÔNG làm:**
+- KHÔNG coi platform-specific commands là "source-specific framing" rồi bỏ.
+- KHÔNG gộp các technique của các platform khác nhau vào một concept page.
+
+**Slug convention:**
+- concept/<tên-technique>-<platform> (vd: concept/sqli-stored-proc-mssql)
+- entity/<tool-name> cho tool offensive security
+- entity/<cve-id> cho từng CVE
 ```
 
-**Tốt** (đủ context để LLM hiểu):
-```
-SOP (Standard Operating Procedure) là tài liệu mô tả quy trình thực hiện
-một công việc cụ thể theo từng bước tuần tự.
-
-Tri thức cần trích xuất:
-- Tên quy trình và mục đích
-- Các bước thực hiện (số thứ tự, hành động, người thực hiện)
-- Điều kiện tiên quyết và điều kiện kết thúc
-- Trường hợp ngoại lệ và cách xử lý
-- Tài liệu/công cụ cần thiết
-- Tần suất thực hiện (nếu có)
-
-Wiki pages nên được trình bày dạng numbered list cho các bước,
-có phần "Yêu cầu", "Các bước", và "Xử lý sự cố".
-```
+---
 
 ---
 
@@ -121,15 +166,14 @@ Wiki nên dùng code blocks cho lệnh/config, table cho parameters,
 numbered list cho các bước cài đặt.
 ```
 
-### 4. An ninh mạng (Cybersecurity)
+### 4. An ninh mạng — Phòng thủ (Defensive Security)
 
 ```
 Name: An ninh mạng
 Slug: an-ninh-mang
 Description:
 Tài liệu bảo mật thông tin gồm: threat intelligence, CVE advisories,
-incident response procedures, security policies, vulnerability assessments,
-penetration testing reports, phân tích malware/APT.
+incident response procedures, security policies, vulnerability assessments.
 
 Trích xuất: CVE IDs, IOC (Indicators of Compromise: IP, domain, hash),
 MITRE ATT&CK techniques, severity (Critical/High/Medium/Low),
@@ -137,6 +181,36 @@ hệ thống bị ảnh hưởng, biện pháp giảm thiểu, bước phản �
 
 Wiki nên phân loại theo: Threats, Vulnerabilities, Incidents, Controls,
 mỗi trang có Risk Level rõ ràng và Remediation steps.
+```
+
+> **Lưu ý:** Với tài liệu **tấn công/pentest/redteam** (không phải phòng thủ), cần thêm `extraction_hints` riêng — xem mục **Pentest & Redteam** bên dưới.
+
+### 4b. Pentest & Redteam (Offensive Security)
+
+Loại này được **tự động seed `extraction_hints`** khi startup nếu slug có chứa `pentest`, `redteam`, `offensive`, `exploit`, `bypass`, hoặc tên tool tấn công.
+
+```
+Name: Pentest
+Slug: pentest
+Description:
+Tài liệu penetration testing, redteam operations, kỹ thuật tấn công và bypass bảo mật.
+Bao gồm: SQLi bypass, privilege escalation, lateral movement, C2, post-exploitation.
+```
+
+`extraction_hints` (tự động seed — admin có thể chỉnh sửa):
+```markdown
+Tài liệu này chứa kỹ thuật tấn công — pentest, redteam, exploit development.
+
+**KEEP (bắt buộc):**
+- Lệnh platform-specific nguyên văn (EXEC xp_cmdshell, INTO OUTFILE MySQL...)
+- Kỹ thuật bypass theo từng platform = concept page riêng biệt
+- CVE IDs, CVSS scores, CWE numbers
+- Tool commands với đầy đủ flag (sqlmap -u URL --dbs --batch --level=5)
+- Điều kiện version (Apache 2.4.49 only, patched in 2.4.50)
+- Payload strings, PoC code, bypass WAF/AV theo vendor
+
+**KHÔNG generalize platform-specific technique** — tính cụ thể là giá trị.
+**Slug:** concept/<technique>-<platform>, entity/<tool>, entity/<cve-id>
 ```
 
 ### 5. Sản phẩm / Dịch vụ
@@ -250,9 +324,24 @@ knowledge_type_slug="chinh-sach"
 - Quá nhiều types → khó chọn khi upload, nhân viên bối rối
 - Quá ít types → mô tả không đủ chi tiết → wiki quality kém
 
-### Cập nhật description sau khi dùng thực tế
+### Khi nào dùng `description` vs `extraction_hints`
 
-Sau khi xử lý vài tài liệu đầu, xem wiki được tạo ra có đúng format không. Nếu chưa, cải thiện description và re-ingest tài liệu.
+- **Chỉ cần `description`**: domain chung (SOP, chính sách, tài liệu kỹ thuật thông thường) — pipeline mặc định xử lý tốt
+- **Cần cả `extraction_hints`**: domain chuyên biệt mà rule chung sẽ lọc mất thông tin có giá trị:
+  - Pentest/Redteam: technique theo platform bị coi là "source-specific framing" → bị lọc
+  - Y tế: liều lượng/protocol cụ thể bị coi là "repetitive detail" → bị bỏ
+  - Pháp lý: điều khoản cụ thể của hợp đồng bị "summarized" → mất ngữ nghĩa
+
+### `extraction_hints` không ghi đè admin khi đã set
+
+Seed tự động chỉ set `extraction_hints` khi trường này đang NULL. Nếu admin đã chỉnh sửa, seed sẽ bỏ qua. Muốn reset về default: đặt lại `extraction_hints = NULL` qua API rồi restart server.
+
+### Cập nhật `extraction_hints` sau khi dùng thực tế
+
+Sau khi xử lý vài tài liệu đầu, xem wiki được tạo ra:
+- Nếu LLM đang generalize mất detail quan trọng → thêm rule `KEEP [loại thông tin đó]` vào `extraction_hints`
+- Nếu LLM đang giữ quá nhiều noise → thêm rule `DROP [loại thông tin đó]`
+- Re-ingest tài liệu sau khi cập nhật để thấy hiệu quả
 
 ### Không xóa knowledge type đang dùng
 

@@ -119,7 +119,7 @@ arkon/
 │   ├── ai/                 # AI providers + MRP pipeline
 │   │   ├── mrp/            # Map-Reduce-Plan phases (mapper, reducer, writer, verifier, merger)
 │   │   └── providers/      # Google, OpenAI, Anthropic, Ollama
-│   ├── database/           # ORM models (23 bang) + session factory
+│   ├── database/           # ORM models + session factory
 │   ├── mcp/                # MCP server + 14 tools
 │   ├── routers/            # 13 API router files
 │   ├── services/           # Business logic (wiki, kb, auth, perm, storage, embed)
@@ -534,7 +534,7 @@ Ngoai le — File upload bypass proxy:
 
 ## 7. Co so du lieu — PostgreSQL + pgvector
 
-### 7.1 Tong quan Schema (23 bang)
+### 7.1 Tong quan Schema
 
 ```
 NHOM TAI LIEU
@@ -546,6 +546,7 @@ NHOM TAI LIEU
 
 NHOM WIKI
   wiki_pages
+    |-- wiki_page_contributions (noi dung thuoc tung source)
     |-- wiki_links            (graph edges: slug A → slug B)
     |-- wiki_page_drafts      (contribution proposals cho review)
     |-- wiki_page_revisions   (version history sau moi update)
@@ -604,6 +605,23 @@ NHOM HE THONG
 | `scope_type` | VARCHAR(20) | "global" hoac "project" |
 | `knowledge_type_id` | UUID FK | Taxonomy |
 | `version` | INTEGER | Tang dan moi lan update |
+| `source_ids` | UUID[] | Chi muc nhanh cac source dong gop |
+| `provenance_complete` | BOOLEAN | Co the rebuild chinh xac tu contributions |
+
+**`wiki_page_contributions`** — Source-aware knowledge provenance:
+
+| Cot | Kieu | Mo ta |
+|---|---|---|
+| `id` | UUID PK | Primary key |
+| `page_id` | UUID FK | Wiki page canonical |
+| `source_id` | UUID FK | Source so huu contribution |
+| `content_md` | TEXT | Noi dung source dong gop cho page |
+| `summary` | TEXT | Tom tat contribution |
+| `source_title` | VARCHAR(500) | Snapshot ten source |
+| `knowledge_type_slug` | VARCHAR(200) | Taxonomy cua contribution |
+
+Unique constraint `(page_id, source_id)` dam bao re-ingest cung source se update
+contribution thay vi tao ban trung lap.
 
 **`app_config`** — AI provider settings (key-value):
 
@@ -656,7 +674,7 @@ CREATE INDEX ON audit_logs(principal_id, created_at DESC);
 CREATE INDEX ON audit_logs(resource_type, resource_id);
 ```
 
-### 7.5 17 Migration files (theo thu tu thoi gian)
+### 7.5 Migration files (theo thu tu thoi gian)
 
 ```
 001  initial_schema          Sources, notes, wiki pages, basic employees
@@ -676,7 +694,25 @@ CREATE INDEX ON audit_logs(resource_type, resource_id);
 014  wiki_draft_revision     Review workflow + WikiPageRevision history
 015  multi_dim_embeddings    4 embedding tables (768/1024/1536/3072d)
 016  source_images           SourceImage (anh extracted tu documents)
+017  skill_contributions     Contribution workflow cho skills
+018  drop_skill_description  Schema cleanup
+019  skill_is_system         Danh dau built-in skill
+020  mrp_pipeline            MRP state va compilation tables
+021  notebooklm              NotebookLM notebooks, sources, artifacts
+022  chat                    Chat conversations va messages
+023  source_aware_knowledge  Contribution provenance + legacy backfill
 ```
+
+### 7.6 Source-aware rebuild
+
+`wiki_pages.content_md` la ban canonical de doc va search. Noi dung co quyen so
+huu theo source nam trong `wiki_page_contributions`. Khi source bi xoa:
+
+1. Xoa contribution cua source.
+2. Neu khong con contribution, xoa wiki page.
+3. Neu con contribution, merge lai canonical content.
+4. Refresh `wiki_links` va vector embedding.
+5. Trang multi-source cu khong the backfill chinh xac duoc danh dau legacy.
 
 ---
 
@@ -941,7 +977,7 @@ async def list_wiki(user = Depends(require_permission("doc:read"))):
   Neu MRP_AUTO_APPROVE_PLAN=true: enqueue("ingest_refine_task")
   Neu false: source.status = "plan_review"
 
-  [Admin xem plan trong UI → POST /api/sources/{id}/approve]
+  [Admin xem plan trong UI → POST /api/sources/{id}/plan/approve]
 
     |
     v [Worker: ingest_refine_task]
@@ -1226,5 +1262,5 @@ python -c "import secrets; print(secrets.token_hex(32))"
 
 ---
 
-*Tai lieu duoc tao tu phan tich toan bo source code Arkon v0.1.0.
-Cap nhat khi co thay doi kien truc quan trong.*
+*Tai lieu duoc tao tu phan tich source code Arkon va cap nhat cho release
+v2.0.0. Cap nhat khi co thay doi kien truc quan trong.*

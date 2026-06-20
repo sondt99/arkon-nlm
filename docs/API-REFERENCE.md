@@ -138,21 +138,61 @@ Chi tiết một tài liệu.
 ### DELETE /api/sources/{id}
 Xóa tài liệu. Yêu cầu `doc:delete:own_dept` hoặc `doc:delete:all`.
 
+Từ v2, endpoint xóa contribution thuộc source, dựng lại các wiki page dùng
+chung từ source còn lại, sau đó refresh wikilinks và embeddings.
+
+**Response 200:**
+```json
+{
+  "deleted": true,
+  "knowledge_impact": {
+    "pages_deleted": 2,
+    "pages_rebuilt": 3,
+    "legacy_pages_detached": 0,
+    "rebuilt_page_ids": ["uuid"]
+  }
+}
+```
+
+### GET /api/sources/{id}/knowledge-impact
+Xem trước tác động lên Knowledge Base trước khi xóa source.
+
+**Response 200:**
+```json
+{
+  "source_id": "uuid",
+  "source_title": "Tài liệu B",
+  "affected_pages": 2,
+  "pages": [
+    {
+      "slug": "concept/example",
+      "title": "Example",
+      "contribution_summary": "Phần tri thức do tài liệu B đóng góp",
+      "provenance_complete": true,
+      "action": "rebuild_page",
+      "remaining_sources": 1
+    }
+  ]
+}
+```
+
+`action` gồm `delete_page`, `rebuild_page` hoặc `detach_legacy`.
+
 ### GET /api/sources/{id}/plan
-Xem Compilation Plan (chỉ khi status = plan_review).
+Xem Compilation Plan (khi source ở trạng thái `plan_ready`).
 
 **Response 200:**
 ```json
 {
   "id": "uuid",
   "source_id": "uuid",
-  "plan_data": {
+  "plan": {
     "pages": [
       {
         "slug": "concept/example",
         "title": "string",
-        "operation": "create | update",
-        "entities": ["..."],
+        "action": "CREATE | UPDATE",
+        "entity_names": ["..."],
         "priority": 1
       }
     ]
@@ -161,10 +201,10 @@ Xem Compilation Plan (chỉ khi status = plan_review).
 }
 ```
 
-### POST /api/sources/{id}/approve
+### POST /api/sources/{id}/plan/approve
 Approve compilation plan và bắt đầu REFINE phase.
 
-### POST /api/sources/{id}/reject
+### POST /api/sources/{id}/plan/reject
 Reject compilation plan với lý do.
 
 **Body:** `{ "note": "string" }`
@@ -196,10 +236,14 @@ Danh sách wiki pages.
   "title": "string",
   "content_md": "# Markdown content...",
   "version": 3,
-  "knowledge_type": { "id": "uuid", "name": "string" },
-  "backlinks": [
-    { "slug": "topic/related", "title": "string" }
+  "knowledge_type_slugs": ["technical"],
+  "source_ids": ["uuid"],
+  "provenance_complete": true,
+  "source_documents": [
+    { "id": "uuid", "title": "Architecture.pdf", "status": "ready" }
   ],
+  "backlinks": ["topic/related"],
+  "outlinks": ["concept/another-page"],
   "created_at": "ISO8601",
   "updated_at": "ISO8601"
 }

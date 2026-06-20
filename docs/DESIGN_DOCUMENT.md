@@ -1884,3 +1884,39 @@ Khi người dùng tìm kiếm tài liệu (ví dụ: "meeting notes") rồi ch�
 ### v1.1 — (trước 2026-05-26)
 
 Phiên bản ban đầu gồm: Ingestion Pipeline (MRP), Wiki System, Skill System, RBAC, NotebookLM Integration, MCP Server.
+
+---
+
+### v2.0.0 — 2026-06-20
+
+#### Arkon v2 UI và Knowledge Workflows
+
+- Đồng bộ version backend/frontend thành `2.0.0`.
+- Thêm theme sáng/tối, responsive mobile header và thiết kế visual thống nhất.
+- Thay icon/logo trên favicon, login, header và sidebar.
+- Sửa login loading để spinner không xoay cả label button.
+- Chuẩn hóa semantic colors cho Knowledge Type, Scope và Wiki Type badges.
+- Nâng cấp Knowledge Graph với force simulation, node styles, filter, focus, zoom và dark mode.
+- Tối ưu Chatbot: optimistic message, streaming UX, Markdown/GFM, copy message/code.
+- Tối ưu NotebookLM UI/backend và bỏ yêu cầu chọn source thủ công khi chat notebook.
+- Nâng cấp Plan Review với reconciliation metadata và kiểm tra CREATE/UPDATE collision.
+
+#### Source-aware Knowledge Provenance
+
+- Migration `023_source_aware_knowledge`.
+- Thêm `wiki_page_contributions`, unique `(page_id, source_id)`.
+- Thêm `wiki_pages.provenance_complete`.
+- MRP commit lưu contribution gốc theo từng source và rebuild canonical page.
+- LLM merge fallback chuyển sang lossless, không bỏ nội dung đầu vào cũ.
+- `GET /api/sources/{id}/knowledge-impact` xem trước delete/rebuild/legacy impact.
+- Xóa source rebuild page từ contributions còn lại, refresh wikilinks và embeddings.
+- Wiki detail API/UI hiển thị tên source và trạng thái Source-aware/Legacy provenance.
+- Backfill trang single-source; multi-source lịch sử được giữ ở trạng thái legacy.
+
+#### Kiểm chứng release
+
+- Next.js production build và TypeScript check thành công.
+- Targeted backend tests cho reconciliation và lossless merge thành công.
+- Docker API/frontend/worker và infrastructure healthy.
+- Database ở migration `023 (head)`.
+- Release commit: `1dd7c2afd3547bb6596627e795e1783d32e47198`.

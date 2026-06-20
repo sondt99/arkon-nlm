@@ -1,7 +1,27 @@
-# Kế hoạch tích hợp NotebookLM vào Arkon
+# Tích hợp NotebookLM trong Arkon v2
 
-> **Trạng thái**: Kế hoạch — chưa implement  
+> **Trạng thái**: Đã triển khai — tài liệu này gồm kiến trúc hiện hành và lịch sử kế hoạch<br>
+> **Release**: Arkon v2.0.0<br>
 > **Mục tiêu**: Cho phép người dùng upload tài liệu lên Google NotebookLM, tạo tóm tắt chi tiết (study guide / report), và tự động đồng bộ nội dung đó vào Arkon wiki.
+
+---
+
+## Trạng thái implementation hiện tại
+
+Các năng lực đã có trong source:
+
+- Import, kiểm tra và refresh session NotebookLM.
+- CRUD notebook và hiển thị notebook trong portal.
+- Gửi tài liệu Arkon sang NotebookLM từ Knowledge Base.
+- Chat theo notebook; backend tự sử dụng source của notebook, không bắt người dùng tích source cho từng câu hỏi.
+- Tạo và theo dõi audio, video, report, quiz, flashcards, slide deck, infographic và data table.
+- Import nội dung NotebookLM về wiki với namespace riêng.
+- arq worker xử lý tác vụ dài và cron refresh session.
+- UI v2 có loading, empty/error state, responsive layout và dark mode.
+
+Các đoạn ghi “cần tạo”, pseudo-code và checklist phía dưới được giữ lại để phục
+vụ truy vết quá trình thiết kế. Khi có khác biệt, source code và phần trạng thái
+implementation này là tài liệu chuẩn.
 
 ---
 

@@ -1,120 +1,76 @@
 # Arkon — Tài liệu hệ thống
 
-> Enterprise AI Knowledge Base · v0.1.0
+> Enterprise AI Knowledge Hub · v2.0.0 · cập nhật 20/06/2026
 
----
+## Báo cáo phát triển
 
-## Bắt đầu nhanh
+| Tài liệu | Nội dung |
+|---|---|
+| [DEVELOPMENT-REPORT-V2.md](DEVELOPMENT-REPORT-V2.md) | Báo cáo tổng hợp phát triển Arkon v2, kết quả, kiểm thử và roadmap |
+| [DESIGN_DOCUMENT.md](DESIGN_DOCUMENT.md) | Thiết kế chức năng và lịch sử thay đổi chi tiết |
+| [ARCHITECTURE.md](ARCHITECTURE.md) | Kiến trúc kỹ thuật, database và luồng xử lý |
+
+## Hướng dẫn theo nhu cầu
 
 | Tôi muốn... | Đọc tài liệu... |
 |---|---|
 | Cài đặt và chạy lần đầu | [QUICKSTART.md](QUICKSTART.md) |
 | Deploy bằng Docker | [SETUP.md](SETUP.md) |
 | Chạy local để phát triển | [HOW_TO_RUN.md](HOW_TO_RUN.md) |
-| Kết nối Claude Desktop | [MCP.md](MCP.md) |
-| Hiểu kiến trúc hệ thống | [ARCHITECTURE.md](ARCHITECTURE.md) |
-| Quản lý nhân viên, phòng ban, role | [ADMIN-GUIDE.md](ADMIN-GUIDE.md) |
+| Kết nối Claude Desktop/Code | [MCP.md](MCP.md) |
+| Quản trị người dùng và role | [ADMIN-GUIDE.md](ADMIN-GUIDE.md) |
 | Cấu hình phân quyền | [ACCESS-CONTROL.md](ACCESS-CONTROL.md) |
-| Làm việc với Wiki & pipeline | [WIKI.md](WIKI.md) |
-| Quản lý Skills AI | [SKILLS.md](SKILLS.md) |
+| Hiểu Wiki, MRP và provenance | [WIKI.md](WIKI.md) |
+| Tích hợp NotebookLM | [NOTEBOOKLM-INTEGRATION.md](NOTEBOOKLM-INTEGRATION.md) |
+| Quản lý AI Skills | [SKILLS.md](SKILLS.md) |
 | Quản lý Workspaces | [WORKSPACES.md](WORKSPACES.md) |
 | Tạo Knowledge Types | [KNOWLEDGE-TYPES.md](KNOWLEDGE-TYPES.md) |
-| Tham chiếu API đầy đủ | [API-REFERENCE.md](API-REFERENCE.md) |
-
----
+| Tra cứu endpoint | [API-REFERENCE.md](API-REFERENCE.md) |
+| Xử lý lỗi vận hành | [TROUBLESHOOTING.md](TROUBLESHOOTING.md) |
 
 ## Tổng quan hệ thống
 
-```
-Nhân viên upload tài liệu (PDF, DOCX, URL)
-       │
-       ▼
-LLM Pipeline (MRP) xử lý tự động
-       │
-       ▼
-Wiki tri thức có cấu trúc
-       │
-       ▼
-Claude Desktop/Code truy vấn qua MCP
-       │
-       ▼
-Trả lời dựa trên tri thức nội bộ
+```text
+Tài liệu PDF/DOCX/TXT/MD/URL/ZIP
+              │
+              ▼
+MRP: Map → Reduce → Plan → Refine → Verify → Commit
+              │
+              ▼
+Source-aware contributions → Wiki + Graph + Embeddings
+              │
+       ┌──────┼────────┐
+       ▼      ▼        ▼
+    Chatbot   MCP   NotebookLM
 ```
 
-**Arkon** biến tài liệu thô của tổ chức thành tri thức có cấu trúc mà Claude có thể hiểu và trả lời.
+## Cấu trúc thư mục tài liệu
 
----
-
-## Cấu trúc tài liệu
-
-```
+```text
 docs/
-├── README.md           # File này — index tổng hợp
-├── QUICKSTART.md       # Hướng dẫn nhanh (30 phút từ zero đến chạy)
-├── SETUP.md            # Deploy Docker (production + server)
-├── HOW_TO_RUN.md       # Chạy local cho phát triển
-├── ARCHITECTURE.md     # Phân tích thiết kế kỹ thuật
-├── ADMIN-GUIDE.md      # Hướng dẫn quản trị viên
-├── ACCESS-CONTROL.md   # Hệ thống phân quyền
-├── MCP.md              # Tích hợp Claude qua MCP
-├── WIKI.md             # Wiki system & MRP pipeline
-├── SKILLS.md           # AI Skills management
-├── WORKSPACES.md       # Workspaces (project scoping)
-├── KNOWLEDGE-TYPES.md  # Knowledge type taxonomy
-├── API-REFERENCE.md    # Tham chiếu API đầy đủ
-└── assets/             # Hình ảnh, diagrams
+├── README.md                    # Mục lục
+├── DEVELOPMENT-REPORT-V2.md    # Báo cáo phát triển v2
+├── DESIGN_DOCUMENT.md          # Thiết kế và changelog
+├── ARCHITECTURE.md             # Kiến trúc kỹ thuật
+├── API-REFERENCE.md            # API reference
+├── WIKI.md                     # Wiki, MRP, source-aware provenance
+├── NOTEBOOKLM-INTEGRATION.md   # NotebookLM
+├── ACCESS-CONTROL.md           # RBAC
+├── ADMIN-GUIDE.md              # Quản trị
+├── QUICKSTART.md               # Bắt đầu nhanh
+├── SETUP.md                    # Triển khai
+├── HOW_TO_RUN.md               # Phát triển local
+├── MCP.md                      # MCP integration
+├── SKILLS.md                   # AI Skills
+├── WORKSPACES.md               # Workspace
+├── KNOWLEDGE-TYPES.md          # Taxonomy
+└── TROUBLESHOOTING.md          # Xử lý sự cố
 ```
 
----
+## Trạng thái release v2
 
-## Luồng làm việc điển hình
-
-### Quản trị viên (lần đầu cài đặt)
-
-```
-1. Deploy Docker (SETUP.md)
-2. Cấu hình AI Provider → Settings → LLM + Embedding
-3. Tạo phòng ban → Admin → Departments
-4. Tạo Knowledge Types → Admin → Knowledge Types
-5. Tạo nhân viên + cấp MCP token → Admin → Employees
-6. Upload tài liệu đầu tiên → Knowledge Base → Upload
-7. Phê duyệt Compilation Plan (nếu auto_approve = false)
-8. Kiểm tra wiki đã được tạo → Wiki
-```
-
-### Nhân viên (hàng ngày)
-
-```
-1. Hỏi Claude: "Quy trình onboarding là gì?"
-   → Claude dùng MCP tool search_wiki()
-   → Claude đọc wiki page và trả lời
-
-2. Upload tài liệu mới → Knowledge Base → Upload
-   → Pipeline tự động xử lý và cập nhật wiki
-
-3. Đề xuất chỉnh sửa wiki → Wiki page → Propose Edit
-   → Editor review và approve
-```
-
----
-
-## Yêu cầu hệ thống
-
-| Thành phần | Yêu cầu |
-|---|---|
-| Docker Engine | >= 24.0 + Compose v2 |
-| RAM | 4 GB tối thiểu (8 GB khuyến nghị) |
-| Ổ đĩa | 20 GB + dung lượng tài liệu |
-| AI Provider | Google / OpenAI / Anthropic / Ollama |
-
----
-
-## Các URL quan trọng (sau khi deploy)
-
-| URL | Mục đích |
-|---|---|
-| `http://localhost:3119` | Admin Portal (web UI) |
-| `http://localhost:5055/docs` | API Swagger documentation |
-| `http://localhost:5055/health` | Health check |
-| `http://localhost:5055/mcp` | MCP endpoint cho Claude |
-| `http://localhost:9003` | MinIO Console (file storage) |
+- Backend và frontend: `2.0.0`
+- Database migration: `023`
+- Production entrypoint: `http://localhost:3119`
+- Health check: `GET /health` qua API container
+- Source release: commit `1dd7c2a`

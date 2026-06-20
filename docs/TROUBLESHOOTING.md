@@ -385,6 +385,21 @@ curl -X POST "http://localhost:5055/api/sources/{id}/retry" \
   -H "Authorization: Bearer <token>"
 ```
 
+**Lưu ý về dữ liệu đã lưu:** log `REFINE complete` hoặc `VERIFY complete` chỉ xác nhận kết quả tạm trong bộ nhớ. Wiki và provenance chỉ được lưu khi có `MRP COMMIT complete`, source ở trạng thái `ready`, progress `100` và contribution đã xuất hiện. COMMIT là transaction atomic; nếu một page lỗi, toàn bộ thay đổi của lần commit được rollback.
+
+---
+
+**Q: Log có `InvalidRequestError: This session is provisioning a new connection`?**
+
+Đây là lỗi của phiên bản cũ khi nhiều writer song song dùng chung một SQLAlchemy `AsyncSession`. Bản hotfix 2026-06-21 đã thay bằng snapshot wiki đọc trước khi fan-out. Hãy rebuild/restart `api` và `worker`, sau đó retry source lỗi:
+
+```bash
+docker compose build api
+docker compose up -d api worker worker_skills
+```
+
+Với tài liệu lớn, cấu hình `WORKER_JOB_TIMEOUT=3600` hoặc cao hơn. Khi AI gateway trả 504, writer tự retry tối đa 3 lần; nếu vẫn lỗi, job dừng và không tạo trang placeholder.
+
 ---
 
 **Q: Tại sao cần cả hai worker (worker và worker_skills)?**

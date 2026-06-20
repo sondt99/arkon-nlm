@@ -14,6 +14,7 @@ All writers run in parallel (asyncio.Semaphore(MAX_WRITER_CONCURRENCY)).
 
 import asyncio
 import json
+import re
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, Optional
 
@@ -35,6 +36,8 @@ WRITER_COMPLEX_THRESHOLD_EVIDENCE = 8
 WRITER_COMPLEX_THRESHOLD_EXISTING_CHARS = 3_000
 WRITER_AGENT_MAX_STEPS = 10
 WRITER_AGENT_TIMEOUT = 300  # seconds per LLM call in complex writer
+WRITER_MAX_ATTEMPTS = 3
+WRITER_RETRY_DELAYS = (15, 60)
 
 # ---------------------------------------------------------------------------
 # Dataclass
@@ -562,7 +565,7 @@ async def _write_page_complex(
     evidence: list[dict],
     existing_content: Optional[str],
     full_text: str,
-    session: AsyncSession,
+    kb_page_cache: dict[str, dict[str, str]],
     source,
     all_plan_slugs: list[str],
 ) -> tuple[str, str, list[dict]]:
@@ -571,11 +574,6 @@ async def _write_page_complex(
     Returns (content_md, summary, citations_meta).
     """
     from app.ai.agent_protocol import assistant_message_from_turn, tool_results_message
-    from app.services import wiki_service
-
-    scope_type = source.scope_type or "global"
-    scope_id = source.scope_id
-
     evidence_blocks, citations_meta = _format_evidence_blocks(evidence)
     existing_section = (
         f"\n## Existing page content (UPDATE — integrate):\n{existing_content}\n"
@@ -635,9 +633,9 @@ async def _write_page_complex(
                 break
             elif call.name == "read_kb_page":
                 slug = call.arguments.get("slug", "")
-                page = await wiki_service.get_page_by_slug(session, slug, scope_type=scope_type, scope_id=scope_id)
+                page = kb_page_cache.get(slug)
                 if page:
-                    result: Any = {"slug": page.slug, "title": page.title, "content_md": page.content_md}
+                    result: Any = page
                 else:
                     result = {"error": f"Page '{slug}' not found"}
                 tool_results.append((call.id, call.name, result))
@@ -687,6 +685,14 @@ async def _write_page_complex(
 # Phase 3 orchestrator
 # ---------------------------------------------------------------------------
 
+def _writer_retry_delay(exc: Exception, attempt_index: int) -> int:
+    """Honor provider retry_after hints, bounded to avoid runaway waits."""
+    fallback = WRITER_RETRY_DELAYS[min(attempt_index, len(WRITER_RETRY_DELAYS) - 1)]
+    match = re.search(r"retry_after['\"]?\s*[:=]\s*(\d+)", str(exc))
+    if not match:
+        return fallback
+    return min(120, max(fallback, int(match.group(1))))
+
 async def run_refine_phase(
     session: AsyncSession,
     source,
@@ -717,9 +723,29 @@ async def run_refine_phase(
     scope_type = source.scope_type or "global"
     scope_id = source.scope_id
 
+    # AsyncSession is not safe for concurrent operations. Load the complete
+    # scoped wiki snapshot once before starting parallel writers, then keep all
+    # writer tasks DB-free. This also makes every writer see a consistent view.
+    scope_pages = await wiki_service.list_pages(
+        session,
+        limit=10_000,
+        scope_type=scope_type,
+        scope_id=scope_id,
+    )
+    kb_page_cache: dict[str, dict[str, str]] = {
+        page.slug: {
+            "slug": page.slug,
+            "title": page.title,
+            "content_md": page.content_md or "",
+        }
+        for page in scope_pages
+    }
+
     await tracker.update(78, f"Writing {len(pages_spec)} wiki pages...")
 
     semaphore = asyncio.Semaphore(MAX_WRITER_CONCURRENCY)
+    completed = 0
+    progress_lock = asyncio.Lock()
 
     async def _write_one(plan_item: dict) -> Optional[PageWriteResult]:
         async with semaphore:
@@ -735,11 +761,9 @@ async def run_refine_phase(
             # Fetch existing content for UPDATE
             existing_content: Optional[str] = None
             if action == "UPDATE":
-                existing_page = await wiki_service.get_page_by_slug(
-                    session, slug, scope_type=scope_type, scope_id=scope_id,
-                )
+                existing_page = kb_page_cache.get(slug)
                 if existing_page:
-                    existing_content = existing_page.content_md
+                    existing_content = existing_page["content_md"]
 
             # Choose writer mode
             is_complex = (
@@ -750,25 +774,54 @@ async def run_refine_phase(
             # Build source context for the writer
             source_context = _build_source_context(full_text, evidence, model_id=llm.config.model_id)
 
-            try:
-                if is_complex:
-                    content_md, summary, citations = await _write_page_complex(
-                        llm, plan_item, evidence, existing_content, full_text, session, source,
-                        all_plan_slugs=all_plan_slugs,
+            for attempt in range(WRITER_MAX_ATTEMPTS):
+                try:
+                    if is_complex:
+                        content_md, summary, citations = await _write_page_complex(
+                            llm, plan_item, evidence, existing_content, full_text,
+                            kb_page_cache, source,
+                            all_plan_slugs=all_plan_slugs,
+                        )
+                    else:
+                        content_md, summary, citations = await _write_page_simple(
+                            llm, plan_item, evidence, existing_content,
+                            all_plan_slugs=all_plan_slugs,
+                            source_context=source_context,
+                        )
+                    break
+                except asyncio.CancelledError:
+                    raise
+                except Exception as exc:
+                    err_msg = f"{type(exc).__name__}: {str(exc)}"
+                    if attempt + 1 >= WRITER_MAX_ATTEMPTS:
+                        logger.error(
+                            f"MRP REFINE writer permanently failed for '{slug}' "
+                            f"after {WRITER_MAX_ATTEMPTS} attempts: {err_msg}"
+                        )
+                        raise RuntimeError(
+                            f"Writer failed for '{slug}' after "
+                            f"{WRITER_MAX_ATTEMPTS} attempts"
+                        ) from exc
+                    delay = _writer_retry_delay(exc, attempt)
+                    logger.warning(
+                        f"MRP REFINE writer retry {attempt + 2}/{WRITER_MAX_ATTEMPTS} "
+                        f"for '{slug}' in {delay}s: {err_msg}"
                     )
-                else:
-                    content_md, summary, citations = await _write_page_simple(
-                        llm, plan_item, evidence, existing_content,
-                        all_plan_slugs=all_plan_slugs,
-                        source_context=source_context,
-                    )
-            except Exception as e:
-                err_msg = f"{type(e).__name__}: {str(e)}"
-                logger.error(f"MRP REFINE writer failed for '{slug}': {err_msg}")
-                # Return minimal stub so COMMIT can still proceed
-                content_md = f"# {title}\n\n(Page generation failed: {err_msg[:200]})"
-                summary = title
-                citations = []
+                    await asyncio.sleep(delay)
+
+            async with progress_lock:
+                nonlocal completed
+                completed += 1
+                step = max(1, len(pages_spec) // 10)
+                if completed == len(pages_spec) or completed % step == 0:
+                    progress = min(87, 78 + int((completed / len(pages_spec)) * 9))
+                    try:
+                        await tracker.update(
+                            progress,
+                            f"Writing wiki pages ({completed}/{len(pages_spec)})...",
+                        )
+                    except Exception as progress_exc:
+                        logger.warning(f"MRP REFINE progress update failed: {progress_exc}")
 
             return PageWriteResult(
                 slug=slug,
@@ -782,7 +835,17 @@ async def run_refine_phase(
                 related_kb_pages=related_kb_pages,
             )
 
-    results = await asyncio.gather(*[_write_one(p) for p in pages_spec])
+    tasks = [asyncio.create_task(_write_one(p)) for p in pages_spec]
+    try:
+        results = await asyncio.gather(*tasks)
+    except BaseException:
+        # asyncio.gather does not cancel sibling tasks automatically. Explicitly
+        # stop and drain them so a failed job cannot keep spending LLM tokens.
+        for task in tasks:
+            if not task.done():
+                task.cancel()
+        await asyncio.gather(*tasks, return_exceptions=True)
+        raise
     page_results = [r for r in results if r is not None]
 
     logger.info(f"MRP REFINE complete: {len(page_results)} pages written for source={source.id}")

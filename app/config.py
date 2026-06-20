@@ -59,7 +59,7 @@ class Settings(BaseSettings):
     redis_password: str = Field(default="")
     redis_db: int = Field(default=0)
     worker_max_jobs: int = Field(default=3, description="Max concurrent ingestion jobs")
-    worker_job_timeout: int = Field(default=1800, description="Job timeout in seconds")
+    worker_job_timeout: int = Field(default=3600, description="Job timeout in seconds")
 
     # --- MRP Pipeline ---
     mrp_auto_approve_plan: bool = Field(

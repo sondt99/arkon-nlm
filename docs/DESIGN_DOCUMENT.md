@@ -1920,3 +1920,11 @@ Phiên bản ban đầu gồm: Ingestion Pipeline (MRP), Wiki System, Skill Syst
 - Docker API/frontend/worker và infrastructure healthy.
 - Database ở migration `023 (head)`.
 - Release commit: `1dd7c2afd3547bb6596627e795e1783d32e47198`.
+
+#### MRP reliability hotfix — 2026-06-21
+
+- REFINE fan-out sử dụng wiki snapshot bất biến, không chia sẻ thao tác database trên một `AsyncSession` giữa các coroutine.
+- Task orchestration cancel/drain các sibling writer khi có lỗi; writer retry lỗi AI tạm thời tối đa 3 lần và không sinh placeholder.
+- COMMIT fail-fast trong một transaction; source chỉ chuyển `ready` sau khi tất cả contribution và canonical page được ghi thành công.
+- Worker ingestion mặc định có timeout 3600 giây; error message rỗng được chuẩn hóa về tên exception.
+- Smoke test tài liệu thật: plan 64 mục, `64/64` REFINE/VERIFY, `43 created + 21 updated`, 63 contribution, plan `done`, source `ready` sau 1365,24 giây.

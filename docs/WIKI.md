@@ -107,6 +107,10 @@ All verified pages are written to the database in a single atomic transaction. F
 
 After all pages are flushed, the wiki index is regenerated, an activity log entry is appended, and the source is marked `ready`.
 
+COMMIT is fail-fast and atomic. A failure on any page rolls back the complete commit, so a source cannot become `ready` with only part of its planned knowledge saved. `REFINE complete` and `VERIFY complete` are intermediate milestones; durable wiki data is confirmed only by `MRP COMMIT complete` and source progress `100`.
+
+For large documents, the worker timeout defaults to 3600 seconds. REFINE writers retry transient AI-provider failures up to three times with backoff and never replace failed output with placeholder content.
+
 ### Resume behavior
 
 The field `source.pipeline_phase` tracks which phase completed last. If the worker crashes, the next retry picks up from the right phase:

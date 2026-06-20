@@ -198,6 +198,20 @@ Các kiểm tra đã thực hiện cho release Source-aware Knowledge:
 
 ## 8. Tác động đạt được
 
+### 8.1 Hotfix độ tin cậy MRP cho tài liệu lớn (2026-06-21)
+
+Qua lần ingest thực tế tài liệu PDF có kế hoạch 64 trang, hệ thống phát hiện ba rủi ro: các writer chạy song song dùng chung `AsyncSession`, lỗi tạm thời từ AI gateway có thể sinh trang placeholder, và giới hạn worker 600 giây cắt job ngay khi bắt đầu COMMIT.
+
+Các thay đổi đã triển khai:
+
+- REFINE nạp trước snapshot wiki rồi mới chạy writer song song; không truy cập database đồng thời qua cùng một session.
+- Khi một writer lỗi, các task cùng nhóm được cancel và drain đầy đủ, tránh tiếp tục gọi LLM sau khi job đã thất bại.
+- Mỗi trang được retry tối đa 3 lần với backoff `15s`, `60s` và tôn trọng `retry_after` của provider; hết retry thì fail rõ ràng, không lưu placeholder.
+- Thời gian tối đa của ingestion worker tăng từ 600 lên 3600 giây; lỗi không có message như `TimeoutError`/`CancelledError` được ghi bằng tên exception.
+- COMMIT chuyển sang fail-fast và atomic: chỉ đánh dấu source `ready` sau khi toàn bộ page/contribution, index và activity log được commit thành công.
+
+Kết quả kiểm chứng end-to-end ngày 2026-06-21: REFINE và VERIFY hoàn tất `64/64`, COMMIT tạo 43 trang và cập nhật 21 lượt, lưu 63 contribution trên 63 wiki page (hai lượt plan hội tụ vào cùng page), compilation plan chuyển `done`, source chuyển `ready/commit/100%`. Tổng thời gian job retry là 1365,24 giây; không còn lỗi concurrent `AsyncSession` và không có dữ liệu commit nửa chừng.
+
 | Tiêu chí | Trước v2 | Sau v2 |
 |---|---|---|
 | Truy vết tri thức | Theo page/source ID | Theo contribution của từng source |

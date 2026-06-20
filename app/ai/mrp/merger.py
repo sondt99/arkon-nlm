@@ -9,8 +9,8 @@ Three layers of protection (inspired by LLM Wiki):
   2. Body merge via LLM — produces a coherent unified page.
   3. Sanity check — reject if merged body is too short (truncation guard).
 
-Fallback: any LLM failure or sanity-check rejection falls back to using the
-new content directly (existing behavior).
+Fallback: any LLM failure or sanity-check rejection keeps both inputs in a
+deterministic markdown document, so source knowledge is never dropped.
 """
 
 import asyncio
@@ -55,6 +55,10 @@ Return ONLY the merged markdown content, no other text.
 # Public API
 # ---------------------------------------------------------------------------
 
+def lossless_merge_fallback(existing_content: str, new_content: str) -> str:
+    """Combine both inputs without interpretation or data loss."""
+    return f"{existing_content.rstrip()}\n\n---\n\n{new_content.lstrip()}"
+
 async def merge_page_content(
     llm: LLMProvider,
     existing_content: str,
@@ -64,7 +68,7 @@ async def merge_page_content(
     """
     Merge new_content into existing_content using LLM.
 
-    Returns merged content on success, or new_content on failure (fallback).
+    Returns merged content on success, or both inputs on failure.
     """
     # Fast path: if existing is empty or very short, just use new content
     if not existing_content or len(existing_content.strip()) < 50:
@@ -98,9 +102,9 @@ async def merge_page_content(
             logger.warning(
                 f"MRP MERGE rejected for '{slug}': merged={len(merged)} chars, "
                 f"threshold={min_acceptable} (max input={max_input_len}). "
-                f"Falling back to new content."
+                f"Using lossless fallback."
             )
-            return new_content
+            return lossless_merge_fallback(existing_content, new_content)
 
         logger.info(
             f"MRP MERGE success for '{slug}': "
@@ -110,5 +114,5 @@ async def merge_page_content(
         return merged
 
     except Exception as exc:
-        logger.warning(f"MRP MERGE failed for '{slug}': {exc}. Falling back to new content.")
-        return new_content
+        logger.warning(f"MRP MERGE failed for '{slug}': {exc}. Using lossless fallback.")
+        return lossless_merge_fallback(existing_content, new_content)

@@ -291,6 +291,10 @@ class WikiPage(Base):
     source_ids: Mapped[list[uuid.UUID]] = mapped_column(
         ARRAY(UUID(as_uuid=True)), nullable=False, default=list,
     )
+    provenance_complete: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=True,
+        comment="True when page content can be rebuilt from source contributions",
+    )
     # Embeddings live in per-dimension tables (wiki_page_embeddings_<dim>) so
     # different embedding models with different output sizes can coexist.
     # See app/ai/embedding_catalog.py and migration 015.
@@ -305,6 +309,39 @@ class WikiPage(Base):
 
     __table_args__ = (
         Index("ix_wiki_pages_page_type", "page_type"),
+    )
+
+
+class WikiPageContribution(Base):
+    """Source-owned content used to build a canonical wiki page."""
+    __tablename__ = "wiki_page_contributions"
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, default=uuid.uuid4,
+    )
+    page_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("wiki_pages.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    source_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("sources.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    content_md: Mapped[str] = mapped_column(Text, nullable=False)
+    summary: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    source_title: Mapped[Optional[str]] = mapped_column(String(500), nullable=True)
+    knowledge_type_slug: Mapped[Optional[str]] = mapped_column(String(200), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(),
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now(),
+    )
+
+    __table_args__ = (
+        UniqueConstraint("page_id", "source_id", name="uq_wpc_page_source"),
+        Index("ix_wpc_source_id", "source_id"),
+        Index("ix_wpc_page_id", "page_id"),
     )
 
 

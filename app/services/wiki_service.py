@@ -21,7 +21,13 @@ from sqlalchemy import and_, delete, func, or_, select, text
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.database.models import WikiLink, WikiPage, WikiPageDraft, WikiPageRevision
+from app.database.models import (
+    WikiLink,
+    WikiPage,
+    WikiPageContribution,
+    WikiPageDraft,
+    WikiPageRevision,
+)
 
 # Reserved page slugs — these are regular WikiPage rows but treated specially.
 INDEX_SLUG = "_index"
@@ -577,31 +583,144 @@ async def delete_page_cascade(
 # Source removal — used when deleting a source
 # ---------------------------------------------------------------------------
 
+async def upsert_source_contribution(
+    session: AsyncSession,
+    page: WikiPage,
+    source_id: uuid.UUID,
+    content_md: str,
+    summary: str,
+    source_title: Optional[str] = None,
+    knowledge_type_slug: Optional[str] = None,
+) -> None:
+    """Persist the exact content owned by one source for one wiki page."""
+    stmt = pg_insert(WikiPageContribution).values(
+        page_id=page.id, source_id=source_id, content_md=content_md,
+        summary=summary or "", source_title=source_title,
+        knowledge_type_slug=knowledge_type_slug,
+    ).on_conflict_do_update(
+        constraint="uq_wpc_page_source",
+        set_={
+            "content_md": content_md,
+            "summary": summary or "",
+            "source_title": source_title,
+            "knowledge_type_slug": knowledge_type_slug,
+            "updated_at": func.now(),
+        },
+    )
+    await session.execute(stmt)
+    await session.flush()
+
+
+async def get_page_contributions(
+    session: AsyncSession,
+    page_id: uuid.UUID,
+    exclude_source_id: Optional[uuid.UUID] = None,
+) -> list[WikiPageContribution]:
+    stmt = select(WikiPageContribution).where(WikiPageContribution.page_id == page_id)
+    if exclude_source_id is not None:
+        stmt = stmt.where(WikiPageContribution.source_id != exclude_source_id)
+    stmt = stmt.order_by(WikiPageContribution.created_at, WikiPageContribution.id)
+    return list((await session.execute(stmt)).scalars().all())
+
+
+async def rebuild_page_from_contributions(
+    session: AsyncSession,
+    page: WikiPage,
+    contributions: list[WikiPageContribution],
+    merge_llm=None,
+    change_note: Optional[str] = None,
+) -> WikiPage:
+    """Rebuild canonical content using only the supplied source contributions."""
+    if not contributions:
+        raise ValueError("Cannot rebuild a wiki page without contributions")
+
+    content = contributions[0].content_md
+    if len(contributions) > 1:
+        if merge_llm is not None:
+            from app.ai.mrp.merger import merge_page_content
+            for contribution in contributions[1:]:
+                content = await merge_page_content(
+                    merge_llm, content, contribution.content_md, page.slug,
+                )
+        else:
+            from app.ai.mrp.merger import lossless_merge_fallback
+            for contribution in contributions[1:]:
+                content = lossless_merge_fallback(content, contribution.content_md)
+
+    summaries = list(dict.fromkeys(c.summary.strip() for c in contributions if c.summary.strip()))
+    page.content_md = content
+    page.summary = " ".join(summaries)
+    page.source_ids = [c.source_id for c in contributions]
+    page.knowledge_type_slugs = list(dict.fromkeys(
+        c.knowledge_type_slug for c in contributions if c.knowledge_type_slug
+    ))
+    page.provenance_complete = True
+    page.version = (page.version or 1) + 1
+    await session.flush()
+    await refresh_links(session, page.slug, content)
+    session.add(WikiPageRevision(
+        page_id=page.id, version=page.version, content_md=content,
+        change_type="source_rebuild", change_note=change_note,
+    ))
+    return page
+
+
 async def detach_source_from_wiki(
     session: AsyncSession,
     source_id: uuid.UUID,
-) -> int:
+    merge_llm=None,
+) -> dict:
     """
-    Remove `source_id` from every WikiPage.source_ids.
-    - Pages that have other contributing sources: keep, just remove this source_id.
-    - Pages whose only source was this one: delete immediately.
-
-    Returns the number of pages deleted.
+    Remove source-owned content and rebuild shared pages from surviving sources.
+    Legacy multi-source pages without complete provenance are detached without
+    rewriting content, avoiding destructive guesses about historical ownership.
     """
-    stmt = select(WikiPage).where(WikiPage.source_ids.any(source_id))  # type: ignore[arg-type]
+    contribution_pages = select(WikiPageContribution.page_id).where(
+        WikiPageContribution.source_id == source_id,
+    )
+    stmt = select(WikiPage).where(or_(
+        WikiPage.source_ids.any(source_id),  # type: ignore[arg-type]
+        WikiPage.id.in_(contribution_pages),
+    ))
     pages = list((await session.execute(stmt)).scalars().all())
     deleted_count = 0
+    rebuilt_count = 0
+    legacy_count = 0
+    rebuilt_page_ids: list[str] = []
     for page in pages:
         remaining = [sid for sid in (page.source_ids or []) if sid != source_id]
-        if not remaining:
-            await session.delete(page)
-            deleted_count += 1
+        contributions = await get_page_contributions(
+            session, page.id, exclude_source_id=source_id,
+        )
+        await session.execute(delete(WikiPageContribution).where(
+            WikiPageContribution.page_id == page.id,
+            WikiPageContribution.source_id == source_id,
+        ))
+        if page.provenance_complete:
+            if not contributions:
+                await session.delete(page)
+                deleted_count += 1
+            else:
+                await rebuild_page_from_contributions(
+                    session, page, contributions, merge_llm=merge_llm,
+                    change_note=f"Removed source {source_id}",
+                )
+                rebuilt_count += 1
+                rebuilt_page_ids.append(str(page.id))
         else:
             page.source_ids = remaining
+            legacy_count += 1
     await session.flush()
-    if deleted_count:
-        logger.info(f"detach_source_from_wiki({source_id}): deleted {deleted_count} single-source pages")
-    return deleted_count
+    logger.info(
+        f"detach_source_from_wiki({source_id}): deleted={deleted_count}, "
+        f"rebuilt={rebuilt_count}, legacy={legacy_count}"
+    )
+    return {
+        "pages_deleted": deleted_count,
+        "pages_rebuilt": rebuilt_count,
+        "legacy_pages_detached": legacy_count,
+        "rebuilt_page_ids": rebuilt_page_ids,
+    }
 
 
 # ---------------------------------------------------------------------------

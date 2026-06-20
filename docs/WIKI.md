@@ -267,6 +267,25 @@ When all source documents contributing to a wiki page are deleted, the page is m
 
 ## Knowledge graph
 
+## Source-aware knowledge provenance
+
+Arkon v2 stores the generated contribution from each source separately in
+`wiki_page_contributions`. A wiki page is the canonical synthesis of those
+contributions; `wiki_pages.source_ids` remains a fast denormalized index.
+
+This changes source lifecycle behavior:
+
+- Uploading a document creates or replaces that document's contribution to each planned page.
+- Updating a shared concept rebuilds it from all current contributions instead of overwriting another source.
+- Deleting a source deletes pages owned only by that source and rebuilds shared pages from the remaining sources.
+- Embeddings and wiki links are refreshed after a rebuild.
+- `GET /api/sources/{source_id}/knowledge-impact` previews which pages will be deleted, rebuilt, or treated as legacy before deletion.
+
+Migration `023` losslessly backfills existing single-source pages. Historical
+multi-source pages cannot be separated after the fact and are marked
+`provenance_complete=false`; new pages and new contributions use complete
+source-aware provenance.
+
 Wiki pages are linked via `[[wikilinks]]` in their content. Arkon extracts these links into a `wiki_links` table, enabling:
 
 - **Backlinks** — which pages link to this one

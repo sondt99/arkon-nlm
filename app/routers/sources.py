@@ -19,7 +19,14 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from app.database import get_db
-from app.database.models import Employee, ScopeType, Source, SourceDepartment, WikiPage
+from app.database.models import (
+    Employee,
+    ScopeType,
+    Source,
+    SourceDepartment,
+    WikiPage,
+    WikiPageContribution,
+)
 from app.database.repository import Repository
 from app.services.audit_service import log_audit
 from app.services.auth_service import (
@@ -865,6 +872,61 @@ async def reject_compilation_plan(
     return {"rejected": True}
 
 
+@router.get("/sources/{source_id}/knowledge-impact")
+async def get_source_knowledge_impact(
+    source_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+    _user: Employee = require_permission("doc:read"),
+):
+    """Preview exactly how deleting a source will affect compiled knowledge."""
+    source = await db.get(Source, source_id)
+    if not source:
+        raise HTTPException(status_code=404, detail="Source not found")
+
+    contribution_page_ids = select(WikiPageContribution.page_id).where(
+        WikiPageContribution.source_id == source_id,
+    )
+    page_rows = (await db.execute(
+        select(WikiPage)
+        .where(or_(
+            WikiPage.source_ids.any(source_id),  # type: ignore[arg-type]
+            WikiPage.id.in_(contribution_page_ids),
+        ))
+        .order_by(WikiPage.title)
+    )).scalars().all()
+    pages = []
+    for page in page_rows:
+        contribution = (await db.execute(
+            select(WikiPageContribution).where(
+                WikiPageContribution.page_id == page.id,
+                WikiPageContribution.source_id == source_id,
+            )
+        )).scalar_one_or_none()
+        contribution_count = (await db.execute(
+            select(func.count()).select_from(WikiPageContribution).where(
+                WikiPageContribution.page_id == page.id,
+            )
+        )).scalar_one()
+        pages.append({
+            "slug": page.slug,
+            "title": page.title,
+            "contribution_summary": contribution.summary if contribution else "",
+            "provenance_complete": page.provenance_complete,
+            "action": (
+                "delete_page" if page.provenance_complete and contribution_count == 1
+                else "rebuild_page" if page.provenance_complete
+                else "detach_legacy"
+            ),
+            "remaining_sources": max(0, contribution_count - 1),
+        })
+    return {
+        "source_id": str(source_id),
+        "source_title": source.title,
+        "affected_pages": len(pages),
+        "pages": pages,
+    }
+
+
 @router.delete("/sources/{source_id}")
 async def delete_source(
     source_id: uuid.UUID,
@@ -884,7 +946,38 @@ async def delete_source(
 
     # Detach from wiki — single-source pages are deleted, then rebuild index.
     from app.services import wiki_service
-    await wiki_service.detach_source_from_wiki(db, source_id)
+    merge_llm = None
+    registry = None
+    try:
+        from app.ai.registry import ProviderRegistry
+        registry = ProviderRegistry(db)
+        merge_llm = await registry.get_llm()
+    except Exception as exc:
+        logger.warning(f"Source-aware rebuild will use lossless fallback: {exc}")
+    impact = await wiki_service.detach_source_from_wiki(
+        db, source_id, merge_llm=merge_llm,
+    )
+    if registry and impact.get("rebuilt_page_ids"):
+        try:
+            from app.ai.embedding_catalog import get_spec
+            from app.services.embedding_storage import (
+                compute_content_hash,
+                embedding_input_text,
+                upsert_page_embedding,
+            )
+            spec_id = await registry.get_active_embedding_spec_id()
+            if spec_id:
+                spec = get_spec(spec_id)
+                provider = await registry.get_embedding(task="document", spec_id=spec_id)
+                for page_id in impact["rebuilt_page_ids"]:
+                    page = await db.get(WikiPage, uuid.UUID(page_id))
+                    if page:
+                        text = embedding_input_text(page.title, page.summary, page.content_md)
+                        vector = await provider.embed(text)
+                        content_hash = compute_content_hash(page.title, page.summary, page.content_md)
+                        await upsert_page_embedding(db, page.id, spec, vector, content_hash)
+        except Exception as exc:
+            logger.warning(f"Could not refresh rebuilt page embeddings: {exc}")
     await wiki_service.regenerate_index(
         db,
         scope_type=source.scope_type or "global",
@@ -893,4 +986,4 @@ async def delete_source(
 
     await log_audit(db, _user, "delete", "source", str(source.id), reason=source.title)
     await repo.delete_by_id(Source, source_id)
-    return {"deleted": True}
+    return {"deleted": True, "knowledge_impact": impact}

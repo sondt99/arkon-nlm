@@ -94,6 +94,8 @@ async def run_commit_phase(
 
     for pr in page_results:
         try:
+            page = None
+            source_content = _strip_invalid_image_markers(pr.content_md, _valid_image_ids)
             # Acquire advisory lock for this slug to prevent race conditions
             await session.execute(select(func.pg_advisory_xact_lock(func.hashtext(pr.slug))))
 
@@ -116,12 +118,18 @@ async def run_commit_phase(
                         slug=pr.slug,
                         title=pr.title,
                         page_type=pr.page_type,
-                        content_md=_strip_invalid_image_markers(pr.content_md, _valid_image_ids),
+                        content_md=source_content,
                         summary=pr.summary,
                         knowledge_type_slugs=[kt_slug] if kt_slug else [],
                         source_ids=[source.id],
                         scope_type=scope_type,
                         scope_id=scope_id,
+                    )
+                    page.provenance_complete = True
+                    await wiki_service.upsert_source_contribution(
+                        session, page, source.id, source_content, pr.summary,
+                        source_title=source.title or source.file_name,
+                        knowledge_type_slug=kt_slug,
                     )
                     pages_created += 1
                     if page.page_type != "source":
@@ -132,9 +140,24 @@ async def run_commit_phase(
                 existing_page = await wiki_service.get_page_by_slug(
                     session, pr.slug, scope_type=scope_type, scope_id=scope_id,
                 )
-                final_content = _strip_invalid_image_markers(pr.content_md, _valid_image_ids)
+                final_content = source_content
 
-                if existing_page and existing_page.content_md and merge_llm:
+                if existing_page and existing_page.provenance_complete:
+                    await wiki_service.upsert_source_contribution(
+                        session, existing_page, source.id, source_content, pr.summary,
+                        source_title=source.title or source.file_name,
+                        knowledge_type_slug=kt_slug,
+                    )
+                    contributions = await wiki_service.get_page_contributions(
+                        session, existing_page.id,
+                    )
+                    page = await wiki_service.rebuild_page_from_contributions(
+                        session, existing_page, contributions, merge_llm=merge_llm,
+                        change_note=f"Compiled source {source.id}",
+                    )
+                    pages_updated += 1
+
+                elif existing_page and existing_page.content_md and merge_llm:
                     # Check if content comes from a different source
                     existing_sources = set(str(sid) for sid in (existing_page.source_ids or []))
                     is_new_source = str(source.id) not in existing_sources
@@ -149,17 +172,18 @@ async def run_commit_phase(
                         )
                         final_content = _strip_invalid_image_markers(merged, _valid_image_ids)
 
-                page = await wiki_service.apply_update(
-                    session,
-                    slug=pr.slug,
-                    new_content_md=final_content,
-                    summary=pr.summary,
-                    title=pr.title,
-                    add_knowledge_type_slug=kt_slug,
-                    add_source_id=source.id,
-                    scope_type=scope_type,
-                    scope_id=scope_id,
-                )
+                if page is None:
+                    page = await wiki_service.apply_update(
+                        session,
+                        slug=pr.slug,
+                        new_content_md=final_content,
+                        summary=pr.summary,
+                        title=pr.title,
+                        add_knowledge_type_slug=kt_slug,
+                        add_source_id=source.id,
+                        scope_type=scope_type,
+                        scope_id=scope_id,
+                    )
                 if page is None:
                     # Page disappeared — create it instead
                     page = await wiki_service.apply_create(
@@ -167,15 +191,26 @@ async def run_commit_phase(
                         slug=pr.slug,
                         title=pr.title,
                         page_type=pr.page_type,
-                        content_md=_strip_invalid_image_markers(pr.content_md, _valid_image_ids),
+                        content_md=source_content,
                         summary=pr.summary,
                         knowledge_type_slugs=[kt_slug] if kt_slug else [],
                         source_ids=[source.id],
                         scope_type=scope_type,
                         scope_id=scope_id,
                     )
+                    page.provenance_complete = True
+                    await wiki_service.upsert_source_contribution(
+                        session, page, source.id, source_content, pr.summary,
+                        source_title=source.title or source.file_name,
+                        knowledge_type_slug=kt_slug,
+                    )
                     pages_created += 1
-                else:
+                elif not existing_page or not existing_page.provenance_complete:
+                    await wiki_service.upsert_source_contribution(
+                        session, page, source.id, source_content, pr.summary,
+                        source_title=source.title or source.file_name,
+                        knowledge_type_slug=kt_slug,
+                    )
                     pages_updated += 1
 
             await session.flush()
@@ -183,9 +218,9 @@ async def run_commit_phase(
             # Embed the page
             if embedding_provider is not None and embedding_spec is not None and page is not None:
                 try:
-                    embed_text = embedding_input_text(pr.title, pr.summary, pr.content_md)
+                    embed_text = embedding_input_text(page.title, page.summary, page.content_md)
                     vector = await embedding_provider.embed(embed_text)
-                    content_hash = compute_content_hash(pr.title, pr.summary, pr.content_md)
+                    content_hash = compute_content_hash(page.title, page.summary, page.content_md)
                     await upsert_page_embedding(session, page.id, embedding_spec, vector, content_hash)
                 except Exception as embed_exc:
                     logger.warning(f"MRP COMMIT embed failed for '{pr.slug}': {embed_exc}")

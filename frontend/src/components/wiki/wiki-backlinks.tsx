@@ -135,18 +135,30 @@ export function WikiSidebarRight({ slug, page }: Props) {
           )}
 
           {/* Source documents */}
-          {page.source_ids.length > 0 && (
+          {page.source_documents.length > 0 && (
             <div>
               <p className="text-xs text-muted-foreground/60 mb-1.5">
-                Source Documents ({page.source_ids.length})
+                Source Documents ({page.source_documents.length})
               </p>
-              <Link
-                href="/knowledge"
-                className="flex items-center gap-1.5 px-2 py-1.5 rounded-lg text-xs text-muted-foreground hover:bg-accent/50 hover:text-foreground transition-colors"
-              >
-                <span className="material-symbols-outlined text-xs">open_in_new</span>
-                View in Knowledge Base
-              </Link>
+              <div className="space-y-1">
+                {page.source_documents.map((source) => (
+                  <Link
+                    key={source.id}
+                    href={`/knowledge?source=${source.id}`}
+                    className="flex items-center gap-2 px-2 py-1.5 rounded-lg text-xs text-muted-foreground hover:bg-accent/50 hover:text-foreground transition-colors"
+                    title={source.title}
+                  >
+                    <span className="material-symbols-outlined text-xs text-primary">description</span>
+                    <span className="truncate">{source.title}</span>
+                  </Link>
+                ))}
+              </div>
+              <div className={`mt-2 flex items-center gap-1.5 text-[10px] ${page.provenance_complete ? "text-emerald-600 dark:text-emerald-400" : "text-amber-600 dark:text-amber-400"}`}>
+                <span className="material-symbols-outlined text-xs">
+                  {page.provenance_complete ? "verified" : "warning"}
+                </span>
+                {page.provenance_complete ? "Source-aware" : "Legacy provenance"}
+              </div>
             </div>
           )}
         </div>

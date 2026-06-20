@@ -15,12 +15,12 @@ import uuid
 from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query
-from pydantic import BaseModel, field_validator
+from pydantic import BaseModel, Field, field_validator
 from sqlalchemy import or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database import get_db
-from app.database.models import Employee, ProjectMember, WikiPage, WikiPageRevision
+from app.database.models import Employee, ProjectMember, Source, WikiPage, WikiPageRevision
 from app.services import wiki_service
 from app.services.audit_service import log_audit
 from app.services.auth_service import get_current_user, require_permission
@@ -52,6 +52,8 @@ class WikiPageDetail(WikiPageSummary):
     backlinks: list[str]
     outlinks: list[str]
     orphaned: bool = False
+    provenance_complete: bool = False
+    source_documents: list[dict] = Field(default_factory=list)
 
 
 class WikiDirectEditRequest(BaseModel):
@@ -90,13 +92,20 @@ def _summary(p: WikiPage) -> WikiPageSummary:
     )
 
 
-def _detail(p: WikiPage, backlinks: list[str], outlinks: list[str]) -> WikiPageDetail:
+def _detail(
+    p: WikiPage,
+    backlinks: list[str],
+    outlinks: list[str],
+    source_documents: Optional[list[dict]] = None,
+) -> WikiPageDetail:
     return WikiPageDetail(
         **_summary(p).model_dump(),
         content_md=p.content_md or "",
         backlinks=sorted(backlinks),
         outlinks=sorted(outlinks),
         orphaned=p.orphaned or False,
+        provenance_complete=p.provenance_complete or False,
+        source_documents=source_documents or [],
     )
 
 
@@ -198,7 +207,23 @@ async def get_wiki_page(
 
     backlinks = await wiki_service.get_backlinks(db, slug)
     outlinks = await wiki_service.get_outlinks(db, slug)
-    return _detail(page, backlinks, outlinks)
+    sources = []
+    if page.source_ids:
+        source_rows = (await db.execute(
+            select(Source.id, Source.title, Source.file_name, Source.status)
+            .where(Source.id.in_(page.source_ids))
+        )).all()
+        by_id = {row.id: row for row in source_rows}
+        sources = [
+            {
+                "id": str(source_id),
+                "title": (by_id[source_id].title or by_id[source_id].file_name)
+                if source_id in by_id else "Deleted source",
+                "status": by_id[source_id].status if source_id in by_id else "deleted",
+            }
+            for source_id in page.source_ids
+        ]
+    return _detail(page, backlinks, outlinks, sources)
 
 
 @router.get("/wiki/index")

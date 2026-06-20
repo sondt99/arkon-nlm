@@ -75,11 +75,26 @@ export function KnowledgeTable({
     setNlmDialogSource(source);
   };
 
-  const handleDelete = async (id: string) => {
+  const handleDelete = async (source: Source) => {
     setActionError(null);
-    onDeleteSource(id); // remove from UI immediately before API call
     try {
-      await api(`/api/sources/${id}`, { method: "DELETE" });
+      const impact = await api<{
+        affected_pages: number;
+        pages: Array<{ action: "delete_page" | "rebuild_page" | "detach_legacy" }>;
+      }>(`/api/sources/${source.id}/knowledge-impact`);
+      const deleted = impact.pages.filter((p) => p.action === "delete_page").length;
+      const rebuilt = impact.pages.filter((p) => p.action === "rebuild_page").length;
+      const legacy = impact.pages.filter((p) => p.action === "detach_legacy").length;
+      const details = [
+        `${impact.affected_pages} wiki page(s) affected`,
+        deleted ? `${deleted} page(s) will be removed` : null,
+        rebuilt ? `${rebuilt} shared page(s) will be rebuilt from remaining sources` : null,
+        legacy ? `${legacy} legacy page(s) cannot be fully reconciled` : null,
+      ].filter(Boolean).join("\n");
+      if (!window.confirm(`Delete “${source.title}”?\n\n${details || "No compiled knowledge is affected."}`)) return;
+
+      onDeleteSource(source.id);
+      await api(`/api/sources/${source.id}`, { method: "DELETE" });
       onRefresh();
     } catch (err) {
       setActionError(err instanceof Error ? err.message : "Failed to delete");
@@ -358,7 +373,7 @@ export function KnowledgeTable({
                         )}
                         <DropdownMenuSeparator />
                         <DropdownMenuItem
-                          onClick={() => handleDelete(source.id)}
+                          onClick={() => handleDelete(source)}
                           className="text-destructive"
                         >
                           <span className="material-symbols-outlined mr-2" style={{ fontSize: 16 }}>delete</span>

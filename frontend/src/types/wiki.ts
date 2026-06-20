@@ -18,6 +18,8 @@ export type WikiPageDetail = WikiPageSummary & {
   backlinks: string[];
   outlinks: string[];
   orphaned?: boolean;
+  provenance_complete: boolean;
+  source_documents: Array<{ id: string; title: string; status: string }>;
 };
 
 export type WikiGraphNode = {

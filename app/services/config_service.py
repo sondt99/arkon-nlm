@@ -105,6 +105,9 @@ ALL_CONFIG_KEYS = [
     "chatbot_api_key__ninerouter",
     "chatbot_base_url",
 
+    # --- Chat ---
+    "chat_rag_enabled",           # "true" | "false" — toggle RAG/KB search
+
     # --- System ---
     "session_timeout_minutes",
 

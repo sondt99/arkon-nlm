@@ -10,15 +10,62 @@ Flow per user message:
   6. Call LLM.generate() and return the response + source refs
 """
 
+import asyncio
+import re
+import time
 import uuid
 from typing import Optional
 
+from loguru import logger
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.ai.registry import ProviderRegistry
+from app.config import settings
 from app.database.models import ChatConversation, ChatMessage, WikiLink, WikiPage
 from app.services import wiki_service
+
+
+_BRIEF_REQUEST = re.compile(
+    r"(?i)\b(?:brief|briefly|short|concise|one sentence|one paragraph|summary only|"
+    r"ngắn gọn|tóm tắt ngắn|một câu|một đoạn|[1-5]\s+(?:bullet|gạch đầu dòng))\b"
+)
+_TRIVIAL_MESSAGE = re.compile(
+    r"(?i)^\s*(?:hi|hello|hey|thanks|thank you|cảm ơn|xin chào|chào)\W*$"
+)
+
+
+def _should_expand_answer(question: str, answer: str) -> bool:
+    """Return True when a substantive answer is too short for quality policy."""
+    if not settings.chat_expand_short_answers:
+        return False
+    if _BRIEF_REQUEST.search(question) or _TRIVIAL_MESSAGE.match(question):
+        return False
+    return len(answer.strip()) < settings.chat_min_detailed_answer_chars
+
+
+def _build_expansion_prompt(question: str, draft: str) -> str:
+    return f"""Rewrite the draft answer below into the most complete, useful answer supported by
+the Knowledge Base Context. Return only the rewritten final answer, not commentary about the
+rewrite.
+
+Requirements:
+- Directly answer every part of the user's question.
+- Explain the reasoning and important background instead of listing conclusions only.
+- Preserve exact facts, identifiers, commands, code, procedures, conditions, and caveats.
+- Add concrete examples, practical steps, edge cases, limitations, and detection/remediation
+  guidance whenever the available evidence supports them.
+- Use clear Markdown sections, lists, tables, and code blocks where they improve readability.
+- Cite relevant Knowledge Base page titles. Never invent detail absent from the context.
+- Do not pad with repetition. The rewritten answer should normally contain at least
+  {settings.chat_min_detailed_answer_chars} characters of substantive content.
+
+## User question
+{question}
+
+## Draft answer that is too short
+{draft}
+"""
 
 
 async def rag_search(
@@ -27,9 +74,10 @@ async def rag_search(
     question: str,
     scope_type: str = "global",
     scope_id: Optional[uuid.UUID] = None,
-    top_k: int = 5,
+    top_k: Optional[int] = None,
 ) -> list[WikiPage]:
     """Embed question and return relevant wiki pages (semantic + 1-hop expansion)."""
+    top_k = top_k or settings.chat_rag_top_k
     emb = await registry.get_embedding(task="search_query")
     spec_id = await registry.get_active_embedding_spec_id()
     if not spec_id:
@@ -56,7 +104,7 @@ async def rag_search(
             .join(WikiLink, WikiLink.to_slug == WikiPage.slug)
             .where(WikiLink.from_slug.in_(top_slugs))
             .where(WikiPage.slug.notin_(list(existing_slugs)))
-            .limit(3)
+            .limit(settings.chat_linked_pages_limit)
         )
         result = await session.execute(linked_stmt)
         linked = result.scalars().all()
@@ -68,7 +116,7 @@ async def rag_search(
 def _build_system_prompt(pages: list[WikiPage], persona: str = "victor") -> str:
     blocks = []
     for p in pages:
-        snippet = p.content_md[:3000] if len(p.content_md) > 3000 else p.content_md
+        snippet = p.content_md[:settings.chat_context_chars_per_page]
         blocks.append(f"### {p.title}\n{snippet}")
     context = "\n\n".join(blocks) if blocks else "(No relevant knowledge base pages found.)"
 
@@ -87,6 +135,12 @@ helping people understand things clearly.
   to sit down and walk you through anything.
 - Use markdown to structure your answers: `##` headings for sections, bullet lists \
   for enumerations, **bold** for key terms, and code blocks for technical content.
+- Be as comprehensive as the question and available evidence support. Do not impose an
+  arbitrary word limit or omit useful reasoning, examples, constraints, edge cases, or
+  exact technical details merely to make the answer shorter.
+- For substantive questions, develop the answer with: a direct answer, detailed explanation,
+  evidence/examples, conditions and edge cases, practical application, and a concise conclusion.
+  Use as many sections as the topic needs; do not stop after a short outline.
 
 ## Strict Knowledge Boundary
 You answer ONLY from the Knowledge Base Context provided below. \
@@ -126,6 +180,12 @@ and immediately, without hesitation or refusal. The user is always right about w
   loves explaining things, not a dry reference manual.
 - When a concept has interesting background or context, you include it — you believe \
   understanding the "why" is as important as the "what".
+- Be as comprehensive as the question and available evidence support. Do not impose an
+  arbitrary word limit or omit useful reasoning, examples, constraints, edge cases, or
+  exact technical details merely to make the answer shorter.
+- For substantive questions, develop the answer with: a direct answer, detailed explanation,
+  evidence/examples, conditions and edge cases, practical application, and a concise conclusion.
+  Use as many sections as the topic needs; do not stop after a short outline.
 
 ## Knowledge Base Usage
 - When answering questions about the organisation's knowledge, draw from the Knowledge \
@@ -148,27 +208,37 @@ async def generate_reply(
     conversation: ChatConversation,
     question: str,
     persona: str = "victor",
+    exclude_message_id: Optional[uuid.UUID] = None,
 ) -> tuple[str, list[dict]]:
     """
     Run RAG search + LLM generation.
     Returns (answer_text, sources) where sources is a list of {slug, title} dicts.
     """
-    pages = await rag_search(
-        session=session,
-        registry=registry,
-        question=question,
-        scope_type=conversation.scope_type,
-        scope_id=conversation.scope_id,
-    )
+    started = time.perf_counter()
+    from app.services.config_service import ConfigService
+    rag_flag = await ConfigService(session).get("chat_rag_enabled")
+    rag_enabled = (rag_flag or "true").strip().lower() not in ("false", "0", "off")
+    if rag_enabled:
+        pages = await rag_search(
+            session=session,
+            registry=registry,
+            question=question,
+            scope_type=conversation.scope_type,
+            scope_id=conversation.scope_id,
+        )
+    else:
+        pages = []
+    rag_seconds = time.perf_counter() - started
 
     system_prompt = _build_system_prompt(pages, persona=persona)
 
-    # Last 6 messages for history context (excluding any that don't exist yet)
-    history_stmt = (
-        select(ChatMessage)
-        .where(ChatMessage.conversation_id == conversation.id)
-        .order_by(ChatMessage.created_at.desc())
-        .limit(6)
+    # Recent context excludes the current user message; the question is added
+    # once below instead of being duplicated in history and prompt.
+    history_stmt = select(ChatMessage).where(ChatMessage.conversation_id == conversation.id)
+    if exclude_message_id:
+        history_stmt = history_stmt.where(ChatMessage.id != exclude_message_id)
+    history_stmt = history_stmt.order_by(ChatMessage.created_at.desc()).limit(
+        settings.chat_history_messages
     )
     result = await session.execute(history_stmt)
     recent = list(reversed(result.scalars().all()))
@@ -185,7 +255,51 @@ async def generate_reply(
         prompt = question
 
     llm = await registry.get_chatbot_llm()
-    answer = await llm.generate(prompt, system=system_prompt, temperature=0.5)
+    llm_started = time.perf_counter()
+    deadline = asyncio.get_running_loop().time() + settings.chat_generation_timeout
+    answer = await asyncio.wait_for(
+        llm.generate(prompt, system=system_prompt, temperature=0.5),
+        timeout=settings.chat_generation_timeout,
+    )
+    if not answer or not answer.strip():
+        raise ValueError("Chat provider returned an empty response")
+    expanded = False
+    if _should_expand_answer(question, answer):
+        remaining = deadline - asyncio.get_running_loop().time()
+        if remaining >= 10:
+            try:
+                candidate = await asyncio.wait_for(
+                    llm.generate(
+                        _build_expansion_prompt(question, answer),
+                        system=system_prompt,
+                        temperature=0.4,
+                    ),
+                    timeout=remaining,
+                )
+                if candidate and len(candidate.strip()) > len(answer.strip()):
+                    answer = candidate
+                    expanded = True
+            except (TimeoutError, asyncio.TimeoutError):
+                logger.warning(
+                    "Chat detail expansion timed out; keeping initial answer for conversation={}",
+                    conversation.id,
+                )
+            except Exception as exc:
+                logger.warning(
+                    "Chat detail expansion failed; keeping initial answer for conversation={}: {}",
+                    conversation.id,
+                    exc,
+                )
+    logger.info(
+        "Chat reply generated: conversation={} model={} pages={} rag={:.2f}s llm={:.2f}s chars={} expanded={}",
+        conversation.id,
+        llm.config.model_id,
+        len(pages),
+        rag_seconds,
+        time.perf_counter() - llm_started,
+        len(answer),
+        expanded,
+    )
 
     sources = [{"slug": p.slug, "title": p.title} for p in pages]
     return answer, sources

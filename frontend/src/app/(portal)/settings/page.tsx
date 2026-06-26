@@ -6,6 +6,7 @@ import { useAuth } from "@/lib/auth";
 import { PageHeader } from "@/components/shared/page-header";
 import { ProviderConfigCard } from "@/components/settings/provider-config-card";
 import { EmbeddingSettingsCard } from "@/components/settings/embedding-settings-card";
+import { ChatSettingsCard } from "@/components/settings/chat-settings-card";
 
 export default function SettingsPage() {
   const { user } = useAuth();
@@ -51,6 +52,8 @@ export default function SettingsPage() {
           testEndpoint="/api/settings/test-chatbot"
           fallbackNote="Optional — falls back to LLM Provider"
         />
+
+        <ChatSettingsCard />
       </div>
     </>
   );

@@ -95,6 +95,23 @@ function useGroupToggle(groupId: string, defaultOpen: boolean) {
   return [open, toggle] as const;
 }
 
+function useSidebarCollapse() {
+  const key = "sidebar-collapsed";
+  const [collapsed, setCollapsed] = React.useState(() => {
+    if (typeof window === "undefined") return false;
+    return localStorage.getItem(key) === "true";
+  });
+
+  const toggle = () =>
+    setCollapsed((v) => {
+      const next = !v;
+      localStorage.setItem(key, String(next));
+      return next;
+    });
+
+  return [collapsed, toggle] as const;
+}
+
 /* ─── Helpers ─── */
 
 function isActive(href: string, pathname: string) {
@@ -206,7 +223,11 @@ function SidebarWorkspacesSection({
 
     window.addEventListener("workspaces-changed", fetchWS);
     return () => window.removeEventListener("workspaces-changed", fetchWS);
-  }, [pathname]);
+    // Mount-only: `pathname` isn't read above, and the "workspaces-changed"
+    // event (dispatched whenever membership actually changes) already
+    // covers the case a per-navigation refetch was papering over.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   const SIDEBAR_LIMIT = 10;
   const hasActiveChild = workspaces.some((w) =>
@@ -384,17 +405,74 @@ function OrgHeader({
 export function Sidebar({ className }: { className?: string } = {}) {
   const pathname = usePathname();
   const { user, hasPermission } = useAuth();
+  const [collapsed, toggleCollapsed] = useSidebarCollapse();
 
   const visibleSections = navSections.filter((s) => {
     if (!s.requiredPermissions) return true;
     return s.requiredPermissions.some((p) => hasPermission(p));
   });
 
+  if (collapsed) {
+    const allItems = [
+      { label: "Dashboard", href: "/", icon: "dashboard" },
+      ...visibleSections.flatMap((s) =>
+        s.items.filter((i) => !i.requiredPermissions || i.requiredPermissions.some((p) => hasPermission(p)))
+      ),
+    ];
+
+    return (
+      <nav className={cn("flex flex-col h-full w-14 shrink-0 items-center bg-sidebar/90 border-r border-sidebar-border backdrop-blur-xl py-2 gap-1", className ?? "hidden md:flex")}>
+        <button
+          onClick={toggleCollapsed}
+          className="flex items-center justify-center w-9 h-9 rounded-md text-muted-foreground hover:bg-sidebar-accent/60 hover:text-foreground transition-colors"
+          title="Expand sidebar"
+        >
+          <Image src="/arkon-icon-v2.png" alt="Arkon" width={20} height={20} className="rounded-[4px]" />
+        </button>
+        <div className="w-6 border-t border-sidebar-border my-1" />
+        <div className="flex-1 overflow-y-auto overflow-x-hidden flex flex-col items-center gap-[2px] sidebar-scrollbar">
+          {allItems.map((item) => {
+            const active = isActive(item.href, pathname);
+            return (
+              <Link
+                key={item.href}
+                href={item.href}
+                title={item.label}
+                className={cn(
+                  "flex items-center justify-center w-9 h-9 rounded-md transition-colors duration-100",
+                  active
+                    ? "bg-sidebar-accent text-sidebar-accent-foreground"
+                    : "text-muted-foreground/70 hover:bg-sidebar-accent/60 hover:text-foreground"
+                )}
+              >
+                <span
+                  className="material-symbols-outlined text-[18px]"
+                  style={{ fontVariationSettings: active ? "'FILL' 1, 'wght' 300, 'GRAD' 0, 'opsz' 20" : "'FILL' 0, 'wght' 300, 'GRAD' 0, 'opsz' 20" }}
+                >
+                  {item.icon}
+                </span>
+              </Link>
+            );
+          })}
+        </div>
+      </nav>
+    );
+  }
+
   return (
     <nav className={cn("flex flex-col h-full w-[252px] shrink-0 bg-sidebar/90 border-r border-sidebar-border backdrop-blur-xl", className ?? "hidden md:flex")}>
       {/* Org Header + User */}
-      <div className="pt-2">
-        <OrgHeader user={user} />
+      <div className="pt-2 flex items-center gap-1 pr-1">
+        <div className="flex-1 min-w-0">
+          <OrgHeader user={user} />
+        </div>
+        <button
+          onClick={toggleCollapsed}
+          className="shrink-0 flex items-center justify-center w-7 h-7 rounded-md text-muted-foreground/50 hover:bg-sidebar-accent hover:text-foreground transition-colors"
+          title="Collapse sidebar"
+        >
+          <span className="material-symbols-outlined text-[16px]">chevron_left</span>
+        </button>
       </div>
 
       {/* Divider */}

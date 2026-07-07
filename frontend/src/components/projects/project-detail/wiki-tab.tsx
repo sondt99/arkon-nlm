@@ -16,9 +16,10 @@ type Props = {
   wikiPages: WikiPageSummary[];
   wikiLoading: boolean;
   wikiIndexMd: string | null;
+  onWikiChanged?: () => void;
 };
 
-export function WikiTab({ project, wikiPages, wikiLoading, wikiIndexMd }: Props) {
+export function WikiTab({ project, wikiPages, wikiLoading, wikiIndexMd, onWikiChanged }: Props) {
   const [wikiTypeTab, setWikiTypeTab] = useState<string>("all");
   const [selectedWikiSlug, setSelectedWikiSlug] = useState<string | null>(null);
   const [selectedWikiPage, setSelectedWikiPage] = useState<WikiPageDetail | null>(null);
@@ -48,7 +49,9 @@ export function WikiTab({ project, wikiPages, wikiLoading, wikiIndexMd }: Props)
     <div className="flex gap-0 -mx-6 md:-mx-8 -mb-6 md:-mb-8 flex-1 min-h-0 border-t border-border overflow-hidden">
       {/* Page Tree sidebar — scoped to workspace */}
       <WikiPageTree
-        pagesUrl={`/api/projects/${project.id}/wiki?limit=2000`}
+        pages={wikiPages}
+        loading={wikiLoading}
+        onDeleted={onWikiChanged}
         activeSlug={selectedWikiSlug ?? undefined}
         onPageSelect={(slug) => {
           setSelectedWikiSlug(slug);

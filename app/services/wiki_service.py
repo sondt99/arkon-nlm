@@ -239,6 +239,9 @@ async def list_pages(
     return list(result.scalars().all())
 
 
+_SCOPE_CLAUSE_UNSET = object()
+
+
 async def search_pages_semantic(
     session: AsyncSession,
     query_embedding: list[float],
@@ -247,6 +250,7 @@ async def search_pages_semantic(
     scope_type: str = "global",
     scope_id: Optional[uuid.UUID] = None,
     spec_id: Optional[str] = None,
+    scope_clause=_SCOPE_CLAUSE_UNSET,
 ) -> list[tuple[WikiPage, float]]:
     """
     Cosine-similarity search over wiki page embeddings within a scope.
@@ -255,6 +259,12 @@ async def search_pages_semantic(
     The active embedding model spec determines which table to query and which
     `model_spec_id` rows to filter to. Pass `spec_id` explicitly to override —
     only used by tests and internal tooling.
+
+    `scope_clause`, when passed, is a SQLAlchemy clause (or None for "no
+    restriction") that overrides scope_type/scope_id entirely — used by
+    callers whose scoping can't be expressed as a single global/one-scope
+    pair (e.g. "global + every workspace I'm a member of"). Defaults to
+    deriving the clause from scope_type/scope_id, unchanged from before.
 
     Returns (page, similarity) pairs sorted by similarity descending. Returns
     an empty list if no active embedding model is configured.
@@ -272,19 +282,23 @@ async def search_pages_semantic(
     spec = get_spec(spec_id)
     Emb = get_embedding_model_for_dim(spec.dimension)
 
+    if scope_clause is _SCOPE_CLAUSE_UNSET:
+        scope_clause = _scope_filter(scope_type, scope_id)
+
+    conditions = [
+        Emb.model_spec_id == spec.id,
+        WikiPage.slug.notin_([INDEX_SLUG, LOG_SLUG]),
+    ]
+    if scope_clause is not None:
+        conditions.append(scope_clause)
+
     stmt = (
         select(
             WikiPage,
             (1 - Emb.embedding.cosine_distance(query_embedding)).label("similarity"),
         )
         .join(Emb, Emb.page_id == WikiPage.id)
-        .where(
-            and_(
-                Emb.model_spec_id == spec.id,
-                WikiPage.slug.notin_([INDEX_SLUG, LOG_SLUG]),
-                _scope_filter(scope_type, scope_id),
-            )
-        )
+        .where(and_(*conditions))
         .order_by(Emb.embedding.cosine_distance(query_embedding))
         .limit(top_k)
     )

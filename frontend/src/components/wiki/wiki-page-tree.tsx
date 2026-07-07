@@ -3,32 +3,37 @@
 import React from "react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
+import { useVirtualizer } from "@tanstack/react-virtual";
 import { cn } from "@/lib/utils";
 import { api } from "@/lib/api";
+import { useDebounce } from "@/lib/hooks/use-debounce";
 import { WikiPageSummary } from "@/types/wiki";
 import { wikiTypeIcon, wikiTypeColor, wikiTypeGroupLabel } from "./wiki-type-badge";
 
 const GROUP_ORDER = ["entity", "concept", "topic", "source", "synthesis"];
+const HEADER_ROW_HEIGHT = 34;
+const ITEM_ROW_HEIGHT = 30;
 
-function useDebounce<T>(value: T, delay: number): T {
-  const [debounced, setDebounced] = React.useState(value);
-  React.useEffect(() => {
-    const t = setTimeout(() => setDebounced(value), delay);
-    return () => clearTimeout(t);
-  }, [value, delay]);
-  return debounced;
-}
+type FlatRow =
+  | { kind: "header"; type: string; count: number; isExpanded: boolean }
+  | { kind: "item"; page: WikiPageSummary };
 
 export function WikiPageTree({
   activeSlug,
   onDeleted,
+  pages: pagesProp,
+  loading: loadingProp,
   pagesUrl,
   linkQueryParams,
   onPageSelect,
 }: {
   activeSlug?: string;
   onDeleted?: () => void;
-  /** Override the API URL to load pages from (default: /api/wiki/pages) */
+  /** Pre-fetched pages — when provided, the tree skips its own fetch entirely. */
+  pages?: WikiPageSummary[];
+  /** Loading flag for the pre-fetched `pages` mode. Ignored in self-fetch mode. */
+  loading?: boolean;
+  /** Override the API URL to load pages from (default: /api/wiki/pages). Ignored when `pages` is provided. */
   pagesUrl?: string;
   /** Query params to append to page links (e.g. "?scopeType=project&scopeId=xxx") */
   linkQueryParams?: string;
@@ -36,8 +41,12 @@ export function WikiPageTree({
   onPageSelect?: (slug: string) => void;
 }) {
   const pathname = usePathname();
-  const [pages, setPages] = React.useState<WikiPageSummary[]>([]);
-  const [loading, setLoading] = React.useState(true);
+  const usingExternalPages = pagesProp !== undefined;
+  const [internalPages, setInternalPages] = React.useState<WikiPageSummary[]>([]);
+  const [internalLoading, setInternalLoading] = React.useState(!usingExternalPages);
+  const pages = usingExternalPages ? pagesProp! : internalPages;
+  const loading = usingExternalPages ? (loadingProp ?? false) : internalLoading;
+
   const [search, setSearch] = React.useState("");
   const [collapsed, setCollapsed] = React.useState(false);
   const treeRef = React.useRef<HTMLDivElement>(null);
@@ -63,73 +72,18 @@ export function WikiPageTree({
   const debouncedSearch = useDebounce(search, 150);
 
   const loadPages = React.useCallback(() => {
+    if (usingExternalPages) return;
+    setInternalLoading(true);
     const url = pagesUrl || "/api/wiki/pages?limit=2000";
     api<WikiPageSummary[]>(url)
-      .then((data) => setPages(Array.isArray(data) ? data : []))
-      .catch(() => setPages([]))
-      .finally(() => setLoading(false));
-  }, [pagesUrl]);
+      .then((data) => setInternalPages(Array.isArray(data) ? data : []))
+      .catch(() => setInternalPages([]))
+      .finally(() => setInternalLoading(false));
+  }, [pagesUrl, usingExternalPages]);
 
   React.useEffect(() => {
     loadPages();
   }, [loadPages]);
-
-  // Auto-expand group and scroll active item into view when slug or pages change
-  React.useEffect(() => {
-    if (!currentSlug || !pages.length) return;
-    const activePage = pages.find((p) => p.slug === currentSlug);
-    if (!activePage || activePage.page_type === "index" || activePage.page_type === "log") return;
-
-    // Expand group if collapsed
-    if (!expandedGroupsRef.current.has(activePage.page_type)) {
-      setExpandedGroups((prev) => {
-        const next = new Set(prev);
-        next.add(activePage.page_type);
-        try {
-          localStorage.setItem("wiki-tree-expanded-groups", JSON.stringify([...next]));
-        } catch {}
-        return next;
-      });
-    }
-
-    // Scroll after DOM update
-    requestAnimationFrame(() => {
-      const el = treeRef.current?.querySelector(`[data-slug="${CSS.escape(currentSlug)}"]`);
-      el?.scrollIntoView({ block: "nearest", behavior: "smooth" });
-    });
-  }, [currentSlug, pages]);
-
-  const handleDelete = async (slug: string) => {
-    // First click: arm; second click: execute
-    if (armedSlug !== slug) {
-      setArmedSlug(slug);
-      return;
-    }
-    setArmedSlug(null);
-    setDeletingSlug(slug);
-    try {
-      await api(`/api/wiki/pages/${encodeURIComponent(slug)}`, { method: "DELETE" });
-      loadPages();
-      onDeleted?.();
-    } catch (err) {
-      console.error("Delete failed:", err);
-    } finally {
-      setDeletingSlug(null);
-    }
-  };
-
-  // Click outside armed row → disarm
-  React.useEffect(() => {
-    if (!armedSlug) return;
-    const handler = (e: MouseEvent) => {
-      const target = e.target as HTMLElement;
-      if (!target.closest(`[data-slug="${armedSlug}"]`)) {
-        setArmedSlug(null);
-      }
-    };
-    document.addEventListener("click", handler, true);
-    return () => document.removeEventListener("click", handler, true);
-  }, [armedSlug]);
 
   const filtered = React.useMemo(() => {
     if (!debouncedSearch) return pages;
@@ -156,6 +110,87 @@ export function WikiPageTree({
   const totalCount = filtered.filter(
     (p) => p.page_type !== "index" && p.page_type !== "log"
   ).length;
+
+  const flatRows: FlatRow[] = React.useMemo(() => {
+    const rows: FlatRow[] = [];
+    for (const type of GROUP_ORDER) {
+      const items = grouped.get(type);
+      if (!items) continue;
+      const isExpanded = expandedGroups.has(type);
+      rows.push({ kind: "header", type, count: items.length, isExpanded });
+      if (isExpanded) for (const page of items) rows.push({ kind: "item", page });
+    }
+    return rows;
+  }, [grouped, expandedGroups]);
+
+  const virtualizer = useVirtualizer({
+    count: flatRows.length,
+    getScrollElement: () => treeRef.current,
+    estimateSize: (i) => (flatRows[i].kind === "header" ? HEADER_ROW_HEIGHT : ITEM_ROW_HEIGHT),
+    overscan: 12,
+  });
+
+  // Auto-expand group and scroll active item into view when slug or pages change
+  React.useEffect(() => {
+    if (!currentSlug || !pages.length) return;
+    const activePage = pages.find((p) => p.slug === currentSlug);
+    if (!activePage || activePage.page_type === "index" || activePage.page_type === "log") return;
+
+    if (!expandedGroupsRef.current.has(activePage.page_type)) {
+      setExpandedGroups((prev) => {
+        const next = new Set(prev);
+        next.add(activePage.page_type);
+        try {
+          localStorage.setItem("wiki-tree-expanded-groups", JSON.stringify([...next]));
+        } catch {}
+        return next;
+      });
+      // Group just expanded — let flatRows recompute before scrolling.
+      return;
+    }
+
+    const index = flatRows.findIndex(
+      (r) => r.kind === "item" && r.page.slug === currentSlug
+    );
+    if (index >= 0) {
+      requestAnimationFrame(() => {
+        virtualizer.scrollToIndex(index, { align: "center" });
+      });
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [currentSlug, pages, flatRows]);
+
+  const handleDelete = async (slug: string) => {
+    // First click: arm; second click: execute
+    if (armedSlug !== slug) {
+      setArmedSlug(slug);
+      return;
+    }
+    setArmedSlug(null);
+    setDeletingSlug(slug);
+    try {
+      await api(`/api/wiki/pages/${encodeURIComponent(slug)}`, { method: "DELETE" });
+      if (!usingExternalPages) loadPages();
+      onDeleted?.();
+    } catch (err) {
+      console.error("Delete failed:", err);
+    } finally {
+      setDeletingSlug(null);
+    }
+  };
+
+  // Click outside armed row → disarm
+  React.useEffect(() => {
+    if (!armedSlug) return;
+    const handler = (e: MouseEvent) => {
+      const target = e.target as HTMLElement;
+      if (!target.closest(`[data-slug="${armedSlug}"]`)) {
+        setArmedSlug(null);
+      }
+    };
+    document.addEventListener("click", handler, true);
+    return () => document.removeEventListener("click", handler, true);
+  }, [armedSlug]);
 
   const toggleGroup = (type: string) =>
     setExpandedGroups((prev) => {
@@ -236,109 +271,116 @@ export function WikiPageTree({
               />
             ))}
           </div>
-        ) : grouped.size === 0 ? (
+        ) : flatRows.length === 0 ? (
           <p className="text-xs text-muted-foreground px-4 py-3">No pages found.</p>
         ) : (
-          GROUP_ORDER.filter((t) => grouped.has(t)).map((type) => {
-            const items = grouped.get(type)!;
-            const isExpanded = expandedGroups.has(type);
-            return (
-              <div key={type} className="mb-1">
-                <button
-                  onClick={() => toggleGroup(type)}
-                  className="w-full flex items-center gap-2 px-3 py-1.5 hover:bg-accent/40 transition-colors"
-                >
-                  <span className="material-symbols-outlined text-xs text-muted-foreground">
-                    {isExpanded ? "expand_more" : "chevron_right"}
-                  </span>
-                  <span
-                    className="material-symbols-outlined text-xs"
-                    style={{ color: wikiTypeColor(type), fontSize: 13 }}
-                  >
-                    {wikiTypeIcon(type)}
-                  </span>
-                  <span className="text-xs font-semibold text-muted-foreground uppercase tracking-wide flex-1 text-left">
-                    {wikiTypeGroupLabel(type)}
-                  </span>
-                  <span className="text-xs text-muted-foreground tabular-nums">
-                    {items.length}
-                  </span>
-                </button>
-                {isExpanded && (
-                  <div className="ml-3">
-                    {items.map((page) => {
-                      const isActive = page.slug === currentSlug;
-                      const isArmed = armedSlug === page.slug;
-                      const isDeleting = deletingSlug === page.slug;
-                      return (
-                        <div
-                          key={page.slug}
-                          data-slug={page.slug}
-                          className={cn(
-                            "group flex items-center gap-1 rounded-lg mx-1 transition-all",
-                            isActive
-                              ? "bg-primary/10"
-                              : "hover:bg-accent/50"
-                          )}
-                        >
-                          {onPageSelect ? (
-                            <button
-                              onClick={() => onPageSelect(page.slug)}
-                              className={cn(
-                                "flex-1 flex items-center gap-2 px-2 py-1.5 text-xs min-w-0 transition-all text-left",
-                                isActive
-                                  ? "text-primary font-medium"
-                                  : "text-muted-foreground hover:text-foreground"
-                              )}
-                              title={page.summary || page.title}
-                            >
-                              <span className="truncate">{page.title}</span>
-                            </button>
-                          ) : (
-                            <Link
-                              href={`/wiki/${page.slug}${linkQueryParams || ""}`}
-                              className={cn(
-                                "flex-1 flex items-center gap-2 px-2 py-1.5 text-xs min-w-0 transition-all",
-                                isActive
-                                  ? "text-primary font-medium"
-                                  : "text-muted-foreground hover:text-foreground"
-                              )}
-                              title={page.summary || page.title}
-                            >
-                              <span className="truncate">{page.title}</span>
-                            </Link>
-                          )}
+          <div style={{ height: virtualizer.getTotalSize(), position: "relative" }}>
+            {virtualizer.getVirtualItems().map((virtualRow) => {
+              const row = flatRows[virtualRow.index];
+              const rowStyle: React.CSSProperties = {
+                position: "absolute",
+                top: 0,
+                left: 0,
+                width: "100%",
+                height: virtualRow.size,
+                transform: `translateY(${virtualRow.start}px)`,
+              };
 
-                          {/* Delete button — 2-stage */}
-                          {isDeleting ? (
-                            <span className="material-symbols-outlined text-xs text-destructive animate-pulse mr-1.5">
-                              progress_activity
-                            </span>
-                          ) : isArmed ? (
-                            <button
-                              onClick={(e) => { e.stopPropagation(); handleDelete(page.slug); }}
-                              className="shrink-0 mr-1 px-1.5 py-0.5 rounded text-[10px] font-semibold bg-destructive text-destructive-foreground hover:bg-destructive/90 animate-pulse transition-colors"
-                              title={`Click again to confirm delete "${page.title}"`}
-                            >
-                              Confirm
-                            </button>
-                          ) : (
-                            <button
-                              onClick={(e) => { e.preventDefault(); e.stopPropagation(); handleDelete(page.slug); }}
-                              className="shrink-0 mr-1 opacity-0 group-hover:opacity-100 text-muted-foreground hover:text-destructive transition-all"
-                              title={`Delete "${page.title}"`}
-                            >
-                              <span className="material-symbols-outlined" style={{ fontSize: 14 }}>delete</span>
-                            </button>
-                          )}
-                        </div>
-                      );
-                    })}
+              if (row.kind === "header") {
+                return (
+                  <div key={`header-${row.type}`} style={rowStyle} className="mb-1">
+                    <button
+                      onClick={() => toggleGroup(row.type)}
+                      className="w-full h-full flex items-center gap-2 px-3 hover:bg-accent/40 transition-colors"
+                    >
+                      <span className="material-symbols-outlined text-xs text-muted-foreground">
+                        {row.isExpanded ? "expand_more" : "chevron_right"}
+                      </span>
+                      <span
+                        className="material-symbols-outlined text-xs"
+                        style={{ color: wikiTypeColor(row.type), fontSize: 13 }}
+                      >
+                        {wikiTypeIcon(row.type)}
+                      </span>
+                      <span className="text-xs font-semibold text-muted-foreground uppercase tracking-wide flex-1 text-left">
+                        {wikiTypeGroupLabel(row.type)}
+                      </span>
+                      <span className="text-xs text-muted-foreground tabular-nums">
+                        {row.count}
+                      </span>
+                    </button>
                   </div>
-                )}
-              </div>
-            );
-          })
+                );
+              }
+
+              const page = row.page;
+              const isActive = page.slug === currentSlug;
+              const isArmed = armedSlug === page.slug;
+              const isDeleting = deletingSlug === page.slug;
+              return (
+                <div key={page.slug} style={rowStyle} className="ml-3 pr-1">
+                  <div
+                    data-slug={page.slug}
+                    className={cn(
+                      "group h-full flex items-center gap-1 rounded-lg mx-1 transition-all",
+                      isActive ? "bg-primary/10" : "hover:bg-accent/50"
+                    )}
+                  >
+                    {onPageSelect ? (
+                      <button
+                        onClick={() => onPageSelect(page.slug)}
+                        className={cn(
+                          "flex-1 flex items-center gap-2 px-2 py-1.5 text-xs min-w-0 transition-all text-left",
+                          isActive
+                            ? "text-primary font-medium"
+                            : "text-muted-foreground hover:text-foreground"
+                        )}
+                        title={page.summary || page.title}
+                      >
+                        <span className="truncate">{page.title}</span>
+                      </button>
+                    ) : (
+                      <Link
+                        href={`/wiki/${page.slug}${linkQueryParams || ""}`}
+                        className={cn(
+                          "flex-1 flex items-center gap-2 px-2 py-1.5 text-xs min-w-0 transition-all",
+                          isActive
+                            ? "text-primary font-medium"
+                            : "text-muted-foreground hover:text-foreground"
+                        )}
+                        title={page.summary || page.title}
+                      >
+                        <span className="truncate">{page.title}</span>
+                      </Link>
+                    )}
+
+                    {/* Delete button — 2-stage */}
+                    {isDeleting ? (
+                      <span className="material-symbols-outlined text-xs text-destructive animate-pulse mr-1.5">
+                        progress_activity
+                      </span>
+                    ) : isArmed ? (
+                      <button
+                        onClick={(e) => { e.stopPropagation(); handleDelete(page.slug); }}
+                        className="shrink-0 mr-1 px-1.5 py-0.5 rounded text-[10px] font-semibold bg-destructive text-destructive-foreground hover:bg-destructive/90 animate-pulse transition-colors"
+                        title={`Click again to confirm delete "${page.title}"`}
+                      >
+                        Confirm
+                      </button>
+                    ) : (
+                      <button
+                        onClick={(e) => { e.preventDefault(); e.stopPropagation(); handleDelete(page.slug); }}
+                        className="shrink-0 mr-1 opacity-0 group-hover:opacity-100 text-muted-foreground hover:text-destructive transition-all"
+                        title={`Delete "${page.title}"`}
+                      >
+                        <span className="material-symbols-outlined" style={{ fontSize: 14 }}>delete</span>
+                      </button>
+                    )}
+                  </div>
+                </div>
+              );
+            })}
+          </div>
         )}
       </div>
     </div>

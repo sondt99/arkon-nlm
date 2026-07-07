@@ -14,6 +14,7 @@ import { WikiSearchDialog } from "@/components/wiki/wiki-search-dialog";
 import { EmptyState } from "@/components/shared/empty-state";
 
 const TYPE_TABS = ["all", "entity", "concept", "topic", "source", "synthesis"] as const;
+const GRID_PAGE_SIZE = 60;
 
 export default function WikiIndexPage() {
   const [indexMd, setIndexMd] = React.useState<string | null>(null);
@@ -21,8 +22,10 @@ export default function WikiIndexPage() {
   const [loading, setLoading] = React.useState(true);
   const [searchOpen, setSearchOpen] = React.useState(false);
   const [activeTab, setActiveTab] = React.useState<string>("all");
+  const [visibleCount, setVisibleCount] = React.useState(GRID_PAGE_SIZE);
 
-  React.useEffect(() => {
+  const loadAll = React.useCallback(() => {
+    setLoading(true);
     Promise.all([
       api<{ content_md: string }>("/api/wiki/index"),
       api<WikiPageSummary[]>("/api/wiki/pages?limit=2000"),
@@ -36,6 +39,10 @@ export default function WikiIndexPage() {
       })
       .catch(() => {})
       .finally(() => setLoading(false));
+  }, []);
+
+  React.useEffect(() => {
+    loadAll();
 
     const handler = (e: KeyboardEvent) => {
       if ((e.metaKey || e.ctrlKey) && e.key === "k") {
@@ -45,7 +52,9 @@ export default function WikiIndexPage() {
     };
     window.addEventListener("keydown", handler);
     return () => window.removeEventListener("keydown", handler);
-  }, []);
+  }, [loadAll]);
+
+  React.useEffect(() => setVisibleCount(GRID_PAGE_SIZE), [activeTab]);
 
   // Stats
   const totalPages = allPages.length;
@@ -95,7 +104,7 @@ export default function WikiIndexPage() {
 
       <div className="flex-1 flex gap-0 -mx-6 md:-mx-8 lg:-mx-10 -mb-6 md:-mb-8 lg:-mb-10 min-h-0 border-t border-border">
         {/* Page Tree */}
-        <WikiPageTree />
+        <WikiPageTree pages={allPages} loading={loading} onDeleted={loadAll} />
 
         {/* Content */}
         <div className="flex-1 overflow-y-auto px-8 py-6">
@@ -170,7 +179,7 @@ export default function WikiIndexPage() {
                   </div>
 
                   <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
-                    {displayPages.map((page) => (
+                    {displayPages.slice(0, visibleCount).map((page) => (
                       <Link
                         key={page.slug}
                         href={`/wiki/${page.slug}`}
@@ -201,6 +210,17 @@ export default function WikiIndexPage() {
                       </Link>
                     ))}
                   </div>
+
+                  {displayPages.length > visibleCount && (
+                    <div className="flex justify-center mt-6">
+                      <Button
+                        variant="outline"
+                        onClick={() => setVisibleCount((c) => c + GRID_PAGE_SIZE)}
+                      >
+                        Show more ({displayPages.length - visibleCount} remaining)
+                      </Button>
+                    </div>
+                  )}
                 </div>
               )}
             </>

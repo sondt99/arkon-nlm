@@ -15,10 +15,12 @@ import uuid
 from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query
+from loguru import logger
 from pydantic import BaseModel, Field, field_validator
 from sqlalchemy import or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.ai.registry import ProviderRegistry
 from app.database import get_db
 from app.database.models import Employee, ProjectMember, Source, WikiPage, WikiPageRevision
 from app.services import wiki_service
@@ -168,6 +170,61 @@ async def list_wiki_pages(
 
     result = await db.execute(stmt)
     return [_summary(p) for p in result.scalars().all()]
+
+
+class WikiSearchResult(BaseModel):
+    slug: str
+    title: str
+    page_type: str
+    summary: str
+    scope_type: str = "global"
+    scope_id: Optional[uuid.UUID] = None
+    score: float
+
+
+@router.get("/wiki/search", response_model=list[WikiSearchResult])
+async def search_wiki_pages(
+    q: str = Query(..., min_length=1),
+    top_k: int = Query(20, ge=1, le=50),
+    db: AsyncSession = Depends(get_db),
+    user: Employee = require_permission("wiki:read"),
+):
+    """Semantic search over wiki pages, scoped identically to GET /wiki/pages."""
+    if not q.strip():
+        raise HTTPException(422, "q cannot be empty")
+
+    scope_clause = _build_wiki_scope_filter(user)
+
+    try:
+        registry = ProviderRegistry(db)
+        embedding_provider = await registry.get_embedding(task="search_query")
+        query_embedding = await embedding_provider.embed(q)
+    except ValueError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+    except Exception as exc:
+        logger.exception("Wiki search embedding failed for query={!r}", q)
+        raise HTTPException(status_code=502, detail="Search is temporarily unavailable.") from exc
+
+    try:
+        hits = await wiki_service.search_pages_semantic(
+            db, query_embedding=query_embedding, top_k=top_k, scope_clause=scope_clause,
+        )
+    except Exception as exc:
+        logger.exception("Wiki search failed for query={!r}", q)
+        raise HTTPException(status_code=502, detail="Search is temporarily unavailable.") from exc
+
+    return [
+        WikiSearchResult(
+            slug=p.slug,
+            title=p.title,
+            page_type=p.page_type,
+            summary=p.summary or "",
+            scope_type=p.scope_type or "global",
+            scope_id=p.scope_id,
+            score=round(score, 4),
+        )
+        for p, score in hits
+    ]
 
 
 @router.get("/wiki/pages/{slug:path}", response_model=WikiPageDetail)

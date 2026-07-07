@@ -13,6 +13,16 @@ export type WikiPageSummary = {
   updated_at: string;
 };
 
+export type WikiSearchResult = {
+  slug: string;
+  title: string;
+  page_type: WikiPageType;
+  summary: string;
+  scope_type?: string;
+  scope_id?: string;
+  score: number;
+};
+
 export type WikiPageDetail = WikiPageSummary & {
   content_md: string;
   backlinks: string[];

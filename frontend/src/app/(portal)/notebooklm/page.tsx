@@ -731,20 +731,6 @@ function parseCSV(csv: string): { headers: string[]; rows: string[][] } {
   return { headers: parse(lines[0]), rows: lines.slice(1).map(parse) };
 }
 
-function mdToHtml(md: string): string {
-  return md
-    .replace(/^#### (.+)$/gm, "<h4>$1</h4>")
-    .replace(/^### (.+)$/gm, "<h3>$1</h3>")
-    .replace(/^## (.+)$/gm, "<h2>$1</h2>")
-    .replace(/^# (.+)$/gm, "<h1>$1</h1>")
-    .replace(/\*\*(.+?)\*\*/g, "<strong>$1</strong>")
-    .replace(/\*(.+?)\*/g, "<em>$1</em>")
-    .replace(/^[-*] (.+)$/gm, "<li>$1</li>")
-    .replace(/(<li>.*<\/li>\n?)+/g, (m) => `<ul>${m}</ul>`)
-    .replace(/\n{2,}/g, "</p><p>")
-    .replace(/^(?!<[hpuo]|<li)(.+)$/gm, "<p>$1</p>");
-}
-
 /* ─── Preview Dialog ─────────────────────────────────────────────────────── */
 
 function PreviewDialog({
@@ -959,8 +945,9 @@ function PreviewDialog({
         <div
           className="prose prose-sm max-w-none overflow-y-auto rounded-lg border border-border bg-card px-6 py-5 dark:prose-invert"
           style={{ maxHeight: "72vh" }}
-          dangerouslySetInnerHTML={{ __html: mdToHtml(previewData.markdown) }}
-        />
+        >
+          <NotebookChatMarkdown text={previewData.markdown} />
+        </div>
       );
     }
 

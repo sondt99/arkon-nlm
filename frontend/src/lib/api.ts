@@ -138,4 +138,34 @@ export async function apiUpload<T = unknown>(
   return res.json();
 }
 
+/** Fetch a binary resource with the auth header (not the URL) carrying the token. */
+export async function fetchAuthedBlob(path: string, timeoutMs = 30_000): Promise<Blob> {
+  const token = getToken();
+  const controller = new AbortController();
+  const timerId = setTimeout(() => controller.abort(), timeoutMs);
+
+  let res: Response;
+  try {
+    res = await fetch(`${API_BASE}${path}`, {
+      signal: controller.signal,
+      headers: {
+        ...(token ? { Authorization: `Bearer ${token}` } : {}),
+      },
+    });
+  } catch (err) {
+    if (err instanceof DOMException && err.name === "AbortError") {
+      throw new ApiError(0, "Request timed out");
+    }
+    throw err;
+  } finally {
+    clearTimeout(timerId);
+  }
+
+  if (!res.ok) {
+    throw new ApiError(res.status, `API Error ${res.status}`);
+  }
+
+  return res.blob();
+}
+
 export { ApiError };

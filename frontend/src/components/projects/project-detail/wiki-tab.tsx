@@ -1,5 +1,6 @@
 import React, { useState, useMemo } from "react";
 import { EmptyState } from "@/components/shared/empty-state";
+import { Pagination } from "@/components/ui/pagination";
 import { WikiTypeBadge, wikiTypeGroupLabel } from "@/components/wiki/wiki-type-badge";
 import { WikiPageTree } from "@/components/wiki/wiki-page-tree";
 import { WikiContent } from "@/components/wiki/wiki-content";
@@ -212,29 +213,12 @@ export function WikiTab({ project, wikiPages, wikiLoading, wikiIndexMd, onWikiCh
                 </div>
 
                 {/* Pagination */}
-                {pageCount > 1 && (
-                  <div className="flex items-center justify-center gap-3 mt-6">
-                    <button
-                      onClick={() => setPageNum((p) => Math.max(1, p - 1))}
-                      disabled={currentPage === 1}
-                      className="inline-flex items-center gap-1 px-3 py-1.5 rounded-lg text-xs font-medium border border-border text-muted-foreground hover:text-foreground hover:border-primary/40 disabled:opacity-40 disabled:pointer-events-none transition-colors"
-                    >
-                      <span className="material-symbols-outlined" style={{ fontSize: 14 }}>chevron_left</span>
-                      Previous
-                    </button>
-                    <span className="text-xs text-muted-foreground tabular-nums">
-                      Page {currentPage} / {pageCount}
-                    </span>
-                    <button
-                      onClick={() => setPageNum((p) => Math.min(pageCount, p + 1))}
-                      disabled={currentPage === pageCount}
-                      className="inline-flex items-center gap-1 px-3 py-1.5 rounded-lg text-xs font-medium border border-border text-muted-foreground hover:text-foreground hover:border-primary/40 disabled:opacity-40 disabled:pointer-events-none transition-colors"
-                    >
-                      Next
-                      <span className="material-symbols-outlined" style={{ fontSize: 14 }}>chevron_right</span>
-                    </button>
-                  </div>
-                )}
+                <Pagination
+                  page={currentPage}
+                  totalPages={pageCount}
+                  onPageChange={setPageNum}
+                  className="mt-6"
+                />
               </>
             )}
           </>

@@ -37,10 +37,7 @@ export function clearToken() {
   localStorage.removeItem("arkon_token");
 }
 
-export async function api<T = unknown>(
-  path: string,
-  options: RequestOptions = {}
-): Promise<T> {
+async function request(path: string, options: RequestOptions = {}): Promise<Response> {
   const { method = "GET", body, headers = {}, timeoutMs = REQUEST_TIMEOUT_MS } = options;
   const token = getToken();
 
@@ -86,10 +83,31 @@ export async function api<T = unknown>(
     throw new ApiError(res.status, message, data);
   }
 
+  return res;
+}
+
+export async function api<T = unknown>(
+  path: string,
+  options: RequestOptions = {}
+): Promise<T> {
+  const res = await request(path, options);
   // Handle empty responses (204, etc.)
   const text = await res.text();
   if (!text) return {} as T;
   return JSON.parse(text);
+}
+
+/** Like `api()`, but also exposes response headers — for endpoints that carry
+ * metadata (e.g. `X-Total-Count`) outside the JSON body to stay backward
+ * compatible with other consumers of that body shape. */
+export async function apiWithMeta<T = unknown>(
+  path: string,
+  options: RequestOptions = {}
+): Promise<{ data: T; headers: Headers }> {
+  const res = await request(path, options);
+  const text = await res.text();
+  const data = (text ? JSON.parse(text) : {}) as T;
+  return { data, headers: res.headers };
 }
 
 /** Upload a file via multipart/form-data. Uses the same base URL as `api()`. */

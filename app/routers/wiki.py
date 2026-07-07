@@ -14,15 +14,21 @@ Scope filtering:
 import uuid
 from typing import Optional
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, Response
 from loguru import logger
 from pydantic import BaseModel, Field, field_validator
-from sqlalchemy import or_, select
+from sqlalchemy import func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.ai.registry import ProviderRegistry
 from app.database import get_db
-from app.database.models import Employee, ProjectMember, Source, WikiPage, WikiPageRevision
+from app.database.models import (
+    Employee,
+    ProjectMember,
+    Source,
+    WikiPage,
+    WikiPageRevision,
+)
 from app.services import wiki_service
 from app.services.audit_service import log_audit
 from app.services.auth_service import get_current_user, require_permission
@@ -142,6 +148,7 @@ def _build_wiki_scope_filter(user: Employee):
 
 @router.get("/wiki/pages", response_model=list[WikiPageSummary])
 async def list_wiki_pages(
+    response: Response,
     page_type: Optional[str] = Query(None),
     knowledge_type_slug: Optional[str] = Query(None),
     limit: int = Query(50, ge=1, le=5000),
@@ -149,25 +156,33 @@ async def list_wiki_pages(
     db: AsyncSession = Depends(get_db),
     user: Employee = require_permission("wiki:read"),
 ):
-    """List wiki pages filtered by user's permission scope."""
+    """List wiki pages filtered by user's permission scope.
+
+    Sets an `X-Total-Count` response header (count under the same filters,
+    ignoring limit/offset) so callers can paginate server-side without a
+    breaking change to the response body shape.
+    """
+    filters = [WikiPage.slug.notin_([wiki_service.INDEX_SLUG, wiki_service.LOG_SLUG])]
+
+    scope_filter = _build_wiki_scope_filter(user)
+    if scope_filter is not None:
+        filters.append(scope_filter)
+    if page_type:
+        filters.append(WikiPage.page_type == page_type)
+    if knowledge_type_slug:
+        filters.append(WikiPage.knowledge_type_slugs.any(knowledge_type_slug))  # type: ignore[arg-type]
+
+    count_stmt = select(func.count()).select_from(WikiPage).where(*filters)
+    total = (await db.execute(count_stmt)).scalar_one()
+    response.headers["X-Total-Count"] = str(total)
+
     stmt = (
         select(WikiPage)
-        .where(WikiPage.slug.notin_([wiki_service.INDEX_SLUG, wiki_service.LOG_SLUG]))
+        .where(*filters)
         .order_by(WikiPage.updated_at.desc())
         .limit(limit)
         .offset(offset)
     )
-
-    # Apply scope filter
-    scope_filter = _build_wiki_scope_filter(user)
-    if scope_filter is not None:
-        stmt = stmt.where(scope_filter)
-
-    if page_type:
-        stmt = stmt.where(WikiPage.page_type == page_type)
-    if knowledge_type_slug:
-        stmt = stmt.where(WikiPage.knowledge_type_slugs.any(knowledge_type_slug))  # type: ignore[arg-type]
-
     result = await db.execute(stmt)
     return [_summary(p) for p in result.scalars().all()]
 

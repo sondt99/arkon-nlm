@@ -12,6 +12,7 @@ import { WikiTypeBadge, wikiTypeGroupLabel } from "@/components/wiki/wiki-type-b
 import { ScopeBadge } from "@/components/shared/scope-badge";
 import { WikiSearchDialog } from "@/components/wiki/wiki-search-dialog";
 import { EmptyState } from "@/components/shared/empty-state";
+import { Pagination } from "@/components/ui/pagination";
 
 const TYPE_TABS = ["all", "entity", "concept", "topic", "source", "synthesis"] as const;
 const GRID_PAGE_SIZE = 60;
@@ -22,7 +23,7 @@ export default function WikiIndexPage() {
   const [loading, setLoading] = React.useState(true);
   const [searchOpen, setSearchOpen] = React.useState(false);
   const [activeTab, setActiveTab] = React.useState<string>("all");
-  const [visibleCount, setVisibleCount] = React.useState(GRID_PAGE_SIZE);
+  const [cardPage, setCardPage] = React.useState(1);
 
   const loadAll = React.useCallback(() => {
     setLoading(true);
@@ -54,8 +55,6 @@ export default function WikiIndexPage() {
     return () => window.removeEventListener("keydown", handler);
   }, [loadAll]);
 
-  React.useEffect(() => setVisibleCount(GRID_PAGE_SIZE), [activeTab]);
-
   // Stats
   const totalPages = allPages.length;
   const typeCounts = React.useMemo(() => {
@@ -72,6 +71,13 @@ export default function WikiIndexPage() {
       : allPages.filter((p) => p.page_type === activeTab);
     return list;
   }, [allPages, activeTab]);
+
+  const cardPageCount = Math.max(1, Math.ceil(displayPages.length / GRID_PAGE_SIZE));
+  const currentCardPage = Math.min(cardPage, cardPageCount);
+  const pagedDisplayPages = React.useMemo(
+    () => displayPages.slice((currentCardPage - 1) * GRID_PAGE_SIZE, currentCardPage * GRID_PAGE_SIZE),
+    [displayPages, currentCardPage]
+  );
 
   return (
     <>
@@ -162,7 +168,7 @@ export default function WikiIndexPage() {
                       return (
                         <button
                           key={tab}
-                          onClick={() => setActiveTab(tab)}
+                          onClick={() => { setActiveTab(tab); setCardPage(1); }}
                           className={`px-3 py-2 text-xs font-medium capitalize border-b-2 transition-colors ${
                             activeTab === tab
                               ? "border-primary text-primary"
@@ -179,7 +185,7 @@ export default function WikiIndexPage() {
                   </div>
 
                   <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
-                    {displayPages.slice(0, visibleCount).map((page) => (
+                    {pagedDisplayPages.map((page) => (
                       <Link
                         key={page.slug}
                         href={`/wiki/${page.slug}`}
@@ -211,16 +217,12 @@ export default function WikiIndexPage() {
                     ))}
                   </div>
 
-                  {displayPages.length > visibleCount && (
-                    <div className="flex justify-center mt-6">
-                      <Button
-                        variant="outline"
-                        onClick={() => setVisibleCount((c) => c + GRID_PAGE_SIZE)}
-                      >
-                        Show more ({displayPages.length - visibleCount} remaining)
-                      </Button>
-                    </div>
-                  )}
+                  <Pagination
+                    page={currentCardPage}
+                    totalPages={cardPageCount}
+                    onPageChange={setCardPage}
+                    className="mt-6"
+                  />
                 </div>
               )}
             </>

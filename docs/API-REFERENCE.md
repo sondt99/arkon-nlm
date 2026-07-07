@@ -225,6 +225,8 @@ Danh sách wiki pages.
 | `scope_id` | uuid | Workspace ID |
 | `limit` | int | Mặc định 20 |
 
+**Response header:** `X-Total-Count` — tổng số wiki page khớp filter (không tính `limit`/`offset`), dùng để phân trang phía client mà không đổi cấu trúc body.
+
 ### GET /api/wiki/pages/{slug}
 Đọc một wiki page theo slug.
 

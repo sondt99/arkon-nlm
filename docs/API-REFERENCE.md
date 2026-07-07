@@ -674,6 +674,63 @@ Audit log. Yêu cầu `org:audit:read`.
 
 ---
 
+## Export API (External Integrations)
+
+REST endpoints for external tools that aren't MCP clients (n8n, Zapier, internal scripts, other AI platforms) to chat with Victor/Ashley or query the wiki directly. Authenticates with the same bearer token used for MCP — not the JWT used by `## Authentication` above:
+
+```
+Authorization: Bearer <mcp_token>
+```
+
+Get a token via `POST /api/my/mcp-token` (self-service, while logged in with a JWT) or have an admin issue one via `POST /api/employees/{id}/mcp-token`. Not scoped to internet search — this API only reaches Arkon's own knowledge base.
+
+### POST /api/export/v1/chat
+Chat with a persona (`victor` or `ashley`); reuses the same RAG pipeline as `/api/chat`.
+
+**Body:**
+```json
+{
+  "persona": "victor",
+  "question": "What is XYZ?",
+  "conversation_id": null,
+  "workspace_id": null
+}
+```
+Omit `conversation_id` to start a new conversation (owned by the token's employee). `workspace_id` scopes the conversation to a workspace — the token's employee must be a member.
+
+**Response 200:**
+```json
+{
+  "answer": "string",
+  "sources": [{ "slug": "string", "title": "string" }],
+  "conversation_id": "uuid"
+}
+```
+**Errors:** `401` bad/missing token · `403` no workspace access · `404` unknown `conversation_id` · `422` invalid persona/empty question · `502` chat generation failed (unlike `/api/chat`, no assistant message is saved on failure — machine callers get a clean HTTP error instead of a 200-with-apology).
+
+### GET /api/export/v1/search
+Direct semantic search over wiki pages — no chat/persona layer, no wiki-link expansion.
+
+**Query params:**
+| Param | Type | Mô tả |
+|---|---|---|
+| `q` | string | Search query (required) |
+| `top_k` | int | Default 10, clamped 1-50 |
+| `workspace_id` | uuid | Optional — scope to a workspace |
+
+**Response 200:**
+```json
+{
+  "query": "incident response",
+  "results": [
+    { "slug": "string", "title": "string", "summary": "string", "page_type": "string", "knowledge_type_slugs": ["string"], "score": 0.87 }
+  ]
+}
+```
+**Errors:** `401`, `403` (workspace), `422` empty `q`, `502` embedding/search backend failed (e.g. no active embedding model configured in Settings).
+
+---
+
 ## Health
 
 ### GET /health

@@ -16,11 +16,14 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Optional
 
+from fastapi import Depends, HTTPException
+from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from loguru import logger
 from sqlalchemy import exists, or_, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
+from app.database import get_db
 from app.database.models import (
     Employee,
     ProjectMember,
@@ -259,3 +262,28 @@ def apply_scope_filter(query, identity: ResolvedIdentity):
         query = query.where(or_(*conditions))
 
     return query
+
+
+# ---------------------------------------------------------------------------
+# FastAPI dependency — REST callers using the same token as MCP (export API)
+# ---------------------------------------------------------------------------
+
+_export_bearer = HTTPBearer(auto_error=False)
+
+
+async def get_identity_from_export_token(
+    credentials: Optional[HTTPAuthorizationCredentials] = Depends(_export_bearer),
+    db: AsyncSession = Depends(get_db),
+) -> ResolvedIdentity:
+    """
+    FastAPI dependency — resolves an Employee.mcp_token bearer token to a
+    ResolvedIdentity, for REST routers (e.g. the export API) outside the
+    FastMCP tool-call surface. Reuses the same token as MCP/Claude Desktop.
+    """
+    if not credentials:
+        raise HTTPException(status_code=401, detail="Not authenticated")
+
+    identity = await MCPAuthService(db).verify_token(credentials.credentials)
+    if identity is None:
+        raise HTTPException(status_code=401, detail="Invalid or inactive export token")
+    return identity

@@ -151,7 +151,7 @@ app/
 | `role` | ENUM | `admin` / `employee` |
 | `department_id` | UUID FK→departments | Nullable |
 | `custom_role_id` | UUID FK→roles | Vai trò tùy chỉnh, nullable |
-| `mcp_token` | VARCHAR UNIQUE | Bearer token cho MCP, nullable |
+| `mcp_token` | VARCHAR UNIQUE | Bearer token dùng chung cho MCP (`/mcp`) và Export API (`/api/export/v1/*`), nullable |
 | `is_active` | BOOLEAN | Mặc định TRUE |
 | `last_connected` | TIMESTAMP | Lần cuối kết nối |
 
@@ -1066,6 +1066,58 @@ Chatbot dựa trên RAG (Retrieval-Augmented Generation) — trả lời câu h�
 }
 ```
 **Lỗi:** `400` — không có messages; `422` — page_type không hợp lệ; `504` — LLM timeout (120s)
+
+---
+
+### 4.11 Export API (REST cho công cụ ngoài) — `/api/export/v1`
+
+Cho phép công cụ bên ngoài không nói giao thức MCP (n8n, Zapier, script nội bộ, nền tảng AI khác) chat với Victor/Ashley hoặc tìm kiếm wiki trực tiếp qua REST. Dùng lại đúng token MCP (`Employee.mcp_token`) làm credential — không phát sinh hệ key mới. Chưa hỗ trợ tìm kiếm ngoài internet (đánh giá và hoãn lại; xem `docs/API-REFERENCE.md`).
+
+**Auth:** `Authorization: Bearer <mcp_token>` — xác thực qua `MCPAuthService.verify_token()` (giống MCP), không phải JWT nhân viên. Token sai/hết hiệu lực → `401`.
+
+---
+
+#### `POST /api/export/v1/chat`
+**Body:**
+```json
+{
+  "persona": "victor",
+  "question": "What is XYZ?",
+  "conversation_id": null,
+  "workspace_id": null
+}
+```
+`persona` chỉ nhận `"victor"` hoặc `"ashley"`. Không truyền `conversation_id` → tạo hội thoại mới (chủ sở hữu = nhân viên gắn với token); có `workspace_id` → kiểm tra `can_access_workspace()`, hội thoại scope `project`.
+
+**Flow:** tái dùng nguyên vẹn `chat_service.save_message` + `chat_service.generate_reply` (cùng logic RAG/persona với `/api/chat`) — không triển khai lại.
+
+**Response 200:**
+```json
+{
+  "answer": "...",
+  "sources": [{"slug": "...", "title": "..."}],
+  "conversation_id": "..."
+}
+```
+**Lỗi:** `401` — token sai/thiếu; `403` — không có quyền vào workspace; `404` — `conversation_id` không thuộc token này; `422` — persona/question không hợp lệ; `502` — LLM/provider lỗi khi sinh câu trả lời (khác `/api/chat`: **không** lưu tin nhắn assistant lỗi, để caller máy-gọi-máy nhận lỗi HTTP rõ ràng thay vì phải đọc nội dung answer).
+
+---
+
+#### `GET /api/export/v1/search`
+**Query:** `q` (bắt buộc), `top_k` (mặc định 10, giới hạn 1-50), `workspace_id` (tùy chọn).
+
+**Flow:** gọi thẳng `wiki_service.search_pages_semantic()` (không qua `rag_search()` của chat, nên không có bước mở rộng 1-hop wiki_links) — kết quả thô, xếp hạng theo cosine similarity, lọc theo `allowed_knowledge_types` của token.
+
+**Response 200:**
+```json
+{
+  "query": "incident response",
+  "results": [
+    {"slug": "...", "title": "...", "summary": "...", "page_type": "concept", "knowledge_type_slugs": ["sop"], "score": 0.87}
+  ]
+}
+```
+**Lỗi:** `401`, `403` (workspace), `422` — `q` rỗng; `502` — lỗi embedding/search backend (ví dụ chưa cấu hình embedding model trong Settings).
 
 ---
 

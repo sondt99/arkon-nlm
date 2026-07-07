@@ -15,7 +15,7 @@ import re
 import uuid
 from typing import Optional
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Query
 from loguru import logger
 from pydantic import BaseModel
 from sqlalchemy import delete, select
@@ -23,10 +23,9 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.ai.registry import ProviderRegistry
 from app.database import get_db
-from app.database.models import ChatConversation, ChatMessage
+from app.database.models import ChatConversation, ChatMessage, Employee
 from app.services import chat_service
 from app.services.auth_service import get_current_user
-from app.database.models import Employee
 
 router = APIRouter()
 
@@ -153,6 +152,31 @@ async def delete_conversation(
     conv = await _get_owned_conversation(db, conversation_id, current_user.id)
     await db.delete(conv)
     await db.commit()
+
+
+class BulkDeleteConversationsResponse(BaseModel):
+    deleted: int
+
+
+@router.delete("/chat/conversations")
+async def delete_all_conversations(
+    scope_type: Optional[str] = Query(None),
+    scope_id: Optional[uuid.UUID] = Query(None),
+    db: AsyncSession = Depends(get_db),
+    current_user: Employee = Depends(get_current_user),
+) -> BulkDeleteConversationsResponse:
+    """Delete all of the current user's conversations, optionally restricted
+    to one scope — lets a future multi-workspace chat UI clear only its own
+    conversations. Messages cascade-delete at the DB level (FK ondelete=CASCADE).
+    """
+    stmt = delete(ChatConversation).where(ChatConversation.employee_id == current_user.id)
+    if scope_type is not None:
+        stmt = stmt.where(ChatConversation.scope_type == scope_type)
+    if scope_id is not None:
+        stmt = stmt.where(ChatConversation.scope_id == scope_id)
+    result = await db.execute(stmt)
+    await db.commit()
+    return BulkDeleteConversationsResponse(deleted=result.rowcount or 0)
 
 
 # ---------------------------------------------------------------------------

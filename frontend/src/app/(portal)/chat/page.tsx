@@ -6,6 +6,7 @@ import remarkGfm from "remark-gfm";
 import { Check, Copy } from "lucide-react";
 import { api } from "@/lib/api";
 import { cn } from "@/lib/utils";
+import { ConfirmDialog } from "@/components/ui/confirm-dialog";
 import { AddToWikiDialog } from "./add-to-wiki-dialog";
 
 type Conversation = {
@@ -393,6 +394,7 @@ export default function ChatPage() {
   const [editingMsgId, setEditingMsgId] = React.useState<string | null>(null);
   const [editingMsgContent, setEditingMsgContent] = React.useState("");
   const [wikiDialogOpen, setWikiDialogOpen] = React.useState(false);
+  const [clearAllOpen, setClearAllOpen] = React.useState(false);
   const bottomRef = React.useRef<HTMLDivElement>(null);
   const textareaRef = React.useRef<HTMLTextAreaElement>(null);
   const editInputRef = React.useRef<HTMLInputElement>(null);
@@ -490,6 +492,13 @@ export default function ChatPage() {
       }
     } catch {}
     setDeletingId(null);
+  };
+
+  const handleClearAll = async () => {
+    await api("/api/chat/conversations", { method: "DELETE" });
+    setConversations([]);
+    setActiveConvId(null);
+    setMessages([]);
   };
 
   const handleStartEdit = (conv: Conversation) => {
@@ -691,6 +700,15 @@ export default function ChatPage() {
             >
               <span className="material-symbols-outlined text-base">edit_square</span>
             </button>
+            {conversations.length > 0 && (
+              <button
+                onClick={() => setClearAllOpen(true)}
+                className="flex items-center justify-center w-8 h-8 rounded-md text-muted-foreground hover:bg-destructive/10 hover:text-destructive transition-colors"
+                title="Clear all conversations"
+              >
+                <span className="material-symbols-outlined text-base">delete_sweep</span>
+              </button>
+            )}
             <div className="w-6 border-t border-border my-1" />
             <div className="flex-1 overflow-y-auto overflow-x-hidden flex flex-col items-center gap-[2px]">
               {conversations.map((conv) => {
@@ -726,6 +744,15 @@ export default function ChatPage() {
             >
               <span className="material-symbols-outlined text-base">edit_square</span>
             </button>
+            {conversations.length > 0 && (
+              <button
+                onClick={() => setClearAllOpen(true)}
+                className="text-muted-foreground hover:text-destructive transition-colors"
+                title="Clear all conversations"
+              >
+                <span className="material-symbols-outlined text-base">delete_sweep</span>
+              </button>
+            )}
             <button
               onClick={toggleConvSidebar}
               className="text-muted-foreground hover:text-foreground transition-colors"
@@ -1033,6 +1060,15 @@ export default function ChatPage() {
           onClose={() => setWikiDialogOpen(false)}
         />
       )}
+
+      <ConfirmDialog
+        open={clearAllOpen}
+        onOpenChange={setClearAllOpen}
+        title="Clear all conversations?"
+        description="This permanently deletes every conversation and message in your chat history. This cannot be undone."
+        confirmLabel="Clear all"
+        onConfirm={handleClearAll}
+      />
     </div>
   );
 }

@@ -207,26 +207,34 @@ def require_permission(permission: str):
             _get_user_permissions,
             has_any_permission,
         )
+        from app.services.permissions import LEGACY_PERMISSION_MAP
         effective = _get_user_permissions(current_user)
 
-        # Check exact match first (for org: permissions)
-        if permission in effective:
-            return current_user
+        # Normalize legacy dotted permission names (e.g. "kb.create") to the
+        # current colon format, using the same mapping _get_user_permissions()
+        # applies to stored role permissions. Non-legacy strings pass through
+        # unchanged, so this is purely additive for existing colon-format callers.
+        candidates = LEGACY_PERMISSION_MAP.get(permission, [permission])
 
-        # Check as resource:action (matches either :own_dept or :all)
-        parts = permission.split(":")
-        if len(parts) == 2:
-            resource, action = parts
-            if has_any_permission(list(effective), resource, action):
+        for candidate in candidates:
+            if not candidate:
+                continue
+
+            # Check exact match first (for org: permissions)
+            if candidate in effective:
                 return current_user
-        elif len(parts) == 3:
-            # Exact scoped permission check
-            if permission in effective:
-                return current_user
-            # Also check if user has the :all version when :own_dept is required
-            resource, action, scope = parts
-            if scope == "own_dept" and f"{resource}:{action}:all" in effective:
-                return current_user
+
+            # Check as resource:action (matches either :own_dept or :all)
+            parts = candidate.split(":")
+            if len(parts) == 2:
+                resource, action = parts
+                if has_any_permission(list(effective), resource, action):
+                    return current_user
+            elif len(parts) == 3:
+                # Also check if user has the :all version when :own_dept is required
+                resource, action, scope = parts
+                if scope == "own_dept" and f"{resource}:{action}:all" in effective:
+                    return current_user
 
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,

@@ -101,8 +101,12 @@ async def create_skill_contribution(
 
     if req.skill_id:
         base_skill = await db.get(Skill, req.skill_id)
-        if base_skill and base_skill.is_system:
-            raise HTTPException(403, "System skills cannot be modified via contributions")
+        if base_skill:
+            if base_skill.is_system:
+                raise HTTPException(403, "System skills cannot be modified via contributions")
+            from app.services.permission_engine import can_access_skill
+            if not await can_access_skill(db, user, base_skill, "read"):
+                raise HTTPException(403, "You do not have access to this skill")
 
     contribution = await SkillService.create_contribution(
         db, req.skill_id, req.base_version, user.id, req.title, req.scope_type, req.scope_ids
@@ -476,7 +480,10 @@ async def submit_skill_contribution(
     contribution = await db.get(SkillContribution, contribution_id)
     if not contribution:
         raise HTTPException(404, "Contribution not found")
-    
+
+    if contribution.contributor_id != user.id and user.role != "admin":
+        raise HTTPException(403, "You can only submit your own contributions")
+
     if contribution.status == SkillContributionStatus.APPROVED.value:
         raise HTTPException(400, "Contribution already approved")
 

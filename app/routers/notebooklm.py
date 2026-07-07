@@ -382,6 +382,9 @@ async def create_notebook(
         source = await db.get(Source, body.source_id)
         if not source:
             raise HTTPException(status_code=404, detail="Source not found")
+        from app.services.permission_engine import can_access_document
+        if not await can_access_document(db, current_user, source, "read"):
+            raise HTTPException(status_code=403, detail="Access denied")
         if not source.full_text:
             raise HTTPException(
                 status_code=400,
@@ -768,6 +771,9 @@ async def nlm_add_source(
             source = await db.get(Source, body.source_id)
             if not source:
                 raise HTTPException(status_code=404, detail="Arkon source not found")
+            from app.services.permission_engine import can_access_document
+            if not await can_access_document(db, current_user, source, "read"):
+                raise HTTPException(status_code=403, detail="Access denied")
             if not source.full_text:
                 raise HTTPException(status_code=400, detail="Source has no extracted text yet")
             return await add_nlm_source_text(nlm_id, source.title or "Arkon source", source.full_text)

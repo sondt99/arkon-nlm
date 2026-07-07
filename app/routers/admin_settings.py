@@ -28,7 +28,10 @@ class DashboardStats(BaseModel):
 
 
 @router.get("/dashboard/stats", response_model=DashboardStats)
-async def dashboard_stats(db: AsyncSession = Depends(get_db)):
+async def dashboard_stats(
+    db: AsyncSession = Depends(get_db),
+    _user: Employee = Depends(get_current_user),
+):
     repo = Repository(db)
     return DashboardStats(
         total_sources=await repo.count(Source),
@@ -89,7 +92,10 @@ async def update_settings(
 # ---------------------------------------------------------------------------
 
 @router.post("/settings/test-providers", response_model=dict[str, TestConnectionResult])
-async def test_all_providers(db: AsyncSession = Depends(get_db)):
+async def test_all_providers(
+    db: AsyncSession = Depends(get_db),
+    _user: Employee = require_permission("org:settings:manage"),
+):
     """Test all configured AI providers (embedding, LLM, vision)."""
     from app.ai.registry import ProviderRegistry
 
@@ -103,7 +109,10 @@ async def test_all_providers(db: AsyncSession = Depends(get_db)):
 
 
 @router.post("/settings/test-embedding", response_model=TestConnectionResult)
-async def test_embedding(db: AsyncSession = Depends(get_db)):
+async def test_embedding(
+    db: AsyncSession = Depends(get_db),
+    _user: Employee = require_permission("org:settings:manage"),
+):
     """Test the configured embedding provider."""
     from app.ai.registry import ProviderRegistry
 
@@ -117,7 +126,10 @@ async def test_embedding(db: AsyncSession = Depends(get_db)):
 
 
 @router.post("/settings/test-llm", response_model=TestConnectionResult)
-async def test_llm(db: AsyncSession = Depends(get_db)):
+async def test_llm(
+    db: AsyncSession = Depends(get_db),
+    _user: Employee = require_permission("org:settings:manage"),
+):
     """Test the configured LLM provider."""
     from app.ai.registry import ProviderRegistry
 
@@ -131,7 +143,10 @@ async def test_llm(db: AsyncSession = Depends(get_db)):
 
 
 @router.post("/settings/test-vision", response_model=TestConnectionResult)
-async def test_vision(db: AsyncSession = Depends(get_db)):
+async def test_vision(
+    db: AsyncSession = Depends(get_db),
+    _user: Employee = require_permission("org:settings:manage"),
+):
     """Test the configured vision provider."""
     from app.ai.registry import ProviderRegistry
 
@@ -147,7 +162,10 @@ async def test_vision(db: AsyncSession = Depends(get_db)):
 
 
 @router.post("/settings/test-chatbot", response_model=TestConnectionResult)
-async def test_chatbot(db: AsyncSession = Depends(get_db)):
+async def test_chatbot(
+    db: AsyncSession = Depends(get_db),
+    _user: Employee = require_permission("org:settings:manage"),
+):
     """Test the configured chatbot LLM provider (falls back to main LLM if not set)."""
     from app.ai.registry import ProviderRegistry
 

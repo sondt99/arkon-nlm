@@ -497,6 +497,10 @@ async def add_project_source(
     if not source:
         raise HTTPException(404, "Source not found")
 
+    from app.services.permission_engine import can_access_document
+    if not await can_access_document(db, _user, source, "read"):
+        raise HTTPException(403, "You do not have access to this source")
+
     existing = await db.get(
         ProjectSource,
         (uuid.UUID(project_id), uuid.UUID(body.source_id)),

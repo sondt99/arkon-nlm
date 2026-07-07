@@ -39,6 +39,7 @@ class AnthropicLLM(LLMProvider):
         system: Optional[str] = None,
         max_tokens: Optional[int] = None,
         temperature: float = 0.7,
+        top_p: Optional[float] = None,
     ) -> str:
         kwargs = {
             "model": self.config.model_id,
@@ -48,6 +49,8 @@ class AnthropicLLM(LLMProvider):
         }
         if system:
             kwargs["system"] = system
+        if top_p is not None:
+            kwargs["top_p"] = top_p
 
         response = await self.client.messages.create(**kwargs)
         return response.content[0].text if response.content else ""

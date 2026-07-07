@@ -229,6 +229,9 @@ async def generate_reply(
     question: str,
     persona: str = "victor",
     exclude_message_id: Optional[uuid.UUID] = None,
+    temperature: Optional[float] = None,
+    max_tokens: Optional[int] = None,
+    top_p: Optional[float] = None,
 ) -> tuple[str, list[dict]]:
     """
     Run RAG search + LLM generation.
@@ -278,7 +281,13 @@ async def generate_reply(
     llm_started = time.perf_counter()
     deadline = asyncio.get_running_loop().time() + settings.chat_generation_timeout
     answer = await asyncio.wait_for(
-        llm.generate(prompt, system=system_prompt, temperature=0.5),
+        llm.generate(
+            prompt,
+            system=system_prompt,
+            temperature=temperature if temperature is not None else 0.5,
+            max_tokens=max_tokens,
+            top_p=top_p,
+        ),
         timeout=settings.chat_generation_timeout,
     )
     if not answer or not answer.strip():
@@ -292,7 +301,9 @@ async def generate_reply(
                     llm.generate(
                         _build_expansion_prompt(question, answer),
                         system=system_prompt,
-                        temperature=0.4,
+                        temperature=temperature if temperature is not None else 0.4,
+                        max_tokens=max_tokens,
+                        top_p=top_p,
                     ),
                     timeout=remaining,
                 )

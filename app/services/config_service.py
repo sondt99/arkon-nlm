@@ -108,6 +108,12 @@ ALL_CONFIG_KEYS = [
     # --- Chat ---
     "chat_rag_enabled",           # "true" | "false" — toggle RAG/KB search
 
+    # --- Export API ---
+    "export_api_enabled",         # "true" | "false" — toggle /api/export/v1/* endpoints
+    "export_api_temperature",     # float 0.0-1.0, empty = provider default
+    "export_api_max_tokens",      # int, empty = provider default
+    "export_api_top_p",           # float 0.0-1.0, empty = provider default
+
     # --- System ---
     "session_timeout_minutes",
 

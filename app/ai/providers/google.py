@@ -131,6 +131,7 @@ class GoogleLLM(LLMProvider):
         system: Optional[str] = None,
         max_tokens: Optional[int] = None,
         temperature: float = 0.7,
+        top_p: Optional[float] = None,
     ) -> str:
         from google.genai import types
 
@@ -141,6 +142,7 @@ class GoogleLLM(LLMProvider):
                 system_instruction=system,
                 max_output_tokens=max_tokens,
                 temperature=temperature,
+                top_p=top_p,
             ),
         )
         return response.text or ""

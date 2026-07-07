@@ -995,13 +995,12 @@ async def list_wiki(user = Depends(require_permission("doc:read"))):
 ### 12.2 Semantic Search
 
 ```
-[User nhap query] → POST /api/wiki/search?q=...
+[User nhap query] → GET /api/wiki/search?q=...&top_k=20
   [API]
     1. Embed query → vector (dung embedding provider hien tai)
-    2. pgvector: SELECT ... ORDER BY embedding <=> $vec LIMIT 10
-    3. Full-text: ts_vector search (PostgreSQL built-in)
-    4. Merge + re-rank ket qua theo combined score
-  Return: [{slug, title, excerpt, score}, ...]
+    2. pgvector: SELECT ... ORDER BY embedding <=> $vec LIMIT top_k
+       (scope giong het GET /api/wiki/pages: loc theo quyen/knowledge type/workspace cua user)
+  Return: [{slug, title, page_type, summary, scope_type, scope_id, score}, ...]
 ```
 
 ### 12.3 Claude truy van KB (MCP)

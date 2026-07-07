@@ -41,14 +41,22 @@ git -C "E:\AI-CLAUDE\arkon" pull
 
 ## Docker (PowerShell tool)
 
+> **Always pass `--env-file .env.docker`.** The `redis`/`minio`/`postgres` services resolve
+> `${REDIS_PASSWORD}` etc. via Compose variable substitution, which only reads a file named
+> `.env` (not `.env.docker`) unless `--env-file` is given explicitly. `env_file: [.env.docker]`
+> on the backend services does NOT feed this substitution — it only injects env vars into
+> those containers' own processes. Without `--env-file`, recreating redis/minio silently
+> falls back to the placeholder passwords in docker-compose.yml, breaking auth against the
+> real credentials the API uses (seen 2026-07-08: caused worker/worker_skills to crash-loop).
+
 ```powershell
 # Rebuild and restart a specific service (most common)
-docker compose -f "E:\AI-CLAUDE\arkon\docker-compose.yml" up -d --build frontend
-docker compose -f "E:\AI-CLAUDE\arkon\docker-compose.yml" up -d --build api
-docker compose -f "E:\AI-CLAUDE\arkon\docker-compose.yml" up -d --build worker
+docker compose --env-file "E:\AI-CLAUDE\arkon\.env.docker" -f "E:\AI-CLAUDE\arkon\docker-compose.yml" up -d --build frontend
+docker compose --env-file "E:\AI-CLAUDE\arkon\.env.docker" -f "E:\AI-CLAUDE\arkon\docker-compose.yml" up -d --build api
+docker compose --env-file "E:\AI-CLAUDE\arkon\.env.docker" -f "E:\AI-CLAUDE\arkon\docker-compose.yml" up -d --build worker
 
 # Rebuild all services
-docker compose -f "E:\AI-CLAUDE\arkon\docker-compose.yml" up -d --build
+docker compose --env-file "E:\AI-CLAUDE\arkon\.env.docker" -f "E:\AI-CLAUDE\arkon\docker-compose.yml" up -d --build
 
 # Check container status
 docker compose -f "E:\AI-CLAUDE\arkon\docker-compose.yml" ps

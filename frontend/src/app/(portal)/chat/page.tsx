@@ -357,6 +357,23 @@ function MessageBubble({
   );
 }
 
+function useConvSidebarCollapse() {
+  const key = "chat-conv-sidebar-collapsed";
+  const [collapsed, setCollapsed] = React.useState(() => {
+    if (typeof window === "undefined") return false;
+    return localStorage.getItem(key) === "true";
+  });
+
+  const toggle = () =>
+    setCollapsed((v) => {
+      const next = !v;
+      localStorage.setItem(key, String(next));
+      return next;
+    });
+
+  return [collapsed, toggle] as const;
+}
+
 // ---------------------------------------------------------------------------
 // Main page
 // ---------------------------------------------------------------------------
@@ -381,6 +398,7 @@ export default function ChatPage() {
   const editInputRef = React.useRef<HTMLInputElement>(null);
   const skipMessageLoadRef = React.useRef<string | null>(null);
   const revealVersionRef = React.useRef(0);
+  const [convSidebarCollapsed, toggleConvSidebar] = useConvSidebarCollapse();
 
   const revealAssistantMessage = React.useCallback(async (message: Message) => {
     const version = ++revealVersionRef.current;
@@ -656,7 +674,46 @@ export default function ChatPage() {
   return (
     <div className="-mx-4 -mb-4 flex min-h-0 flex-1 flex-col border-t border-border sm:-mx-6 sm:-mb-6 md:-mx-8 md:-mb-8 lg:-mx-10 lg:-mb-10">
       <div className="flex flex-1 min-h-0">
-        {/* ── Conversation sidebar ── */}
+        {/* ── Conversation sidebar (collapsed rail) ── */}
+        {convSidebarCollapsed ? (
+          <div className="hidden w-12 shrink-0 flex-col items-center overflow-hidden border-r border-border bg-card/30 py-2 gap-1 md:flex">
+            <button
+              onClick={toggleConvSidebar}
+              className="flex items-center justify-center w-8 h-8 rounded-md text-muted-foreground hover:bg-accent/60 hover:text-foreground transition-colors"
+              title="Expand conversations"
+            >
+              <span className="material-symbols-outlined text-base">chevron_right</span>
+            </button>
+            <button
+              onClick={handleNewConversation}
+              className="flex items-center justify-center w-8 h-8 rounded-md text-muted-foreground hover:bg-accent/60 hover:text-foreground transition-colors"
+              title="New conversation"
+            >
+              <span className="material-symbols-outlined text-base">edit_square</span>
+            </button>
+            <div className="w-6 border-t border-border my-1" />
+            <div className="flex-1 overflow-y-auto overflow-x-hidden flex flex-col items-center gap-[2px]">
+              {conversations.map((conv) => {
+                const isActive = conv.id === activeConvId;
+                return (
+                  <button
+                    key={conv.id}
+                    onClick={() => setActiveConvId(conv.id)}
+                    title={conv.title}
+                    className={cn(
+                      "flex items-center justify-center w-8 h-8 rounded-md transition-colors",
+                      isActive ? "bg-primary/10 text-primary" : "text-muted-foreground hover:bg-accent/60 hover:text-foreground"
+                    )}
+                  >
+                    <span className="material-symbols-outlined" style={{ fontSize: 16 }}>
+                      {isActive ? "chat_bubble" : "chat_bubble_outline"}
+                    </span>
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+        ) : (
         <div className="hidden w-64 shrink-0 flex-col overflow-hidden border-r border-border bg-card/30 md:flex">
           <div className="flex items-center gap-2 px-4 py-3 border-b border-border">
             <span className="text-xs font-semibold text-muted-foreground uppercase tracking-wider flex-1">
@@ -668,6 +725,13 @@ export default function ChatPage() {
               title="New conversation"
             >
               <span className="material-symbols-outlined text-base">edit_square</span>
+            </button>
+            <button
+              onClick={toggleConvSidebar}
+              className="text-muted-foreground hover:text-foreground transition-colors"
+              title="Collapse conversations"
+            >
+              <span className="material-symbols-outlined text-base">chevron_left</span>
             </button>
           </div>
 
@@ -770,6 +834,7 @@ export default function ChatPage() {
             )}
           </div>
         </div>
+        )}
 
         {/* ── Chat area ── */}
         <div className="flex-1 flex flex-col min-h-0 min-w-0">

@@ -19,11 +19,14 @@ type Props = {
   onWikiChanged?: () => void;
 };
 
+const PAGE_SIZE = 24;
+
 export function WikiTab({ project, wikiPages, wikiLoading, wikiIndexMd, onWikiChanged }: Props) {
   const [wikiTypeTab, setWikiTypeTab] = useState<string>("all");
   const [selectedWikiSlug, setSelectedWikiSlug] = useState<string | null>(null);
   const [selectedWikiPage, setSelectedWikiPage] = useState<WikiPageDetail | null>(null);
   const [showGraph, setShowGraph] = useState(false);
+  const [pageNum, setPageNum] = useState(1);
 
   // Compute wiki counts
   const wikiTypeCounts = useMemo(() => {
@@ -40,6 +43,13 @@ export function WikiTab({ project, wikiPages, wikiLoading, wikiIndexMd, onWikiCh
     if (wikiTypeTab === "all") return wikiPages;
     return wikiPages.filter((p) => p.page_type === wikiTypeTab);
   }, [wikiPages, wikiTypeTab]);
+
+  const pageCount = Math.max(1, Math.ceil(displayWikiPages.length / PAGE_SIZE));
+  const currentPage = Math.min(pageNum, pageCount);
+  const pagedWikiPages = useMemo(
+    () => displayWikiPages.slice((currentPage - 1) * PAGE_SIZE, currentPage * PAGE_SIZE),
+    [displayWikiPages, currentPage]
+  );
 
   if (showGraph) {
     return <WikiGraphInline projectId={project.id} onBack={() => setShowGraph(false)} />;
@@ -153,7 +163,7 @@ export function WikiTab({ project, wikiPages, wikiLoading, wikiIndexMd, onWikiCh
                     return (
                       <button
                         key={wt}
-                        onClick={() => setWikiTypeTab(wt)}
+                        onClick={() => { setWikiTypeTab(wt); setPageNum(1); }}
                         className={`px-3 py-2 text-xs font-medium capitalize border-b-2 transition-colors ${
                           wikiTypeTab === wt
                             ? "border-primary text-primary"
@@ -171,7 +181,7 @@ export function WikiTab({ project, wikiPages, wikiLoading, wikiIndexMd, onWikiCh
 
                 {/* Wiki page cards — click opens inline */}
                 <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
-                  {displayWikiPages.map((page) => (
+                  {pagedWikiPages.map((page) => (
                     <button
                       key={page.slug}
                       onClick={() => setSelectedWikiSlug(page.slug)}
@@ -200,6 +210,31 @@ export function WikiTab({ project, wikiPages, wikiLoading, wikiIndexMd, onWikiCh
                     </button>
                   ))}
                 </div>
+
+                {/* Pagination */}
+                {pageCount > 1 && (
+                  <div className="flex items-center justify-center gap-3 mt-6">
+                    <button
+                      onClick={() => setPageNum((p) => Math.max(1, p - 1))}
+                      disabled={currentPage === 1}
+                      className="inline-flex items-center gap-1 px-3 py-1.5 rounded-lg text-xs font-medium border border-border text-muted-foreground hover:text-foreground hover:border-primary/40 disabled:opacity-40 disabled:pointer-events-none transition-colors"
+                    >
+                      <span className="material-symbols-outlined" style={{ fontSize: 14 }}>chevron_left</span>
+                      Previous
+                    </button>
+                    <span className="text-xs text-muted-foreground tabular-nums">
+                      Page {currentPage} / {pageCount}
+                    </span>
+                    <button
+                      onClick={() => setPageNum((p) => Math.min(pageCount, p + 1))}
+                      disabled={currentPage === pageCount}
+                      className="inline-flex items-center gap-1 px-3 py-1.5 rounded-lg text-xs font-medium border border-border text-muted-foreground hover:text-foreground hover:border-primary/40 disabled:opacity-40 disabled:pointer-events-none transition-colors"
+                    >
+                      Next
+                      <span className="material-symbols-outlined" style={{ fontSize: 14 }}>chevron_right</span>
+                    </button>
+                  </div>
+                )}
               </>
             )}
           </>

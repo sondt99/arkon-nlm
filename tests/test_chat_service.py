@@ -42,7 +42,7 @@ class _LLM:
         self.system = None
         self.config = SimpleNamespace(model_id="Optimize")
 
-    async def generate(self, prompt, system=None, temperature=0.5):
+    async def generate(self, prompt, system=None, temperature=0.5, max_tokens=None, top_p=None):
         self.prompt = prompt
         self.system = system
         return self.answer
@@ -62,7 +62,7 @@ class _SequenceLLM(_LLM):
         self.answers = list(answers)
         self.calls = 0
 
-    async def generate(self, prompt, system=None, temperature=0.5):
+    async def generate(self, prompt, system=None, temperature=0.5, max_tokens=None, top_p=None):
         self.calls += 1
         self.prompt = prompt
         self.system = system

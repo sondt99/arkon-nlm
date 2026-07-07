@@ -86,6 +86,44 @@ async def _resolve_scope(
     return "project", workspace_id
 
 
+async def _require_enabled(db: AsyncSession) -> None:
+    """Reject with 503 if an admin has turned the Export API off."""
+    from app.services.config_service import ConfigService
+
+    flag = await ConfigService(db).get("export_api_enabled")
+    enabled = (flag or "true").strip().lower() not in ("false", "0", "off")
+    if not enabled:
+        raise HTTPException(status_code=503, detail="Export API is disabled by an administrator")
+
+
+async def _generation_overrides(db: AsyncSession) -> dict:
+    """Read admin-configured temperature/max_tokens/top_p for Export API calls."""
+    from app.services.config_service import ConfigService
+
+    svc = ConfigService(db)
+    temperature_raw = await svc.get("export_api_temperature")
+    max_tokens_raw = await svc.get("export_api_max_tokens")
+    top_p_raw = await svc.get("export_api_top_p")
+
+    overrides: dict = {}
+    if temperature_raw:
+        try:
+            overrides["temperature"] = float(temperature_raw)
+        except ValueError:
+            pass
+    if max_tokens_raw:
+        try:
+            overrides["max_tokens"] = int(max_tokens_raw)
+        except ValueError:
+            pass
+    if top_p_raw:
+        try:
+            overrides["top_p"] = float(top_p_raw)
+        except ValueError:
+            pass
+    return overrides
+
+
 # ---------------------------------------------------------------------------
 # Chat
 # ---------------------------------------------------------------------------
@@ -96,6 +134,7 @@ async def export_chat(
     db: AsyncSession = Depends(get_db),
     identity: ResolvedIdentity = Depends(get_identity_from_export_token),
 ) -> ExportChatResponse:
+    await _require_enabled(db)
     if body.persona not in _VALID_PERSONAS:
         raise HTTPException(status_code=422, detail=f"persona must be one of {sorted(_VALID_PERSONAS)}")
     if not body.question.strip():
@@ -141,6 +180,7 @@ async def export_chat(
             question=body.question.strip(),
             persona=body.persona,
             exclude_message_id=user_msg.id,
+            **await _generation_overrides(db),
         )
     except Exception as exc:
         logger.exception("Export API chat generation failed for conversation={}", conv.id)
@@ -174,6 +214,7 @@ async def export_search(
     db: AsyncSession = Depends(get_db),
     identity: ResolvedIdentity = Depends(get_identity_from_export_token),
 ) -> ExportSearchResponse:
+    await _require_enabled(db)
     if not q.strip():
         raise HTTPException(status_code=422, detail="q cannot be empty")
     top_k = min(max(1, top_k), 50)

@@ -116,6 +116,7 @@ class OpenAILLM(LLMProvider):
         system: Optional[str] = None,
         max_tokens: Optional[int] = None,
         temperature: float = 0.7,
+        top_p: Optional[float] = None,
     ) -> str:
         messages = []
         if system:
@@ -129,6 +130,8 @@ class OpenAILLM(LLMProvider):
         }
         if max_tokens is not None:
             kwargs["max_tokens"] = max_tokens
+        if top_p is not None:
+            kwargs["top_p"] = top_p
 
         response = await self.client.chat.completions.create(**kwargs)
         return response.choices[0].message.content or ""

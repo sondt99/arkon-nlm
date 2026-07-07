@@ -264,28 +264,29 @@ Chỉnh sửa trực tiếp wiki page. Yêu cầu `wiki:write:all` hoặc worksp
 Xóa wiki page. Yêu cầu `wiki:delete:all` hoặc admin.
 
 ### GET /api/wiki/search
-Tìm kiếm semantic + full-text.
+Semantic search (embedding + cosine similarity) over wiki pages, scoped identically to `GET /api/wiki/pages` (same permission/knowledge-type/workspace filtering — no separate scope param needed).
 
 **Query params:**
 | Param | Type | Mô tả |
 |---|---|---|
-| `q` | string | Query text |
-| `limit` | int | Mặc định 10 |
-| `knowledge_type_id` | uuid | Filter |
+| `q` | string | Query text (required, non-empty) |
+| `top_k` | int | Default 20, clamped 1-50 |
 
-**Response 200:**
+**Response 200:** bare array, not wrapped in an object.
 ```json
-{
-  "results": [
-    {
-      "slug": "string",
-      "title": "string",
-      "excerpt": "string",
-      "score": 0.92
-    }
-  ]
-}
+[
+  {
+    "slug": "string",
+    "title": "string",
+    "page_type": "string",
+    "summary": "string",
+    "scope_type": "global",
+    "scope_id": null,
+    "score": 0.92
+  }
+]
 ```
+**Errors:** `422` empty `q` · `502` embedding provider unavailable/search failed · `503` no active embedding model configured.
 
 ### GET /api/wiki/graph
 Knowledge graph nodes và edges.
@@ -684,6 +685,10 @@ Authorization: Bearer <mcp_token>
 
 Get a token via `POST /api/my/mcp-token` (self-service, while logged in with a JWT) or have an admin issue one via `POST /api/employees/{id}/mcp-token`. Not scoped to internet search — this API only reaches Arkon's own knowledge base.
 
+An admin can turn the whole API off from **Settings → Export API** (`export_api_enabled` config key, defaults to enabled). While disabled, every `/api/export/v1/*` request returns `503`.
+
+The same Settings card lets an admin tune generation for `/chat`: `export_api_temperature` (0.0-1.0), `export_api_top_p` (0.0-1.0), `export_api_max_tokens` (int). Each is optional — unset means the provider default (temperature falls back to the existing 0.5/0.4 used by `/api/chat`). The model itself isn't configured here; it reuses whatever's set in **Chatbot Provider** (falling back to **LLM Provider** if unset).
+
 ### POST /api/export/v1/chat
 Chat with a persona (`victor` or `ashley`); reuses the same RAG pipeline as `/api/chat`.
 
@@ -706,7 +711,7 @@ Omit `conversation_id` to start a new conversation (owned by the token's employe
   "conversation_id": "uuid"
 }
 ```
-**Errors:** `401` bad/missing token · `403` no workspace access · `404` unknown `conversation_id` · `422` invalid persona/empty question · `502` chat generation failed (unlike `/api/chat`, no assistant message is saved on failure — machine callers get a clean HTTP error instead of a 200-with-apology).
+**Errors:** `401` bad/missing token · `403` no workspace access · `404` unknown `conversation_id` · `422` invalid persona/empty question · `502` chat generation failed (unlike `/api/chat`, no assistant message is saved on failure — machine callers get a clean HTTP error instead of a 200-with-apology) · `503` Export API disabled by an admin.
 
 ### GET /api/export/v1/search
 Direct semantic search over wiki pages — no chat/persona layer, no wiki-link expansion.
@@ -727,7 +732,7 @@ Direct semantic search over wiki pages — no chat/persona layer, no wiki-link e
   ]
 }
 ```
-**Errors:** `401`, `403` (workspace), `422` empty `q`, `502` embedding/search backend failed (e.g. no active embedding model configured in Settings).
+**Errors:** `401`, `403` (workspace), `422` empty `q`, `502` embedding/search backend failed (e.g. no active embedding model configured in Settings), `503` Export API disabled by an admin.
 
 ---
 

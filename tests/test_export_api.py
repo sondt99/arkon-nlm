@@ -6,6 +6,7 @@ from fastapi import HTTPException
 
 from app.routers import export_api
 from app.services import chat_service
+from app.services.config_service import ConfigService
 from app.services.mcp_auth_service import (
     MCPAuthService,
     ResolvedIdentity,
@@ -71,6 +72,87 @@ async def test_export_token_dependency_rejects_invalid_token(monkeypatch):
     with pytest.raises(HTTPException) as exc:
         await get_identity_from_export_token(credentials=creds, db=_FakeSession())
     assert exc.value.status_code == 401
+
+
+# ---------------------------------------------------------------------------
+# export_api_enabled toggle
+# ---------------------------------------------------------------------------
+
+@pytest.mark.asyncio
+async def test_chat_returns_503_when_export_api_disabled(monkeypatch):
+    async def disabled(self, key):
+        return "false" if key == "export_api_enabled" else None
+
+    monkeypatch.setattr(ConfigService, "get", disabled)
+
+    body = export_api.ExportChatRequest(persona="victor", question="Hi")
+    with pytest.raises(HTTPException) as exc:
+        await export_api.export_chat(body, db=_FakeSession(), identity=_identity())
+    assert exc.value.status_code == 503
+
+
+@pytest.mark.asyncio
+async def test_search_returns_503_when_export_api_disabled(monkeypatch):
+    async def disabled(self, key):
+        return "false" if key == "export_api_enabled" else None
+
+    monkeypatch.setattr(ConfigService, "get", disabled)
+
+    with pytest.raises(HTTPException) as exc:
+        await export_api.export_search(q="incident", db=_FakeSession(), identity=_identity())
+    assert exc.value.status_code == 503
+
+
+@pytest.mark.asyncio
+async def test_chat_passes_configured_generation_params_to_generate_reply(monkeypatch):
+    configured = {
+        "export_api_temperature": "0.9",
+        "export_api_max_tokens": "256",
+        "export_api_top_p": "0.8",
+    }
+
+    async def fake_get(self, key):
+        return configured.get(key)
+
+    monkeypatch.setattr(ConfigService, "get", fake_get)
+
+    received = {}
+
+    async def fake_generate_reply(**kwargs):
+        received.update(kwargs)
+        return "The answer.", []
+
+    monkeypatch.setattr(chat_service, "generate_reply", fake_generate_reply)
+
+    body = export_api.ExportChatRequest(persona="victor", question="Hi")
+    await export_api.export_chat(body, db=_FakeSession(), identity=_identity())
+
+    assert received["temperature"] == 0.9
+    assert received["max_tokens"] == 256
+    assert received["top_p"] == 0.8
+
+
+@pytest.mark.asyncio
+async def test_chat_ignores_unset_or_invalid_generation_params(monkeypatch):
+    async def fake_get(self, key):
+        return "not-a-number" if key == "export_api_temperature" else None
+
+    monkeypatch.setattr(ConfigService, "get", fake_get)
+
+    received = {}
+
+    async def fake_generate_reply(**kwargs):
+        received.update(kwargs)
+        return "The answer.", []
+
+    monkeypatch.setattr(chat_service, "generate_reply", fake_generate_reply)
+
+    body = export_api.ExportChatRequest(persona="victor", question="Hi")
+    await export_api.export_chat(body, db=_FakeSession(), identity=_identity())
+
+    assert "temperature" not in received
+    assert "max_tokens" not in received
+    assert "top_p" not in received
 
 
 # ---------------------------------------------------------------------------

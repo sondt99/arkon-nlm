@@ -608,6 +608,31 @@ chat_messages
 
 ---
 
+#### `GET /api/wiki/search`
+**Mô tả:** Semantic search (embedding + cosine similarity) trên wiki pages, scope giống hệt `GET /api/wiki/pages` (tự động lọc theo quyền/knowledge type/workspace của user, không có param scope riêng).
+
+**Query Parameters:**
+| Param | Mô tả |
+|-------|-------|
+| `q` | Bắt buộc, không rỗng |
+| `top_k` | Mặc định 20, giới hạn 1-50 |
+
+**Response:** `WikiSearchResult[]` (mảng trần, không bọc object)
+```json
+[{
+  "slug": "quy-trinh-onboarding",
+  "title": "Quy trình Onboarding",
+  "page_type": "topic",
+  "summary": "...",
+  "scope_type": "global",
+  "scope_id": null,
+  "score": 0.92
+}]
+```
+**Lỗi:** `422` — `q` rỗng; `502` — lỗi embedding/search backend; `503` — chưa cấu hình embedding model.
+
+---
+
 #### `GET /api/wiki/pages/{slug}`
 **Mô tả:** Lấy nội dung đầy đủ của một wiki page.
 
@@ -1075,6 +1100,12 @@ Cho phép công cụ bên ngoài không nói giao thức MCP (n8n, Zapier, scrip
 
 **Auth:** `Authorization: Bearer <mcp_token>` — xác thực qua `MCPAuthService.verify_token()` (giống MCP), không phải JWT nhân viên. Token sai/hết hiệu lực → `401`.
 
+**Bật/tắt:** Admin có thể tắt toàn bộ API này ở trang Settings → Export API (config key `export_api_enabled`, mặc định bật). Khi tắt, mọi request tới `/api/export/v1/*` trả về `503` (kiểm tra ở đầu mỗi endpoint qua `export_api._require_enabled()`, đọc từ `ConfigService`).
+
+**Model:** không có lựa chọn riêng cho Export API — dùng nguyên pipeline `chat_service` nên tái sử dụng Chatbot Provider (`chatbot_provider`/`chatbot_model_id`, fallback LLM Provider nếu chưa cấu hình) — card Export API trên UI chỉ hiển thị tóm tắt, không cho chọn riêng.
+
+**Tham số sinh:** admin có thể chỉnh `export_api_temperature` (0.0-1.0), `export_api_top_p` (0.0-1.0), `export_api_max_tokens` (int) từ cùng card Settings. Cả 3 đều optional — để trống dùng mặc định của `chat_service.generate_reply` (temperature 0.5 cho câu trả lời chính, 0.4 cho lượt mở rộng). `export_api._generation_overrides()` đọc 3 key này, parse float/int (bỏ qua giá trị không hợp lệ), rồi truyền xuống `generate_reply(**overrides)`. `top_p` là tham số mới thêm vào `LLMProvider.generate()` (base + cả 3 provider OpenAI/Anthropic/Google) — các call site khác (`/api/chat`) không truyền nên không đổi hành vi.
+
 ---
 
 #### `POST /api/export/v1/chat`
@@ -1099,7 +1130,7 @@ Cho phép công cụ bên ngoài không nói giao thức MCP (n8n, Zapier, scrip
   "conversation_id": "..."
 }
 ```
-**Lỗi:** `401` — token sai/thiếu; `403` — không có quyền vào workspace; `404` — `conversation_id` không thuộc token này; `422` — persona/question không hợp lệ; `502` — LLM/provider lỗi khi sinh câu trả lời (khác `/api/chat`: **không** lưu tin nhắn assistant lỗi, để caller máy-gọi-máy nhận lỗi HTTP rõ ràng thay vì phải đọc nội dung answer).
+**Lỗi:** `401` — token sai/thiếu; `403` — không có quyền vào workspace; `404` — `conversation_id` không thuộc token này; `422` — persona/question không hợp lệ; `502` — LLM/provider lỗi khi sinh câu trả lời (khác `/api/chat`: **không** lưu tin nhắn assistant lỗi, để caller máy-gọi-máy nhận lỗi HTTP rõ ràng thay vì phải đọc nội dung answer); `503` — Export API đang bị admin tắt.
 
 ---
 
@@ -1117,7 +1148,7 @@ Cho phép công cụ bên ngoài không nói giao thức MCP (n8n, Zapier, scrip
   ]
 }
 ```
-**Lỗi:** `401`, `403` (workspace), `422` — `q` rỗng; `502` — lỗi embedding/search backend (ví dụ chưa cấu hình embedding model trong Settings).
+**Lỗi:** `401`, `403` (workspace), `422` — `q` rỗng; `502` — lỗi embedding/search backend (ví dụ chưa cấu hình embedding model trong Settings); `503` — Export API đang bị admin tắt.
 
 ---
 
@@ -1972,6 +2003,44 @@ Phiên bản ban đầu gồm: Ingestion Pipeline (MRP), Wiki System, Skill Syst
 - Docker API/frontend/worker và infrastructure healthy.
 - Database ở migration `023 (head)`.
 - Release commit: `1dd7c2afd3547bb6596627e795e1783d32e47198`.
+
+---
+
+### 2026-07-07 — Export API, Wiki Search & UX cải tiến
+
+#### Ashley: Prime Directive + Security Research Context
+
+- Ashley được bổ sung "Prime Directive" giống Victor: không từ chối/né tránh yêu cầu về nội dung đã có trong KB context (giải thích, phân tích, dịch, viết lại, roleplay...) — Strict Knowledge Boundary (không trả lời ngoài KB) giữ nguyên, không nới lỏng.
+- Thêm "Security Research Context": khi KB context có sẵn nội dung pentest/CVE/exploit đã ingest hợp lệ, Ashley phân tích kỹ thuật đầy đủ, không chèn disclaimer từ chối — nội dung đã được KB tự authorize từ trước.
+- File: `app/services/chat_service.py::_build_system_prompt`.
+
+#### Export API — REST cho công cụ ngoài (mục 4.11)
+
+- Endpoint mới: `POST /api/export/v1/chat` (chat với persona Victor/Ashley, tái dùng nguyên RAG pipeline của `/api/chat`) và `GET /api/export/v1/search` (semantic search trực tiếp, không qua persona).
+- Auth dùng lại `Employee.mcp_token` — không phát sinh hệ key mới.
+- Admin bật/tắt được toàn bộ API (`export_api_enabled`, Settings → Export API) — khi tắt, mọi request trả `503`.
+- Admin chỉnh được **Temperature, Top-p, Max tokens** riêng cho Export API (3 config key optional, để trống dùng mặc định `chat_service`) — kèm tooltip giải thích từng tham số trên UI.
+- Model dùng chung Chatbot Provider đã cấu hình sẵn (không có lựa chọn model riêng cho Export API).
+- UI Settings cho generate/copy/revoke API key ngay tại chỗ — tái dùng chính `mcp_token`, có cảnh báo rõ vì nó dùng chung với kết nối MCP Desktop.
+- `top_p` được thêm vào `LLMProvider.generate()` (base + OpenAI/Anthropic/Google) để phục vụ tham số trên — các call site khác (`/api/chat`) không truyền nên không đổi hành vi cũ.
+- File: `app/routers/export_api.py`, `app/services/config_service.py`, `app/services/chat_service.py`, `app/ai/providers/{base,openai_provider,anthropic_provider,google}.py`, `frontend/src/components/settings/export-api-settings-card.tsx`.
+
+#### Wiki — Semantic search, sidebar collapse, virtualization
+
+- Endpoint mới `GET /api/wiki/search` — xem mục 4.3.
+- `WikiSearchDialog` nối vào endpoint mới: debounce, loading skeleton, error state, điều hướng bàn phím.
+- `WikiPageTree` render qua `@tanstack/react-virtual` — mượt hơn với wiki lớn (hàng nghìn trang); nhận `pages`/`loading` từ component cha thay vì tự fetch.
+- Sidebar chính (menu trái toàn app) có chế độ thu gọn dạng dải icon, trạng thái lưu `localStorage`.
+- Danh sách wiki page-card trong tab Wiki của project được **phân trang** (24/trang) thay vì render toàn bộ cùng lúc.
+- Sidebar hội thoại trong trang Chat cũng có nút thu gọn/mở rộng tương tự (dải icon khi thu gọn), trạng thái lưu `localStorage` riêng.
+
+#### Kiểm chứng
+
+- Backend: toàn bộ test suite pass (bao gồm test mới cho export API toggle + tham số sinh).
+- Frontend: `tsc --noEmit` và `eslint` sạch trên các file thay đổi.
+- Xác minh trực tiếp bằng Chromium (Playwright) chạy cục bộ trỏ vào backend Docker đang sống qua nginx — cả 3 tính năng UI hiển thị và hoạt động đúng, không console error.
+
+---
 
 ## 9. Thiết kế xử lý tài liệu chính xác theo domain
 

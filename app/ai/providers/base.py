@@ -99,6 +99,7 @@ class LLMProvider(ABC):
         system: Optional[str] = None,
         max_tokens: Optional[int] = None,
         temperature: float = 0.7,
+        top_p: Optional[float] = None,
     ) -> str:
         """Generate a text completion."""
         ...

@@ -9,6 +9,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     tesseract-ocr \
     tesseract-ocr-eng \
     tesseract-ocr-vie \
+    gosu \
     && rm -rf /var/lib/apt/lists/*
 
 RUN pip install --upgrade pip --no-cache-dir
@@ -29,8 +30,8 @@ RUN sed -i 's/\r$//' entrypoint.sh && chmod +x entrypoint.sh
 RUN groupadd -r appuser && useradd -r -g appuser appuser \
     && chown -R appuser:appuser /app
 
-USER appuser
-
+# Container starts as root so entrypoint.sh can chown bind-mounted volumes,
+# then drops to appuser via gosu before running migrations/seeding/the app.
 ENV PYTHONPATH=/app
 ENV PYTHONUNBUFFERED=1
 

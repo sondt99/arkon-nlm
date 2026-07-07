@@ -89,8 +89,14 @@ async def lifespan(app: FastAPI):
         # Warn if sensitive defaults are unchanged
         if settings.secret_key == "change-me-to-a-random-secret-string":
             logger.warning("⚠️  SECRET_KEY is set to the default value — change it before deploying to production!")
-        if settings.default_admin_password == "admin123":
-            logger.warning("⚠️  DEFAULT_ADMIN_PASSWORD is 'admin123' — change the admin password after first login!")
+        if settings.default_admin_password == "change-me-admin-password":
+            logger.warning("⚠️  DEFAULT_ADMIN_PASSWORD is unchanged — change the admin password after first login!")
+        if "*" in settings.cors_origin_list:
+            logger.warning(
+                "⚠️  CORS_ORIGINS is '*' with credentials enabled — any website can call this "
+                "API using a user's token. Set CORS_ORIGINS to your actual frontend origin(s) "
+                "before deploying to production!"
+            )
 
         # MCP server ready
         logger.success("Arkon MCP Server ready at /mcp")

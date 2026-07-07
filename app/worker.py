@@ -1148,6 +1148,10 @@ class WorkerSettings:
     max_tries = 3
     retry_delay = 10
     health_check_interval = 30
+    # Let an in-flight job finish (up to this many seconds) before SIGTERM
+    # cancels it, instead of arq's default of cancelling immediately.
+    # docker-compose.yml's stop_grace_period for this service must exceed this.
+    job_completion_wait = 300
     cron_jobs = [
         cron(notebooklm_refresh_session_cron, minute={0, 30}),
     ]
@@ -1172,7 +1176,8 @@ class SkillWorkerSettings:
     max_tries = 3
     retry_delay = 10
     health_check_interval = 30
-    
+    job_completion_wait = 300
+
     cron_jobs = [
         cron(cleanup_temp_uploads_cron, minute=0)
     ]

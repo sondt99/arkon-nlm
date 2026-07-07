@@ -32,7 +32,7 @@ class Settings(BaseSettings):
         description="Email for the initial admin account (created on first startup)",
     )
     default_admin_password: str = Field(
-        default="admin123",
+        default="change-me-admin-password",
         description="Password for the initial admin account",
     )
 
@@ -51,7 +51,9 @@ class Settings(BaseSettings):
     minio_presign_expiry_hours: int = Field(default=24)
 
     # --- CORS ---
-    cors_origins: str = Field(default="*")
+    # Empty = same-origin only (safe default for the nginx-fronted setup).
+    # Set to explicit origin(s) only if the API is called cross-origin.
+    cors_origins: str = Field(default="")
 
     # --- Redis (arq worker queue) ---
     redis_host: str = Field(default="localhost")

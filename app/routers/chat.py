@@ -16,6 +16,7 @@ import uuid
 from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException
+from loguru import logger
 from pydantic import BaseModel
 from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -198,6 +199,11 @@ async def send_message(
     if conv.title == "New conversation":
         conv.title = body.content.strip()[:80]
 
+    # Persist before the long provider call so a disconnected client can
+    # recover the real user-message ID from conversation history.
+    await db.commit()
+    await db.refresh(user_msg)
+
     try:
         registry = ProviderRegistry(db)
         answer, sources = await chat_service.generate_reply(
@@ -206,9 +212,11 @@ async def send_message(
             conversation=conv,
             question=body.content.strip(),
             persona=body.persona,
+            exclude_message_id=user_msg.id,
         )
     except Exception as exc:
         # Save error as assistant message so the UI shows feedback
+        logger.exception("Chat generation failed for conversation={}", conv.id)
         answer = f"Sorry, I encountered an error: {exc}"
         sources = []
 
@@ -275,6 +283,10 @@ async def edit_message(
         )
     )
     await db.flush()
+    # Make the edit/delete boundary durable before regeneration. If the client
+    # disconnects, a history refresh still reflects the user's latest intent.
+    await db.commit()
+    await db.refresh(msg)
 
     # Regenerate assistant reply with updated context
     try:
@@ -285,8 +297,10 @@ async def edit_message(
             conversation=conv,
             question=body.content.strip(),
             persona=body.persona,
+            exclude_message_id=msg.id,
         )
     except Exception as exc:
+        logger.exception("Chat regeneration failed for conversation={}", conv.id)
         answer = f"Sorry, I encountered an error: {exc}"
         sources = []
 

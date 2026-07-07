@@ -141,7 +141,10 @@ async def ingest_source(
                 kt_slug = kt.slug
                 kt_name = kt.name
                 kt_desc = kt.description
-                kt_hints = kt.extraction_hints
+                from app.ai.knowledge_type_context import build_effective_extraction_hints
+                kt_hints = build_effective_extraction_hints(
+                    kt.slug, kt.name, kt.description, kt.extraction_hints,
+                )
 
         # --- Step 6: Compile into wiki ---
         result = await compile_source_into_wiki(

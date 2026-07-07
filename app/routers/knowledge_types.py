@@ -110,12 +110,17 @@ async def create_knowledge_type(body: KnowledgeTypeCreate, db: AsyncSession = De
     )
     max_order = max_order_result.scalar() or 0
 
+    extraction_hints = body.extraction_hints
+    if not extraction_hints:
+        from app.scripts.seed_security_kt_hints import _match_hints
+        extraction_hints = _match_hints(slug) or _match_hints(body.name.lower().replace(" ", "-"))
+
     kt = KnowledgeType(
         slug=slug,
         name=body.name,
         color=body.color,
         description=body.description,
-        extraction_hints=body.extraction_hints,
+        extraction_hints=extraction_hints,
         sort_order=max_order + 1,
     )
     db.add(kt)
@@ -150,7 +155,11 @@ async def update_knowledge_type(
         kt.slug = body.slug
     kt.color = body.color
     kt.description = body.description
-    kt.extraction_hints = body.extraction_hints
+    extraction_hints = body.extraction_hints
+    if not extraction_hints:
+        from app.scripts.seed_security_kt_hints import _match_hints
+        extraction_hints = _match_hints(kt.slug) or _match_hints(kt.name.lower().replace(" ", "-"))
+    kt.extraction_hints = extraction_hints
     await db.flush()
 
     return KnowledgeTypeOut(

@@ -905,7 +905,10 @@ async def ingest_map_reduce_task(ctx: dict, source_id: str, auto_approve: bool =
                 kt = await session.get(KnowledgeType, source.knowledge_type_id)
                 if kt:
                     kt_slug, kt_name, kt_desc = kt.slug, kt.name, kt.description
-                    kt_hints = kt.extraction_hints
+                    from app.ai.knowledge_type_context import build_effective_extraction_hints
+                    kt_hints = build_effective_extraction_hints(
+                        kt.slug, kt.name, kt.description, kt.extraction_hints,
+                    )
 
             result = await run_mrp_pipeline(
                 session=session,
@@ -990,11 +993,15 @@ async def ingest_refine_task(ctx: dict, source_id: str):
 
             registry = ProviderRegistry(session)
 
-            kt_slug = kt_name = kt_desc = None
+            kt_slug = kt_name = kt_desc = kt_hints = None
             if source.knowledge_type_id:
                 kt = await session.get(KnowledgeType, source.knowledge_type_id)
                 if kt:
                     kt_slug, kt_name, kt_desc = kt.slug, kt.name, kt.description
+                    from app.ai.knowledge_type_context import build_effective_extraction_hints
+                    kt_hints = build_effective_extraction_hints(
+                        kt.slug, kt.name, kt.description, kt.extraction_hints,
+                    )
 
             result = await run_refine_pipeline(
                 session=session,
@@ -1005,6 +1012,7 @@ async def ingest_refine_task(ctx: dict, source_id: str):
                 kt_slug=kt_slug,
                 kt_name=kt_name,
                 kt_desc=kt_desc,
+                kt_extraction_hints=kt_hints,
             )
 
             logger.success(

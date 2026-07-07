@@ -134,6 +134,45 @@ class ProviderRegistry:
         cls = _get_llm_class(config.provider)
         return cls(config)
 
+    async def get_ingestion_llm(self) -> LLMProvider:
+        """Get a deterministic text model suitable for long-running ingestion.
+
+        Router aliases such as ``Optimize``/``Auto`` can select a backend that
+        stalls on structured extraction. If an explicit vision model is
+        configured on the same OpenAI-compatible gateway, it is also a valid
+        text model and is preferred for deterministic MRP jobs. Chat keeps the
+        user's general LLM selection unchanged.
+        """
+        config = await self._load_config("llm")
+        from app.config import settings
+        if settings.mrp_ingestion_model_id.strip():
+            configured_model = settings.mrp_ingestion_model_id.strip()
+            logger.info(
+                "MRP ingestion: using explicit configured model '{}' instead of '{}'",
+                configured_model,
+                config.model_id,
+            )
+            config.model_id = configured_model
+        elif config.model_id.strip().lower() in {"optimize", "auto"}:
+            try:
+                explicit = await self._load_config("vision")
+                if explicit.model_id and explicit.provider in {
+                    ProviderType.OPENAI,
+                    ProviderType.NINEROUTER,
+                    ProviderType.GOOGLE,
+                    ProviderType.ANTHROPIC,
+                }:
+                    logger.warning(
+                        "MRP ingestion: router alias model '{}' replaced by explicit model '{}'",
+                        config.model_id,
+                        explicit.model_id,
+                    )
+                    config = explicit
+            except ValueError:
+                pass
+        cls = _get_llm_class(config.provider)
+        return cls(config)
+
     async def get_chatbot_llm(self) -> LLMProvider:
         """
         Get the LLM for the RAG chatbot.

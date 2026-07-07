@@ -346,3 +346,26 @@ Sau khi xử lý vài tài liệu đầu, xem wiki được tạo ra:
 ### Không xóa knowledge type đang dùng
 
 Xóa knowledge type không xóa tài liệu và wiki pages đang dùng nó. Chỉ ảnh hưởng đến filtering. Thay vào đó, rename hoặc merge với type khác.
+---
+
+## Domain-aware parsing for security knowledge
+
+Knowledge Types whose slug/name identifies pentest, red-team, exploit, SQL injection, bypass or vulnerability research receive a preservation profile. The profile applies to MAP, REDUCE, compilation planning and REFINE—not only initial extraction.
+
+For these domains Arkon preserves exact commands, payloads, platform/version constraints, CVE and MITRE identifiers. Deterministic artifacts carry a source offset and SHA-256 fingerprint, are assigned to one relevant wiki page, and are restored verbatim if an LLM-generated article omits them.
+## Effective extraction hints (v2)
+
+Từ phiên bản v2, pipeline không chỉ đọc riêng trường `extraction_hints`. Chính sách
+thực tế được tạo tại thời điểm ingest theo thứ tự:
+
+1. Profile bảo toàn mặc định được nhận diện từ `slug`, `name` hoặc `description`.
+2. `description` của category được dùng làm ngữ cảnh trích xuất.
+3. `extraction_hints` do quản trị viên nhập được đặt ở mức ưu tiên category cao nhất.
+
+Vì vậy một category có mô tả như `Pentest và redteam, giữ nguyên payload, command,
+procedure và điều kiện bypass` sẽ tự kích hoạt profile security ngay cả khi category
+có slug chung như `field-notes`. Profile đã seed trong dữ liệu cũ được tự động loại
+trùng, không làm prompt dài gấp đôi.
+
+`description` vẫn là nội dung hiển thị trên giao diện; hệ thống chỉ tạo effective
+hints trong bộ nhớ khi chạy pipeline và không ghi đè mô tả hay custom hints trong DB.

@@ -1921,6 +1921,82 @@ Phiên bản ban đầu gồm: Ingestion Pipeline (MRP), Wiki System, Skill Syst
 - Database ở migration `023 (head)`.
 - Release commit: `1dd7c2afd3547bb6596627e795e1783d32e47198`.
 
+## 9. Thiết kế xử lý tài liệu chính xác theo domain
+
+### 9.1 Knowledge Type và effective extraction hints
+
+Các profile mặc định được định nghĩa tại
+`app/scripts/seed_security_kt_hints.py`:
+
+| Profile | Biến cấu hình | Từ khóa nhận diện chính |
+|---|---|---|
+| Pentest | `_PENTEST_HINTS` | `pentest`, `penetration`, `offensive`, `exploit`, `sqli`, `bypass` |
+| Red Team | `_REDTEAM_HINTS` | `redteam`, `ttp`, `att&ck`, `c2`, `implant` |
+| Vulnerability Research | `_VULN_RESEARCH_HINTS` | `vuln`, `cve`, `bugbounty`, `0day` |
+
+`app/ai/knowledge_type_context.py` tạo policy hiệu lực tại thời điểm ingest theo
+thứ tự: profile mặc định → mô tả category → custom `extraction_hints`. Custom
+hints có ưu tiên category cao nhất. Profile được nhận diện từ `slug`, `name` và
+`description`, vì vậy category tên chung vẫn nhận đúng policy nếu mô tả chứa
+domain pentest/redteam/vulnerability. Profile đã seed trong DB được loại trùng.
+
+Effective hints được truyền xuyên suốt MAP, REDUCE, planning và REFINE. Với
+security domain, pipeline còn trích xuất deterministic artifact từ source gốc,
+gắn offset + SHA-256, route mỗi command/payload/code tới một trang phù hợp và
+khôi phục nguyên văn nếu LLM bỏ sót.
+
+### 9.2 Mô hình quyết định CREATE và UPDATE
+
+REDUCE chỉ tự động `UPDATE` khi ứng viên wiki vượt
+`MRP_KB_UPDATE_THRESHOLD=0.82` và đồng thời semantic similarity cùng lexical
+similarity đều đạt ít nhất `0.72`. Từ `0.48` trở lên nhưng chưa đủ chắc chắn,
+ứng viên được chuyển cho LLM resolver; dưới ngưỡng này hệ thống chọn `CREATE`.
+Entity cùng type chỉ tự động gộp khi cosine similarity đạt `0.90`. Thiết kế này
+tránh update nhầm trang chỉ vì nội dung gần nghĩa, đồng thời hạn chế concept trùng.
+
+Khi UPDATE, nội dung mới không ghi đè trực tiếp: contribution theo source được
+lưu riêng, canonical page được rebuild/merge và kiểm tra độ co nội dung. COMMIT
+chạy trong một transaction; source chỉ thành `ready` sau khi toàn bộ page và
+contribution đã ghi thành công.
+
+### 9.3 Accuracy configuration
+
+| Environment variable | Mặc định | Vai trò |
+|---|---:|---|
+| `MRP_INGESTION_MODEL_ID` | rỗng | Model rõ ràng cho ingestion; tránh router alias không ổn định |
+| `MRP_CHUNK_TARGET_CHARS` | `12000` | Kích thước thân chunk, cân bằng context và timeout |
+| `MRP_CHUNK_OVERLAP_CHARS` | `1000` | Ngữ cảnh nối giữa các chunk |
+| `MRP_MAP_MAX_CONCURRENCY` | `6` | Số MAP call đồng thời |
+| `MRP_EXTRACT_TIMEOUT` | `120` | Timeout mỗi MAP call, giây |
+| `MRP_ENTITY_MERGE_THRESHOLD` | `0.90` | Ngưỡng tự gộp entity cùng type |
+| `MRP_ENTITY_AMBIGUOUS_THRESHOLD` | `0.75` | Từ ngưỡng này entity pair được LLM phân giải |
+| `MRP_KB_UPDATE_THRESHOLD` | `0.82` | Ngưỡng ứng viên UPDATE độ tin cậy cao |
+| `MRP_KB_MAYBE_THRESHOLD` | `0.48` | Ngưỡng chuyển ứng viên mơ hồ cho LLM resolver |
+| `MRP_KB_MIN_SEMANTIC_SIMILARITY` | `0.72` | Semantic floor bắt buộc để tự UPDATE |
+| `MRP_KB_MIN_LEXICAL_SIMILARITY` | `0.72` | Lexical/title floor bắt buộc để tự UPDATE |
+| `MRP_WRITER_MAX_CONCURRENCY` | `4` | Số page writer đồng thời |
+| `MRP_WRITER_TIMEOUT` | `300` | Timeout mỗi writer call, giây |
+| `MRP_WRITER_MAX_ATTEMPTS` | `3` | Số lần thử tối đa, không sinh placeholder |
+| `MRP_VERIFY_CONFLICT_THRESHOLD` | `0.80` | Ngưỡng tìm trang gần để kiểm tra xung đột |
+| `MRP_VERIFY_MIN_MENTIONS` | `3` | Số lần nhắc để cảnh báo entity chưa được phủ |
+| `MRP_MERGE_MIN_BODY_RATIO` | `0.70` | Tỷ lệ tối thiểu chống merge làm mất nội dung |
+| `MRP_MERGE_TIMEOUT` | `120` | Timeout merge page, giây |
+
+Các biến được khai báo và giới hạn miền giá trị trong `app/config.py`; cấu hình
+mẫu nằm tại `.env.docker.example`. Production hiện dùng model ingestion rõ ràng
+`openai/gpt-4.1`, worker timeout `3600` giây. Không nên thay đổi ngưỡng
+CREATE/UPDATE nếu chưa chạy bộ đánh giá có ground truth vì tăng hoặc giảm tùy ý
+có thể đổi lỗi duplicate thành lỗi update nhầm.
+
+### 9.4 Tiêu chí toàn vẹn
+
+- MAP chunk được persist riêng và resume-safe.
+- Planning dùng temperature thấp; entity resolver deterministic.
+- Writer nhận evidence, source context và domain hints; output chatter/incomplete bị từ chối.
+- Security artifacts được đối chiếu bằng nội dung nguyên văn, không chỉ marker hash.
+- VERIFY kiểm tra coverage và conflict; COMMIT fail-fast, atomic và source-aware.
+- Xóa một source chỉ xóa contribution của source đó rồi rebuild từ nguồn còn lại.
+
 #### MRP reliability hotfix — 2026-06-21
 
 - REFINE fan-out sử dụng wiki snapshot bất biến, không chia sẻ thao tác database trên một `AsyncSession` giữa các coroutine.

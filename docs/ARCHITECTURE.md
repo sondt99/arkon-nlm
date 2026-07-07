@@ -370,7 +370,7 @@ Output: Source.pipeline_strategy duoc cap nhat
 
 **Phase 1 — MAP** (`run_map_phase` trong `mapper.py`)
 ```
-Input:  full_text chia thanh chunks ~20.000 chars
+Input:  full_text chia thanh chunks ~12.000 chars
         Overlap 1.000 chars giu ngu canh giua cac chunk
         Separator "[...context from previous section...]"
 Logic:  Goi LLM song song (toi da 6 concurrent, timeout 120s/call)
@@ -1080,6 +1080,20 @@ CORS_ORIGINS=http://localhost:3119,http://100.x.x.x:3119
 
 # MRP
 MRP_AUTO_APPROVE_PLAN=false
+
+# Accuracy profile (defaults)
+MRP_INGESTION_MODEL_ID=
+MRP_CHUNK_TARGET_CHARS=12000
+MRP_CHUNK_OVERLAP_CHARS=1000
+MRP_ENTITY_MERGE_THRESHOLD=0.90
+MRP_ENTITY_AMBIGUOUS_THRESHOLD=0.75
+MRP_KB_UPDATE_THRESHOLD=0.82
+MRP_KB_MAYBE_THRESHOLD=0.48
+MRP_KB_MIN_SEMANTIC_SIMILARITY=0.72
+MRP_KB_MIN_LEXICAL_SIMILARITY=0.72
+MRP_WRITER_MAX_CONCURRENCY=4
+MRP_VERIFY_CONFLICT_THRESHOLD=0.80
+MRP_MERGE_MIN_BODY_RATIO=0.70
 
 # FRONTEND (build-time)
 NEXT_PUBLIC_API_URL=              # DE TRONG

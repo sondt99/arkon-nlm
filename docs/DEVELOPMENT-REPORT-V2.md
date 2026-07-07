@@ -212,6 +212,19 @@ Các thay đổi đã triển khai:
 
 Kết quả kiểm chứng end-to-end ngày 2026-06-21: REFINE và VERIFY hoàn tất `64/64`, COMMIT tạo 43 trang và cập nhật 21 lượt, lưu 63 contribution trên 63 wiki page (hai lượt plan hội tụ vào cùng page), compilation plan chuyển `done`, source chuyển `ready/commit/100%`. Tổng thời gian job retry là 1365,24 giây; không còn lỗi concurrent `AsyncSession` và không có dữ liệu commit nửa chừng.
 
+### 8.2 Domain-aware security knowledge preservation (2026-06-21)
+
+Pipeline được nâng cấp để tài liệu pentest/redteam không bị khái quát hóa mất command, payload và điều kiện khai thác:
+
+- Truyền `KnowledgeType.extraction_hints` xuyên MAP, REDUCE, PLAN và REFINE.
+- Ưu tiên entity loại `technique`, `tool`, `cve`, `payload`; security planner nhận tối đa 100 entity và 100 concept thay vì chỉ 30 mục phổ biến nhất.
+- Trích deterministic code block, command, SQL payload, CVE và MITRE ID; lưu offset cùng SHA-256 để giữ nguyên văn.
+- Định tuyến mỗi artifact vào đúng một wiki page liên quan, giới hạn số lượng/kích thước để tránh trùng lặp và prompt quá lớn.
+- Nếu LLM bỏ sót artifact đã gán, writer bổ sung nguyên văn vào `Exact commands and payloads`; output chứa agent chatter bị từ chối và retry.
+- Retry 504 giảm source context theo `100% → 60% → 35%`; riêng source overview bắt đầu ở 30.000 ký tự.
+
+Kiểm chứng với `Pentesting Wifi.md`: lỗi cũ do Cloudflare 504 lặp lại trên prompt 60.000 ký tự. Sau nâng cấp, REFINE/VERIFY hoàn tất `31/31` không có writer retry, COMMIT tạo 30 trang và cập nhật 1 trang, lưu 31 contribution; source chuyển `ready/commit/100%`. Có 3 cảnh báo coverage không chặn (`mschapv2`, `eap-ttls`, `essid`) để tiếp tục xử lý ở Plan Review thế hệ sau.
+
 | Tiêu chí | Trước v2 | Sau v2 |
 |---|---|---|
 | Truy vết tri thức | Theo page/source ID | Theo contribution của từng source |
@@ -248,3 +261,18 @@ Kết quả kiểm chứng end-to-end ngày 2026-06-21: REFINE và VERIFY hoàn 
 | `36d409b` | Wiki limit và search/filter changelog |
 | `31fee50` | Bảo toàn nội dung khi Add to Wiki |
 | `12f1d65` | ZIP archive upload an toàn |
+## 12. Knowledge Type description-aware extraction
+
+- Bổ sung bộ hợp nhất policy dùng chung cho mọi đường ingest.
+- Ghép domain profile, mô tả category và custom extraction hints theo độ ưu tiên.
+- Cho phép mô tả category kích hoạt profile pentest/redteam/vulnerability khi slug
+  hoặc tên không mang từ khóa domain.
+- Giới hạn độ dài dữ liệu đưa vào prompt và loại trùng profile đã seed trước đây.
+- Áp dụng nhất quán cho MAP, REDUCE, REFINE và compiler tương thích cũ.
+## Chat timeout recovery và context optimization
+
+- Giữ model alias do admin cấu hình, tối ưu workload của request chat thật.
+- Giảm context RAG dư thừa và loại câu hỏi hiện tại bị lặp trong history.
+- Commit user message trước provider call để client có thể phục hồi ID thật.
+- Frontend tự đồng bộ assistant response từ DB khi request bị ngắt/HTTP 499.
+- Chặn edit message tạm, tăng timeout client phù hợp với nginx và thêm stage timing log.

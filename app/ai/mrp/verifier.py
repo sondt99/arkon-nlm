@@ -18,13 +18,14 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.ai.mrp.writer import PageWriteResult
 from app.ai.providers.base import EmbeddingProvider, LLMProvider
+from app.config import settings
 from app.utils.progress import ProgressTracker
 
 # ---------------------------------------------------------------------------
 # Constants
 # ---------------------------------------------------------------------------
 
-CONFLICT_SIM_THRESHOLD = 0.80
+CONFLICT_SIM_THRESHOLD = settings.mrp_verify_conflict_threshold
 
 
 # ---------------------------------------------------------------------------
@@ -34,7 +35,7 @@ CONFLICT_SIM_THRESHOLD = 0.80
 def check_coverage(
     chunk_extracts: list,
     page_results: list[PageWriteResult],
-    min_mentions: int = 3,
+    min_mentions: int = settings.mrp_verify_min_mentions,
 ) -> list[str]:
     """
     Returns entity names mentioned >= min_mentions times in extracts

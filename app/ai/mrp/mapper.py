@@ -4,7 +4,7 @@ Phase 0 (Triage) + Phase 1 (MAP) of the MRP pipeline.
 Phase 0: classify_strategy() — decides single_pass / standard / hierarchical
          based on full_text length.
 
-Phase 1: build_chunks() — splits document into ~20k-char chunks along section
+Phase 1: build_chunks() — splits document into ~12k-char chunks along section
          boundaries from outline_json. Each chunk is then sent to extract_chunk()
          in parallel (up to MAX_MAP_CONCURRENCY concurrent LLM calls).
          Results are persisted to SourceChunkExtract rows immediately so the
@@ -23,16 +23,17 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.ai.providers.base import LLMProvider
+from app.config import settings
 from app.utils.progress import ProgressTracker
 
 # ---------------------------------------------------------------------------
 # Constants
 # ---------------------------------------------------------------------------
 
-CHUNK_TARGET_CHARS = 20_000
-OVERLAP_CHARS = 1_000
-MAX_MAP_CONCURRENCY = 6
-EXTRACT_TIMEOUT = 120  # seconds per extraction call
+CHUNK_TARGET_CHARS = settings.mrp_chunk_target_chars
+OVERLAP_CHARS = settings.mrp_chunk_overlap_chars
+MAX_MAP_CONCURRENCY = settings.mrp_map_max_concurrency
+EXTRACT_TIMEOUT = settings.mrp_extract_timeout
 OVERLAP_SEPARATOR = "[…context from previous section…]\n"
 
 
@@ -175,7 +176,42 @@ def build_chunks(full_text: str, outline_json: Optional[list], strategy: str) ->
             tail_chunk = _flush(idx, remainder_start, len(full_text), [f"tail_{idx}"])
             chunks.append(tail_chunk)
 
-    return chunks if chunks else _sliding_window_chunks(full_text)
+    return _split_oversized_chunks(chunks, full_text) if chunks else _sliding_window_chunks(full_text)
+
+
+def _split_oversized_chunks(
+    chunks: list[DocumentChunk],
+    full_text: str,
+) -> list[DocumentChunk]:
+    """Hard-cap chunk bodies when a single outline section is very large."""
+    output: list[DocumentChunk] = []
+    for original in chunks:
+        body_size = original.end_char - original.start_char
+        if body_size <= CHUNK_TARGET_CHARS:
+            original.index = len(output)
+            output.append(original)
+            continue
+
+        pos = original.start_char
+        part = 1
+        while pos < original.end_char:
+            end = min(pos + CHUNK_TARGET_CHARS, original.end_char)
+            if output:
+                overlap_start = max(0, pos - OVERLAP_CHARS)
+                prefix = OVERLAP_SEPARATOR + full_text[overlap_start:pos] + "\n"
+            else:
+                prefix = ""
+            output.append(DocumentChunk(
+                index=len(output),
+                start_char=pos,
+                end_char=end,
+                section_path=f"{original.section_path} > part {part}",
+                text=prefix + full_text[pos:end],
+                overlap_prefix_len=len(prefix),
+            ))
+            pos = end
+            part += 1
+    return output
 
 
 def _sliding_window_chunks(full_text: str) -> list[DocumentChunk]:
@@ -414,6 +450,17 @@ async def run_map_phase(
             )
             session.add(row)
             existing_by_idx[chunk.index] = row
+        else:
+            row = existing_by_idx[chunk.index]
+            # Chunking policy can change between retries. Never reuse an
+            # extraction produced for a different character range.
+            if row.start_char != chunk.start_char or row.end_char != chunk.end_char:
+                row.start_char = chunk.start_char
+                row.end_char = chunk.end_char
+                row.section_path = chunk.section_path
+                row.extract_json = None
+                row.status = "pending"
+                row.error_message = None
     await session.commit()
 
     # Reload after flush so IDs are populated
@@ -441,10 +488,11 @@ async def run_map_phase(
                     row.error_message = None
                     await session.commit()
             except Exception as e:
-                logger.warning(f"MRP MAP chunk {chunk.index} failed: {e}")
+                error_detail = str(e).strip() or type(e).__name__
+                logger.warning(f"MRP MAP chunk {chunk.index} failed: {error_detail}")
                 async with commit_lock:
                     row.status = "error"
-                    row.error_message = str(e)[:500]
+                    row.error_message = error_detail[:500]
                     await session.commit()
             pct = 10 + int(40 * (done_count + chunk.index + 1) / max(len(chunks), 1))
             await tracker.update(pct, f"Extracting chunk {chunk.index + 1}/{len(chunks)}...")
@@ -464,7 +512,10 @@ async def run_map_phase(
                 row.error_message = None
                 await session.commit()
             except Exception as e:
-                logger.warning(f"MRP MAP chunk {chunk.index} retry failed: {e}")
+                error_detail = str(e).strip() or type(e).__name__
+                logger.warning(f"MRP MAP chunk {chunk.index} retry failed: {error_detail}")
+                row.error_message = error_detail[:500]
+                await session.commit()
 
     # Return all done rows
     done_rows = [existing_by_idx[c.index] for c in chunks if existing_by_idx[c.index].status == "done"]

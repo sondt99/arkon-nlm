@@ -22,6 +22,7 @@ from loguru import logger
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.ai.providers.base import EmbeddingProvider, LLMProvider
+from app.config import settings
 from app.utils.progress import ProgressTracker
 
 if TYPE_CHECKING:
@@ -31,13 +32,17 @@ if TYPE_CHECKING:
 # Constants
 # ---------------------------------------------------------------------------
 
-MAX_WRITER_CONCURRENCY = 4
+MAX_WRITER_CONCURRENCY = settings.mrp_writer_max_concurrency
 WRITER_COMPLEX_THRESHOLD_EVIDENCE = 8
 WRITER_COMPLEX_THRESHOLD_EXISTING_CHARS = 3_000
 WRITER_AGENT_MAX_STEPS = 10
-WRITER_AGENT_TIMEOUT = 300  # seconds per LLM call in complex writer
-WRITER_MAX_ATTEMPTS = 3
+WRITER_AGENT_TIMEOUT = settings.mrp_writer_timeout
+WRITER_MAX_ATTEMPTS = settings.mrp_writer_max_attempts
 WRITER_RETRY_DELAYS = (15, 60)
+_AGENT_CHATTER_PREFIX = re.compile(
+    r"(?is)^\s*(?:perfect[!.]?|now\s+(?:let\s+me|i(?:'ll|\s+will))|"
+    r"let\s+me\s+(?:search|read|look|find)|i\s+(?:need|will)\s+to)\b"
+)
 
 # ---------------------------------------------------------------------------
 # Dataclass
@@ -55,6 +60,16 @@ class PageWriteResult:
     # [{"ref": "[^1]", "absolute_offset": int, "evidence_length": int}]
     entity_names: list[str] = field(default_factory=list)
     related_kb_pages: list[str] = field(default_factory=list)
+
+
+def _validate_writer_output(content: str, slug: str) -> str:
+    """Reject agent scratchpad/chatter instead of committing it as wiki text."""
+    value = (content or "").strip()
+    if len(value) < 40 or "(content generation incomplete)" in value:
+        raise ValueError(f"Writer returned incomplete content for '{slug}'")
+    if _AGENT_CHATTER_PREFIX.match(value):
+        raise ValueError(f"Writer returned agent chatter instead of wiki content for '{slug}'")
+    return value
 
 
 # ---------------------------------------------------------------------------
@@ -234,6 +249,7 @@ def _build_source_context(
     full_text: str,
     evidence: list[dict],
     model_id: str | None = None,
+    budget_override: int | None = None,
 ) -> str:
     """
     Build source context for the writer.
@@ -247,7 +263,7 @@ def _build_source_context(
     For long documents: smart extraction — section-level relevance scoring
     based on evidence density, with full sections preserved for coherence.
     """
-    budget = _get_source_context_budget(model_id)
+    budget = budget_override or _get_source_context_budget(model_id)
 
     if len(full_text) <= budget:
         return full_text
@@ -402,6 +418,7 @@ def _score_sections(
 _SIMPLE_WRITER_PROMPT = """\
 ## Task
 {action} the following wiki page.
+{domain_note}
 
 ## Page specification
 - Slug: {slug}
@@ -424,6 +441,12 @@ Use them as a checklist — make sure you don't miss any of these facts.
 But also look for additional relevant information in the source text above.
 
 {evidence_blocks}
+
+## Exact security artifacts
+These blocks are copied directly from the source. Preserve their syntax
+verbatim; explain them, but never generalize or rewrite their contents.
+
+{security_artifacts}
 
 ## Instructions
 Write the complete wiki page in markdown based on the source text above.
@@ -453,6 +476,8 @@ async def _write_page_simple(
     existing_content: Optional[str],
     all_plan_slugs: list[str],
     source_context: str = "",
+    domain_hints: Optional[str] = None,
+    security_artifacts: Optional[list[dict]] = None,
 ) -> tuple[str, str, list[dict]]:
     """
     Returns (content_md, summary, citations_meta).
@@ -467,17 +492,24 @@ async def _write_page_simple(
         if existing_content else ""
     )
     evidence_blocks, citations_meta = _format_evidence_blocks(evidence)
+    from app.ai.mrp.security_artifacts import format_artifacts_for_prompt, preserve_missing_artifacts
+    security_artifacts = security_artifacts or []
 
     prompt = _SIMPLE_WRITER_PROMPT.format(
         action=plan_item.get("action", "CREATE"),
         slug=plan_item.get("slug", ""),
         title=plan_item.get("title", ""),
         page_type=plan_item.get("page_type", "concept"),
+        domain_note=(
+            f"\n## Domain-specific preservation policy\n{domain_hints.strip()}\n"
+            if domain_hints and domain_hints.strip() else ""
+        ),
         all_plan_slugs=all_plan_slugs_str,
         existing_section=existing_section,
         source_context=source_context or "(no source text available)",
         evidence_count=len(evidence),
         evidence_blocks=evidence_blocks or "(no pre-extracted evidence)",
+        security_artifacts=format_artifacts_for_prompt(security_artifacts),
     )
 
     raw = await asyncio.wait_for(
@@ -498,7 +530,9 @@ async def _write_page_simple(
                 break
     summary = " ".join(summary_lines)[:300]
 
-    return raw.strip(), summary, citations_meta
+    validated = _validate_writer_output(raw, own_slug)
+    content = preserve_missing_artifacts(validated, security_artifacts)
+    return content, summary, citations_meta
 
 
 # ---------------------------------------------------------------------------
@@ -568,12 +602,17 @@ async def _write_page_complex(
     kb_page_cache: dict[str, dict[str, str]],
     source,
     all_plan_slugs: list[str],
+    source_context: str,
+    domain_hints: Optional[str] = None,
+    security_artifacts: Optional[list[dict]] = None,
 ) -> tuple[str, str, list[dict]]:
     """
     Mini agent loop for pages with many evidence items or large existing content.
     Returns (content_md, summary, citations_meta).
     """
     from app.ai.agent_protocol import assistant_message_from_turn, tool_results_message
+    from app.ai.mrp.security_artifacts import format_artifacts_for_prompt, preserve_missing_artifacts
+    security_artifacts = security_artifacts or []
     evidence_blocks, citations_meta = _format_evidence_blocks(evidence)
     existing_section = (
         f"\n## Existing page content (UPDATE — integrate):\n{existing_content}\n"
@@ -585,17 +624,18 @@ async def _write_page_complex(
     available = [s for s in all_plan_slugs if s != own_slug]
     slugs_list = "\n".join(f"- [[{s}]]" for s in available) if available else "(none)"
 
-    # Build source context
-    source_context = _build_source_context(full_text, evidence, model_id=llm.config.model_id)
-
     initial_msg = (
         f"Write a wiki page for: **{plan_item.get('title', '')}** "
         f"(slug: `{own_slug}`, type: {plan_item.get('page_type', 'concept')})\n"
         f"Action: {plan_item.get('action', 'CREATE')}\n\n"
+        f"## Domain-specific preservation policy\n{domain_hints or '(none)'}\n\n"
         f"## Available pages (ONLY use these for [[wikilinks]])\n{slugs_list}\n"
         f"{existing_section}\n"
         f"## Source document text\n{source_context}\n\n"
-        f"## Evidence checklist ({len(evidence)} items)\n{evidence_blocks}"
+        f"## Evidence checklist ({len(evidence)} items)\n{evidence_blocks}\n\n"
+        f"## Exact security artifacts\n"
+        f"Preserve every assigned block verbatim.\n\n"
+        f"{format_artifacts_for_prompt(security_artifacts)}"
     )
 
     messages = [{"role": "user", "content": initial_msg}]
@@ -678,7 +718,9 @@ async def _write_page_complex(
                 break
         result_summary = result_summary or plan_item.get("title", "")
 
-    return result_content.strip(), result_summary, citations_meta
+    validated = _validate_writer_output(result_content, own_slug)
+    content = preserve_missing_artifacts(validated, security_artifacts)
+    return content, result_summary, citations_meta
 
 
 # ---------------------------------------------------------------------------
@@ -703,6 +745,7 @@ async def run_refine_phase(
     embedding_provider: Optional[EmbeddingProvider],
     kt_slug: Optional[str],
     tracker: ProgressTracker,
+    kt_extraction_hints: Optional[str] = None,
 ) -> list[PageWriteResult]:
     """
     Run Phase 3 (REFINE): write all pages in the compilation plan in parallel.
@@ -713,9 +756,16 @@ async def run_refine_phase(
     plan_dict = plan.plan_json
     pages_spec = plan_dict.get("pages", [])
     all_claims = plan_dict.get("_claims", [])
+    all_security_artifacts = plan_dict.get("_security_artifacts", [])
+    if kt_extraction_hints and not all_security_artifacts:
+        # Plans created before domain-aware REDUCE can still benefit on retry.
+        from app.ai.mrp.security_artifacts import extract_security_artifacts
+        all_security_artifacts = extract_security_artifacts(full_text)
 
     # Sort by priority (lower number = higher priority)
     pages_spec = sorted(pages_spec, key=lambda p: p.get("priority", 99))
+    from app.ai.mrp.security_artifacts import route_artifacts_to_pages
+    security_artifact_routes = route_artifacts_to_pages(pages_spec, all_security_artifacts)
 
     # Collect ALL slugs from the plan so writers can cross-link accurately
     all_plan_slugs = [p.get("slug", "") for p in pages_spec if p.get("slug")]
@@ -757,6 +807,7 @@ async def run_refine_phase(
 
             # Assemble evidence
             evidence = assemble_evidence(plan_item, all_claims, full_text)
+            page_artifacts = security_artifact_routes.get(slug, [])
 
             # Fetch existing content for UPDATE
             existing_content: Optional[str] = None
@@ -771,22 +822,36 @@ async def run_refine_phase(
                 or len(existing_content or "") > WRITER_COMPLEX_THRESHOLD_EXISTING_CHARS
             )
 
-            # Build source context for the writer
-            source_context = _build_source_context(full_text, evidence, model_id=llm.config.model_id)
-
             for attempt in range(WRITER_MAX_ATTEMPTS):
                 try:
+                    base_budget = _get_source_context_budget(llm.config.model_id)
+                    if page_type == "source":
+                        base_budget = min(base_budget, 30_000)
+                    artifact_chars = sum(len(str(a.get("text") or "")) for a in page_artifacts)
+                    base_budget = max(16_000, base_budget - min(20_000, artifact_chars))
+                    retry_factor = (1.0, 0.60, 0.35)[attempt]
+                    source_context = _build_source_context(
+                        full_text,
+                        evidence,
+                        model_id=llm.config.model_id,
+                        budget_override=max(12_000, int(base_budget * retry_factor)),
+                    )
                     if is_complex:
                         content_md, summary, citations = await _write_page_complex(
                             llm, plan_item, evidence, existing_content, full_text,
                             kb_page_cache, source,
                             all_plan_slugs=all_plan_slugs,
+                            source_context=source_context,
+                            domain_hints=kt_extraction_hints,
+                            security_artifacts=page_artifacts,
                         )
                     else:
                         content_md, summary, citations = await _write_page_simple(
                             llm, plan_item, evidence, existing_content,
                             all_plan_slugs=all_plan_slugs,
                             source_context=source_context,
+                            domain_hints=kt_extraction_hints,
+                            security_artifacts=page_artifacts,
                         )
                     break
                 except asyncio.CancelledError:

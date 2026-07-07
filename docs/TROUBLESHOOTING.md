@@ -400,6 +400,8 @@ docker compose up -d api worker worker_skills
 
 Với tài liệu lớn, cấu hình `WORKER_JOB_TIMEOUT=3600` hoặc cao hơn. Khi AI gateway trả 504, writer tự retry tối đa 3 lần; nếu vẫn lỗi, job dừng và không tạo trang placeholder.
 
+Nếu 504 chỉ lặp lại ở source overview hoặc một page lớn, bản domain-aware hotfix sẽ tự giảm context ở mỗi lần retry (`100%`, `60%`, `35%`). Source page được giới hạn 30.000 ký tự ngay từ lần đầu. Log thành công phải đi qua `MRP REFINE complete`, `MRP VERIFY complete` và `MRP COMMIT complete`; không cần upload lại file, có thể retry plan hiện tại.
+
 ---
 
 **Q: Tại sao cần cả hai worker (worker và worker_skills)?**
@@ -414,3 +416,30 @@ Worker skills xử lý skill packages (.zip) — được tách riêng để upl
 Không khuyến nghị với setup hiện tại — một số operations dùng advisory locks theo slug để tránh race condition. Nhiều worker cùng COMMIT phase có thể bị deadlock.
 
 Nếu cần scale, giải pháp tốt hơn là tăng `max_jobs` trong `WorkerSettings`.
+## Chatbot báo lỗi nhưng phản hồi xuất hiện sau khi edit/reload
+
+Nếu request chat bị client/proxy ngắt, nginx ghi HTTP `499` dù backend có thể vẫn
+hoàn tất và lưu assistant message. Frontend hiện dùng timeout 285 giây, tự polling
+lịch sử để phục hồi kết quả và không cho edit message có ID tạm `temp-*`.
+
+Backend commit user message trước LLM call, loại message hiện tại khỏi history để
+không lặp câu hỏi, giới hạn RAG ở 4 trang chính + 2 trang liên kết, tối đa 1.800 ký
+tự mỗi trang và 4 history messages. `CHAT_GENERATION_TIMEOUT` mặc định là 240 giây,
+thấp hơn nginx timeout 300 giây. Log `Chat reply generated` tách riêng thời gian
+RAG và LLM để xác định provider hay retrieval là nút thắt.
+
+Các biến liên quan: `CHAT_RAG_TOP_K`, `CHAT_LINKED_PAGES_LIMIT`,
+`CHAT_CONTEXT_CHARS_PER_PAGE`, `CHAT_HISTORY_MESSAGES`,
+`CHAT_GENERATION_TIMEOUT`.
+
+Chatbot không áp dụng giới hạn số từ cố định. Persona được yêu cầu trả lời toàn
+diện theo câu hỏi và evidence hiện có, giữ reasoning, ví dụ, điều kiện, edge case
+và chi tiết kỹ thuật chính xác. Vì vậy câu hỏi rộng hoặc yêu cầu phân tích sâu có
+thể cần nhiều thời gian sinh hơn câu hỏi ngắn.
+
+Quality gate mặc định coi câu trả lời cho câu hỏi thực chất ngắn dưới 1.800 ký tự
+là chưa đủ chi tiết. Nếu còn thời gian trong `CHAT_GENERATION_TIMEOUT`, hệ thống
+yêu cầu model viết lại một lần với cấu trúc đầy đủ hơn và chỉ nhận bản mới khi nó
+dài hơn bản đầu. Yêu cầu ngắn rõ ràng như “tóm tắt ngắn”, “một câu” hoặc “3 gạch
+đầu dòng” được tôn trọng và không kích hoạt expansion. Có thể cấu hình bằng
+`CHAT_MIN_DETAILED_ANSWER_CHARS` và `CHAT_EXPAND_SHORT_ANSWERS`.

@@ -25,6 +25,34 @@ type Message = {
   created_at: string;
 };
 
+const CHAT_REQUEST_TIMEOUT_MS = 285_000;
+const CHAT_RECOVERY_DELAYS_MS = [0, 1_500, 3_000, 6_000, 12_000, 20_000];
+
+async function recoverCompletedReply(conversationId: string, userContent: string): Promise<Message[] | null> {
+  for (const delay of CHAT_RECOVERY_DELAYS_MS) {
+    if (delay) await new Promise((resolve) => window.setTimeout(resolve, delay));
+    try {
+      const data = await api<Message[]>(`/api/chat/conversations/${conversationId}/messages`, {
+        timeoutMs: 15_000,
+      });
+      if (!Array.isArray(data)) continue;
+      let userIndex = -1;
+      for (let index = data.length - 1; index >= 0; index -= 1) {
+        if (data[index].role === "user" && data[index].content.trim() === userContent.trim()) {
+          userIndex = index;
+          break;
+        }
+      }
+      if (userIndex >= 0 && data.slice(userIndex + 1).some((message) => message.role === "assistant")) {
+        return data;
+      }
+    } catch {
+      // The original request may still hold the backend connection; retry.
+    }
+  }
+  return null;
+}
+
 // ---------------------------------------------------------------------------
 // Markdown renderer — uses react-markdown + remark-gfm
 // ---------------------------------------------------------------------------
@@ -480,6 +508,10 @@ export default function ChatPage() {
 
     const msgId = editingMsgId!;
     const msgIndex = messages.findIndex((m) => m.id === msgId);
+    if (msgId.startsWith("temp-") || msgIndex < 0) {
+      setEditingMsgId(null);
+      return;
+    }
     setEditingMsgId(null);
     setSending(true);
 
@@ -492,7 +524,7 @@ export default function ChatPage() {
     try {
       const result = await api<{ user_message: Message; assistant_message: Message }>(
         `/api/chat/conversations/${activeConvId}/messages/${msgId}/edit`,
-        { method: "PATCH", body: { content: text, persona }, timeoutMs: 120_000 }
+        { method: "PATCH", body: { content: text, persona }, timeoutMs: CHAT_REQUEST_TIMEOUT_MS }
       );
       setMessages((prev) => [
         ...prev.slice(0, msgIndex),
@@ -501,8 +533,9 @@ export default function ChatPage() {
       ]);
       await revealAssistantMessage(result.assistant_message);
     } catch {
-      // Rollback: reload from server
-      loadMessages(activeConvId);
+      const recovered = await recoverCompletedReply(activeConvId, text);
+      if (recovered) setMessages(recovered);
+      else loadMessages(activeConvId);
     } finally {
       setSending(false);
       textareaRef.current?.focus();
@@ -570,7 +603,7 @@ export default function ChatPage() {
     try {
       const result = await api<{ user_message: Message; assistant_message: Message }>(
         `/api/chat/conversations/${convId}/messages`,
-        { method: "POST", body: { content: text, persona }, timeoutMs: 120_000 }
+        { method: "POST", body: { content: text, persona }, timeoutMs: CHAT_REQUEST_TIMEOUT_MS }
       );
 
       setMessages((prev) => [
@@ -589,17 +622,22 @@ export default function ChatPage() {
         )
       );
     } catch {
-      setMessages((prev) => [
-        ...prev.filter((m) => m.id !== tempUserMsg.id),
-        tempUserMsg,
-        {
-          id: `err-${Date.now()}`,
-          role: "assistant",
-          content: "Sorry, something went wrong. Please try again.",
-          sources: null,
-          created_at: new Date().toISOString(),
-        },
-      ]);
+      const recovered = await recoverCompletedReply(convId, text);
+      if (recovered) {
+        setMessages(recovered);
+      } else {
+        setMessages((prev) => [
+          ...prev.filter((m) => m.id !== tempUserMsg.id),
+          tempUserMsg,
+          {
+            id: `err-${Date.now()}`,
+            role: "assistant",
+            content: "The connection ended before the AI response arrived. Your message was saved; reopen this conversation to sync the result.",
+            sources: null,
+            created_at: new Date().toISOString(),
+          },
+        ]);
+      }
     } finally {
       setSending(false);
       textareaRef.current?.focus();
@@ -849,7 +887,7 @@ export default function ChatPage() {
                     isEditing={editingMsgId === msg.id}
                     editContent={editingMsgContent}
                     onEditStart={
-                      msg.role === "user"
+                      msg.role === "user" && !msg.id.startsWith("temp-")
                         ? () => {
                             setEditingMsgId(msg.id);
                             setEditingMsgContent(msg.content);

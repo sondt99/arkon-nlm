@@ -25,6 +25,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.ai.providers.base import EmbeddingProvider, LLMProvider
+from app.config import settings
 from app.utils.progress import ProgressTracker
 
 if TYPE_CHECKING:
@@ -34,10 +35,10 @@ if TYPE_CHECKING:
 # Constants
 # ---------------------------------------------------------------------------
 
-MERGE_THRESHOLD = 0.90      # cosine sim → auto-merge entities
-AMBIGUOUS_LOW = 0.75        # cosine sim → send to LLM for disambiguation
-KB_UPDATE_THRESHOLD = 0.82  # high-confidence semantic match
-KB_MAYBE_THRESHOLD = 0.48   # send uncertain matches to the LLM reranker
+MERGE_THRESHOLD = settings.mrp_entity_merge_threshold
+AMBIGUOUS_LOW = settings.mrp_entity_ambiguous_threshold
+KB_UPDATE_THRESHOLD = settings.mrp_kb_update_threshold
+KB_MAYBE_THRESHOLD = settings.mrp_kb_maybe_threshold
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -458,7 +459,11 @@ async def reconcile_with_kb(
             candidate["lexical_similarity"] = round(lexical, 4)
             candidates.append(candidate)
 
-        if top_score >= KB_UPDATE_THRESHOLD and top_semantic >= 0.72 and top_lexical >= 0.72:
+        if (
+            top_score >= KB_UPDATE_THRESHOLD
+            and top_semantic >= settings.mrp_kb_min_semantic_similarity
+            and top_lexical >= settings.mrp_kb_min_lexical_similarity
+        ):
             reconciliation[name] = {
                 "action": "UPDATE", "page_slug": top_page.slug, "page_title": top_page.title,
                 "page_type": top_page.page_type, "similarity": top_score, "confidence": top_score,
@@ -561,6 +566,7 @@ PLANNING_PROMPT_TEMPLATE = """\
 Title: {source_title}
 Knowledge type: {kt_context}
 Strategy: {strategy}
+{domain_note}
 
 ## Extracted entities (with mention counts)
 {entities_summary}
@@ -599,6 +605,8 @@ Rules:
 - priority 1 = highest importance (process first)
 - entity_names must match the names in the entities/concepts lists above
 - Target approximately {target_page_count} total pages (feel free to create more if the document is dense and contains many distinct concepts).
+- Domain-critical commands, payloads, procedures, platform variants, CVEs and TTPs
+  must not be grouped into a generic page when their exact distinction matters.
 - Return ONLY the JSON object
 """
 
@@ -612,6 +620,7 @@ async def run_planning_call(
     reconciliation: dict[str, dict],
     kt_name: Optional[str],
     kt_desc: Optional[str],
+    kt_extraction_hints: Optional[str] = None,
 ) -> dict:
     """Single LLM call to produce the Compilation Plan JSON."""
     n_chars = len(source.full_text or "")
@@ -645,12 +654,22 @@ async def run_planning_call(
         kb_info = f"→ {kb['action']} {kb.get('page_slug', '')}" if kb else "→ CREATE"
         return f"  - {c['term']} ({c['mention_count']} mentions) {kb_info}"
 
-    # Sort by mention count descending to ensure the planner sees the most important items
-    sorted_entities = sorted(canonical_entities, key=lambda x: x.get("mention_count", 0), reverse=True)
+    # Security items are often valuable precisely because they are rare. Put
+    # technique/tool/CVE/payload records first instead of ranking only by count.
+    security_types = {"technique", "tool", "cve", "payload"}
+    sorted_entities = sorted(
+        canonical_entities,
+        key=lambda x: (
+            0 if str(x.get("type") or "").lower() in security_types else 1,
+            -int(x.get("mention_count", 0)),
+        ),
+    )
     sorted_concepts = sorted(canonical_concepts, key=lambda x: x.get("mention_count", 0), reverse=True)
 
-    entities_summary = "\n".join(_fmt_entity(e) for e in sorted_entities[:30]) or "  (none)"
-    concepts_summary = "\n".join(_fmt_concept(c) for c in sorted_concepts[:30]) or "  (none)"
+    is_security = bool(kt_extraction_hints and kt_extraction_hints.strip())
+    planner_limit = 100 if is_security else 30
+    entities_summary = "\n".join(_fmt_entity(e) for e in sorted_entities[:planner_limit]) or "  (none)"
+    concepts_summary = "\n".join(_fmt_concept(c) for c in sorted_concepts[:planner_limit]) or "  (none)"
 
     kb_lines = []
     for name, rec in reconciliation.items():
@@ -662,6 +681,10 @@ async def run_planning_call(
         source_title=source.title or source.file_name or str(source.id),
         kt_context=kt_context,
         strategy=strategy,
+        domain_note=(
+            f"\n## Domain-specific preservation policy\n{kt_extraction_hints.strip()}\n"
+            if kt_extraction_hints and kt_extraction_hints.strip() else ""
+        ),
         entities_summary=entities_summary,
         concepts_summary=concepts_summary,
         kb_reconciliation=kb_reconciliation,
@@ -820,6 +843,7 @@ async def run_reduce_phase(
     kt_name: Optional[str],
     kt_desc: Optional[str],
     tracker: ProgressTracker,
+    kt_extraction_hints: Optional[str] = None,
 ) -> "SourceCompilationPlan":
     """
     Run full Phase 2 (REDUCE).
@@ -891,7 +915,14 @@ async def run_reduce_phase(
         reconciliation=reconciliation,
         kt_name=kt_name,
         kt_desc=kt_desc,
+        kt_extraction_hints=kt_extraction_hints,
     )
+
+    from app.ai.mrp.security_artifacts import extract_security_artifacts, is_security_domain
+    if is_security_domain(None, kt_extraction_hints):
+        plan_dict["_security_artifacts"] = extract_security_artifacts(source.full_text or "")
+    else:
+        plan_dict["_security_artifacts"] = []
 
     plan_dict = enforce_reconciliation(plan_dict, reconciliation)
     plan_dict["reconciliation"] = reconciliation

@@ -18,6 +18,7 @@ import asyncio
 from loguru import logger
 
 from app.ai.providers.base import LLMProvider
+from app.config import settings
 
 # ---------------------------------------------------------------------------
 # Constants
@@ -25,9 +26,9 @@ from app.ai.providers.base import LLMProvider
 
 # If the LLM's merged body is shorter than this fraction of the longest input,
 # reject the merge — the LLM almost certainly stripped content.
-BODY_SHRINK_THRESHOLD = 0.7
+BODY_SHRINK_THRESHOLD = settings.mrp_merge_min_body_ratio
 
-MERGE_TIMEOUT = 120  # seconds
+MERGE_TIMEOUT = settings.mrp_merge_timeout
 
 MERGE_SYSTEM = """\
 You are a wiki page merger. You receive two versions of the same wiki page:

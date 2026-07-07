@@ -86,7 +86,7 @@ async def run_commit_phase(
     merge_llm = None
     try:
         merge_registry = ProviderRegistry(session)
-        merge_llm = await merge_registry.get_llm()
+        merge_llm = await merge_registry.get_ingestion_llm()
     except Exception as exc:
         logger.warning(f"MRP COMMIT: could not load LLM for merge: {exc}")
 
@@ -344,7 +344,7 @@ async def run_mrp_pipeline(
         return {"status": f"already_in_{current_phase}"}
 
     # Provision LLM + embedding
-    llm = await registry.get_llm()
+    llm = await registry.get_ingestion_llm()
     embedding_provider = None
     query_embedding_provider = None
     try:
@@ -383,6 +383,7 @@ async def run_mrp_pipeline(
         kt_name=kt_name,
         kt_desc=kt_desc,
         tracker=tracker,
+        kt_extraction_hints=kt_extraction_hints,
     )
 
     await tracker.update(80, "Compilation plan ready")
@@ -435,6 +436,7 @@ async def run_refine_pipeline(
     kt_slug: Optional[str],
     kt_name: Optional[str],
     kt_desc: Optional[str],
+    kt_extraction_hints: Optional[str] = None,
 ) -> dict:
     """
     Orchestrate Phase 3 (REFINE) → Phase 4 (VERIFY) → Phase 5 (COMMIT).
@@ -461,7 +463,7 @@ async def run_refine_pipeline(
     chunk_extracts = await _load_chunk_extracts(session, source_id)
 
     # Provision providers
-    llm = await registry.get_llm()
+    llm = await registry.get_ingestion_llm()
     embedding_provider = None
     embedding_spec = None
     try:
@@ -489,6 +491,7 @@ async def run_refine_pipeline(
             embedding_provider=embedding_provider,
             kt_slug=kt_slug,
             tracker=tracker,
+            kt_extraction_hints=kt_extraction_hints,
         )
 
         src = await session.get(Source, source_id)
@@ -514,6 +517,7 @@ async def run_refine_pipeline(
             embedding_provider=embedding_provider,
             kt_slug=kt_slug,
             tracker=tracker,
+            kt_extraction_hints=kt_extraction_hints,
         )
 
         src = await session.get(Source, source_id)

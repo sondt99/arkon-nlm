@@ -14,9 +14,11 @@ class FakeLLM:
         self.max_active = 0
         self.calls = 0
         self.fail_first = False
+        self.prompt_lengths = []
 
     async def generate(self, prompt, **_kwargs):
         self.calls += 1
+        self.prompt_lengths.append(len(prompt))
         if self.fail_first and self.calls == 1:
             raise TimeoutError("temporary gateway timeout")
         self.active += 1
@@ -111,5 +113,41 @@ def test_parallel_refine_retries_transient_writer_failure_without_stub():
         assert llm.calls == 2
         assert len(results) == 1
         assert "Page generation failed" not in results[0].content_md
+
+    asyncio.run(scenario())
+
+
+def test_source_page_retry_reduces_context_after_gateway_failure():
+    async def scenario():
+        plan = SimpleNamespace(plan_json={
+            "pages": [{
+                "action": "CREATE",
+                "slug": "source/large-security-guide",
+                "title": "Large Security Guide",
+                "page_type": "source",
+                "entity_names": [],
+                "priority": 1,
+            }],
+            "_claims": [],
+        })
+        source = SimpleNamespace(id="source-id", scope_type="global", scope_id=None)
+        llm = FakeLLM()
+        llm.fail_first = True
+        full_text = "\n\n".join(f"Section {i} " + ("detail " * 500) for i in range(50))
+
+        with (
+            patch("app.services.wiki_service.list_pages", AsyncMock(return_value=[])),
+            patch.object(writer, "WRITER_RETRY_DELAYS", (0, 0)),
+        ):
+            results = await run_refine_phase(
+                session=object(), source=source, plan=plan, chunk_extracts=[],
+                full_text=full_text, llm=llm, embedding_provider=None,
+                kt_slug="pentest", tracker=FakeTracker(),
+                kt_extraction_hints="KEEP exact security commands.",
+            )
+
+        assert len(results) == 1
+        assert llm.calls == 2
+        assert llm.prompt_lengths[1] < llm.prompt_lengths[0]
 
     asyncio.run(scenario())

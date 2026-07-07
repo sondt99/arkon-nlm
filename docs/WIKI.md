@@ -111,6 +111,12 @@ COMMIT is fail-fast and atomic. A failure on any page rolls back the complete co
 
 For large documents, the worker timeout defaults to 3600 seconds. REFINE writers retry transient AI-provider failures up to three times with backoff and never replace failed output with placeholder content.
 
+### Domain-aware security preservation
+
+When a source uses a pentest, red-team, exploit or vulnerability Knowledge Type, its extraction policy is carried through every MRP phase. Commands, payloads, code blocks, CVE identifiers and ATT&CK IDs are also extracted deterministically with source offsets and hashes. Each artifact is routed to one relevant page and preserved verbatim, even if the LLM omits it from its prose.
+
+Security artifacts appear under `Exact commands and payloads` when deterministic recovery was required. This section is evidence from the uploaded source, not generated syntax. Writer output that starts with agent scratchpad phrases such as “Let me search” is rejected rather than committed.
+
 ### Resume behavior
 
 The field `source.pipeline_phase` tracks which phase completed last. If the worker crashes, the next retry picks up from the right phase:

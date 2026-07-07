@@ -3,7 +3,10 @@
 import React from "react";
 import { api } from "@/lib/api";
 import { Button } from "@/components/ui/button";
+import { SaharaCard } from "@/components/ui/sahara-card";
+import { ConfirmDialog } from "@/components/ui/confirm-dialog";
 import { EmptyState } from "@/components/shared/empty-state";
+import { LoadingState } from "@/components/shared/loading-state";
 import { ScopeMembersDialog } from "@/components/shared/scope-members-dialog";
 
 type Department = {
@@ -22,21 +25,16 @@ type Props = {
 
 export function DepartmentCards({ departments, loading, onEdit, onRefresh }: Props) {
   const [scopeDept, setScopeDept] = React.useState<Department | null>(null);
+  const [deleteDept, setDeleteDept] = React.useState<Department | null>(null);
 
-  const handleDelete = async (id: string) => {
-    if (!confirm("Delete this department and all its employees?")) return;
-    await api(`/api/departments/${id}`, { method: "DELETE" });
+  const handleDelete = async () => {
+    if (!deleteDept) return;
+    await api(`/api/departments/${deleteDept.id}`, { method: "DELETE" });
     onRefresh();
   };
 
   if (loading) {
-    return (
-      <div className="flex items-center justify-center py-16">
-        <span className="material-symbols-outlined text-3xl text-muted-foreground animate-spin">
-          progress_activity
-        </span>
-      </div>
-    );
+    return <LoadingState />;
   }
 
   if (departments.length === 0) {
@@ -52,19 +50,16 @@ export function DepartmentCards({ departments, loading, onEdit, onRefresh }: Pro
   return (
     <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-5">
       {departments.map((dept) => (
-        <div
-          key={dept.id}
-          className="bg-card rounded-xl p-6 border border-border shadow-sahara flex flex-col gap-4 hover:border-primary/30 transition-colors"
-        >
-          <div className="flex items-start justify-between">
-            <div className="flex items-center gap-3">
-              <div className="w-10 h-10 rounded-lg bg-primary/10 flex items-center justify-center">
+        <SaharaCard key={dept.id} padded hoverable>
+          <div className="flex items-start justify-between gap-2">
+            <div className="flex min-w-0 items-center gap-3">
+              <div className="w-10 h-10 shrink-0 rounded-lg bg-primary/10 flex items-center justify-center">
                 <span className="material-symbols-outlined text-primary">
                   business
                 </span>
               </div>
-              <div>
-                <h3 className="text-base font-semibold text-foreground">
+              <div className="min-w-0">
+                <h3 className="truncate text-base font-semibold text-foreground">
                   {dept.name}
                 </h3>
                 <p className="text-xs text-muted-foreground">
@@ -80,7 +75,7 @@ export function DepartmentCards({ departments, loading, onEdit, onRefresh }: Pro
             </p>
           )}
 
-          <div className="flex gap-2 mt-auto pt-2 border-t border-border">
+          <div className="flex flex-wrap gap-2 mt-auto pt-2 border-t border-border">
             <Button
               variant="ghost"
               size="sm"
@@ -102,14 +97,14 @@ export function DepartmentCards({ departments, loading, onEdit, onRefresh }: Pro
             <Button
               variant="ghost"
               size="sm"
-              onClick={() => handleDelete(dept.id)}
+              onClick={() => setDeleteDept(dept)}
               className="text-xs text-destructive hover:text-destructive"
             >
               <span className="material-symbols-outlined text-sm mr-1">delete</span>
               Delete
             </Button>
           </div>
-        </div>
+        </SaharaCard>
       ))}
 
       {scopeDept && (
@@ -121,6 +116,19 @@ export function DepartmentCards({ departments, loading, onEdit, onRefresh }: Pro
           scopeId={scopeDept.id}
         />
       )}
+
+      <ConfirmDialog
+        open={!!deleteDept}
+        onOpenChange={(open) => { if (!open) setDeleteDept(null); }}
+        title="Delete department?"
+        description={
+          deleteDept
+            ? `This deletes "${deleteDept.name}" and all ${deleteDept.employee_count} of its employee${deleteDept.employee_count !== 1 ? "s" : ""}. This cannot be undone.`
+            : undefined
+        }
+        confirmLabel="Delete"
+        onConfirm={handleDelete}
+      />
     </div>
   );
 }

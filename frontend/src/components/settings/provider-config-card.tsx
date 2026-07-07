@@ -127,18 +127,13 @@ const PROVIDER_NAMES = ["google", "openai", "anthropic", "ollama", "ninerouter"]
 // ── Props ─────────────────────────────────────────────────────────────────────
 
 type Props = {
-  title: string;
-  description: string;
-  icon: string;
   capability: "llm" | "vision" | "chatbot";
   testEndpoint: string;
-  /** Show a badge explaining this provider is optional / has a fallback */
-  fallbackNote?: string;
 };
 
 // ── Component ─────────────────────────────────────────────────────────────────
 
-export function ProviderConfigCard({ title, description, icon, capability, testEndpoint, fallbackNote }: Props) {
+export function ProviderConfigCard({ capability, testEndpoint }: Props) {
   const providers = ALL_PROVIDERS[capability];
 
   const [provider, setProvider] = useState("");
@@ -244,19 +239,7 @@ export function ProviderConfigCard({ title, description, icon, capability, testE
   }
 
   if (loading) {
-    return (
-      <div className="bg-card rounded-xl border border-border shadow-sahara overflow-hidden">
-        <div className="flex items-center gap-3 px-6 pt-5 pb-4">
-          <div className="w-9 h-9 rounded-lg bg-primary/10 flex items-center justify-center">
-            <span className="material-symbols-outlined text-primary text-base">{icon}</span>
-          </div>
-          <div>
-            <h3 className="text-base font-semibold text-foreground">{title}</h3>
-            <p className="text-xs text-muted-foreground">Loading…</p>
-          </div>
-        </div>
-      </div>
-    );
+    return <p className="text-sm text-muted-foreground">Loading…</p>;
   }
 
   const def = providers.find((p) => p.value === provider) ?? null;
@@ -288,25 +271,7 @@ export function ProviderConfigCard({ title, description, icon, capability, testE
   }
 
   return (
-    <div className="bg-card rounded-xl border border-border shadow-sahara overflow-hidden">
-      {/* Header */}
-      <div className="flex items-center gap-3 px-6 pt-5 pb-4">
-        <div className="w-9 h-9 rounded-lg bg-primary/10 flex items-center justify-center">
-          <span className="material-symbols-outlined text-primary text-base">{icon}</span>
-        </div>
-        <div className="flex-1 min-w-0">
-          <div className="flex items-center gap-2 flex-wrap">
-            <h3 className="text-base font-semibold text-foreground">{title}</h3>
-            {fallbackNote && (
-              <span className="text-[10px] font-medium px-2 py-0.5 rounded-full bg-muted text-muted-foreground border border-border">
-                {fallbackNote}
-              </span>
-            )}
-          </div>
-          <p className="text-xs text-muted-foreground">{description}</p>
-        </div>
-      </div>
-
+    <>
       {/* Provider selector */}
       <div className="px-6 pb-4">
         <div className={`grid gap-2 ${capability === "chatbot" ? "grid-cols-3 sm:grid-cols-6" : "grid-cols-3 sm:grid-cols-5"}`}>
@@ -528,6 +493,6 @@ export function ProviderConfigCard({ title, description, icon, capability, testE
           </div>
         </div>
       )}
-    </div>
+    </>
   );
 }

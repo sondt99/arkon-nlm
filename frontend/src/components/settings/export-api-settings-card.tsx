@@ -161,19 +161,9 @@ export function ExportApiSettingsCard() {
   }
 
   return (
-    <div className="bg-card rounded-xl border border-border shadow-sahara overflow-hidden">
-      <div className="flex items-center gap-3 px-6 pt-5 pb-4">
-        <div className="w-9 h-9 rounded-lg bg-primary/10 flex items-center justify-center">
-          <span className="material-symbols-outlined text-primary text-base">webhook</span>
-        </div>
-        <div className="flex-1 min-w-0">
-          <h3 className="text-base font-semibold text-foreground">Export API</h3>
-          <p className="text-xs text-muted-foreground">REST access for external tools (n8n, Zapier, scripts)</p>
-        </div>
-      </div>
-
+    <>
       {/* Enable/disable */}
-      <div className="px-6 pb-5 border-t border-border/60 pt-4 flex flex-col gap-4">
+      <div className="flex flex-col gap-4">
         <div className="flex items-center justify-between gap-4">
           <div className="flex flex-col gap-0.5">
             <span className="text-sm font-medium text-foreground">Enable Export API</span>
@@ -209,7 +199,7 @@ export function ExportApiSettingsCard() {
       </div>
 
       {/* Model summary */}
-      <div className="px-6 pb-5 border-t border-border/60 pt-4 flex items-center justify-between gap-4">
+      <div className="pb-5 border-t border-border/60 pt-4 flex items-center justify-between gap-4">
         <div className="flex flex-col gap-0.5">
           <span className="text-sm font-medium text-foreground">Model</span>
           <span className="text-xs text-muted-foreground">
@@ -229,7 +219,7 @@ export function ExportApiSettingsCard() {
       </div>
 
       {/* Generation parameters */}
-      <div className="px-6 pb-5 border-t border-border/60 pt-4 flex flex-col gap-4">
+      <div className="pb-5 border-t border-border/60 pt-4 flex flex-col gap-4">
         <span className="text-sm font-medium text-foreground">Generation Parameters</span>
 
         <div className="flex flex-col gap-1.5">
@@ -312,7 +302,7 @@ export function ExportApiSettingsCard() {
       </div>
 
       {/* API key */}
-      <div className="px-6 pb-5 border-t border-border/60 pt-4 flex flex-col gap-3">
+      <div className="pb-1 border-t border-border/60 pt-4 flex flex-col gap-3">
         <span className="text-sm font-medium text-foreground">API Key</span>
 
         <div className="flex items-start gap-2 rounded-lg bg-amber-500/10 border border-amber-500/20 px-3 py-2.5 text-xs text-amber-700 dark:text-amber-400">
@@ -376,6 +366,6 @@ export function ExportApiSettingsCard() {
           </button>
         )}
       </div>
-    </div>
+    </>
   );
 }

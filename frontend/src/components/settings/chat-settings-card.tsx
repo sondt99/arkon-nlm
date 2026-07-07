@@ -41,18 +41,7 @@ export function ChatSettingsCard() {
   }
 
   return (
-    <div className="bg-card rounded-xl border border-border shadow-sahara overflow-hidden">
-      <div className="flex items-center gap-3 px-6 pt-5 pb-4">
-        <div className="w-9 h-9 rounded-lg bg-primary/10 flex items-center justify-center">
-          <span className="material-symbols-outlined text-primary text-base">manage_search</span>
-        </div>
-        <div className="flex-1 min-w-0">
-          <h3 className="text-base font-semibold text-foreground">Chat Settings</h3>
-          <p className="text-xs text-muted-foreground">Configure chatbot behaviour</p>
-        </div>
-      </div>
-
-      <div className="px-6 pb-5 border-t border-border/60 pt-4 flex flex-col gap-4">
+    <div className="flex flex-col gap-4">
         <div className="flex items-center justify-between gap-4">
           <div className="flex flex-col gap-0.5">
             <span className="text-sm font-medium text-foreground">RAG / KB Search</span>
@@ -92,7 +81,6 @@ export function ChatSettingsCard() {
             <span>KB search is off. Chatbot will not use the knowledge base. Enable it once a valid embedding provider is configured.</span>
           </div>
         )}
-      </div>
     </div>
   );
 }

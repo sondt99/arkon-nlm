@@ -4,6 +4,7 @@ import { useEffect } from "react";
 import { useRouter } from "next/navigation";
 import { useAuth } from "@/lib/auth";
 import { PageHeader } from "@/components/shared/page-header";
+import { Accordion, AccordionItem, AccordionTrigger, AccordionPanel } from "@/components/ui/accordion";
 import { ProviderConfigCard } from "@/components/settings/provider-config-card";
 import { EmbeddingSettingsCard } from "@/components/settings/embedding-settings-card";
 import { ChatSettingsCard } from "@/components/settings/chat-settings-card";
@@ -26,37 +27,85 @@ export default function SettingsPage() {
         description="Configure AI providers for embedding, LLM, vision processing, and chatbot."
       />
 
-      <div className="flex flex-col gap-6">
-        <EmbeddingSettingsCard />
+      <Accordion defaultValue={["embedding"]} className="flex flex-col gap-4">
+        <AccordionItem value="embedding">
+          <AccordionTrigger
+            icon={<span className="material-symbols-outlined">data_array</span>}
+            label="Embedding Model"
+            description="Converts documents and queries into vectors for semantic search"
+          />
+          <AccordionPanel>
+            <EmbeddingSettingsCard />
+          </AccordionPanel>
+        </AccordionItem>
 
-        <ProviderConfigCard
-          title="LLM Provider"
-          description="Used for wiki compilation, analysis and summarization"
-          icon="psychology"
-          capability="llm"
-          testEndpoint="/api/settings/test-llm"
-        />
+        <AccordionItem value="llm">
+          <AccordionTrigger
+            icon={<span className="material-symbols-outlined">psychology</span>}
+            iconClassName="bg-emerald-500/10 text-emerald-600 dark:text-emerald-400"
+            label="LLM Provider"
+            description="Used for wiki compilation, analysis and summarization"
+          />
+          <AccordionPanel>
+            <ProviderConfigCard capability="llm" testEndpoint="/api/settings/test-llm" />
+          </AccordionPanel>
+        </AccordionItem>
 
-        <ProviderConfigCard
-          title="Vision Provider"
-          description="Optional — used for image analysis in documents"
-          icon="visibility"
-          capability="vision"
-          testEndpoint="/api/settings/test-vision"
-        />
+        <AccordionItem value="vision">
+          <AccordionTrigger
+            icon={<span className="material-symbols-outlined">visibility</span>}
+            iconClassName="bg-violet-500/10 text-violet-600 dark:text-violet-400"
+            label="Vision Provider"
+            description="Optional — used for image analysis in documents"
+          />
+          <AccordionPanel>
+            <ProviderConfigCard capability="vision" testEndpoint="/api/settings/test-vision" />
+          </AccordionPanel>
+        </AccordionItem>
 
-        <ProviderConfigCard
-          title="Chatbot Provider"
-          description="Optional — dedicated model for the RAG knowledge assistant"
-          icon="smart_toy"
-          capability="chatbot"
-          testEndpoint="/api/settings/test-chatbot"
-          fallbackNote="Optional — falls back to LLM Provider"
-        />
+        <AccordionItem value="chatbot">
+          <AccordionTrigger
+            icon={<span className="material-symbols-outlined">smart_toy</span>}
+            iconClassName="bg-cyan-500/10 text-cyan-600 dark:text-cyan-400"
+            label={
+              <span className="flex items-center gap-2">
+                Chatbot Provider
+                <span className="text-[10px] font-medium px-2 py-0.5 rounded-full bg-muted text-muted-foreground border border-border">
+                  Optional — falls back to LLM Provider
+                </span>
+              </span>
+            }
+            description="Optional — dedicated model for the RAG knowledge assistant"
+          />
+          <AccordionPanel>
+            <ProviderConfigCard capability="chatbot" testEndpoint="/api/settings/test-chatbot" />
+          </AccordionPanel>
+        </AccordionItem>
 
-        <ChatSettingsCard />
-        <ExportApiSettingsCard />
-      </div>
+        <AccordionItem value="chat-behavior">
+          <AccordionTrigger
+            icon={<span className="material-symbols-outlined">manage_search</span>}
+            iconClassName="bg-amber-500/10 text-amber-600 dark:text-amber-400"
+            label="Chat Settings"
+            description="Configure chatbot behaviour"
+          />
+          <AccordionPanel>
+            <ChatSettingsCard />
+          </AccordionPanel>
+        </AccordionItem>
+
+        <AccordionItem value="export-api">
+          <AccordionTrigger
+            icon={<span className="material-symbols-outlined">webhook</span>}
+            iconClassName="bg-pink-500/10 text-pink-600 dark:text-pink-400"
+            label="Export API"
+            description="REST access for external tools (n8n, Zapier, scripts)"
+          />
+          <AccordionPanel>
+            <ExportApiSettingsCard />
+          </AccordionPanel>
+        </AccordionItem>
+      </Accordion>
     </>
   );
 }

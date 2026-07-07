@@ -316,36 +316,11 @@ export function EmbeddingSettingsCard() {
   // ── Render ─────────────────────────────────────────────────────────────────
 
   if (!catalog || !status) {
-    return (
-      <div className="bg-card rounded-xl border border-border shadow-sahara overflow-hidden">
-        <div className="flex items-center gap-3 px-6 pt-5 pb-4">
-          <div className="w-9 h-9 rounded-lg bg-primary/10 flex items-center justify-center">
-            <span className="material-symbols-outlined text-primary text-base">data_array</span>
-          </div>
-          <div>
-            <h3 className="text-base font-semibold text-foreground">Embedding Model</h3>
-            <p className="text-xs text-muted-foreground">Loading catalog…</p>
-          </div>
-        </div>
-      </div>
-    );
+    return <p className="text-sm text-muted-foreground">Loading catalog…</p>;
   }
 
   return (
-    <div className="bg-card rounded-xl border border-border shadow-sahara overflow-hidden">
-      {/* Header */}
-      <div className="flex items-center gap-3 px-6 pt-5 pb-4">
-        <div className="w-9 h-9 rounded-lg bg-primary/10 flex items-center justify-center">
-          <span className="material-symbols-outlined text-primary text-base">data_array</span>
-        </div>
-        <div>
-          <h3 className="text-base font-semibold text-foreground">Embedding Model</h3>
-          <p className="text-xs text-muted-foreground">
-            Converts documents and queries into vectors for semantic search.
-          </p>
-        </div>
-      </div>
-
+    <>
       {/* Provider selector */}
       <div className="px-6 pb-4">
         <div className="grid grid-cols-3 sm:grid-cols-5 gap-2">
@@ -612,6 +587,6 @@ export function EmbeddingSettingsCard() {
           </div>
         </div>
       )}
-    </div>
+    </>
   );
 }

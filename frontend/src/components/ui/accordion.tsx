@@ -29,13 +29,13 @@ function AccordionTrigger({
   className,
   icon,
   iconClassName,
-  title,
+  label,
   description,
   ...props
-}: AccordionPrimitive.Trigger.Props & {
+}: Omit<AccordionPrimitive.Trigger.Props, "title"> & {
   icon?: React.ReactNode
   iconClassName?: string
-  title: React.ReactNode
+  label: React.ReactNode
   description?: React.ReactNode
 }) {
   return (
@@ -59,7 +59,7 @@ function AccordionTrigger({
           </div>
         )}
         <div className="min-w-0 flex-1">
-          <div className="font-heading text-base font-medium text-foreground">{title}</div>
+          <div className="font-heading text-base font-medium text-foreground">{label}</div>
           {description && (
             <div className="mt-0.5 text-sm text-muted-foreground">{description}</div>
           )}

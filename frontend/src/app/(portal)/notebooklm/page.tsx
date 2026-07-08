@@ -1813,36 +1813,40 @@ export default function NotebookLMPage() {
               </div>
             ) : (
               notebooks.map((nb) => (
-                <button
+                <div
                   key={nb.id}
-                  onClick={() => { setSelectedId(nb.id); setTab("sources"); }}
                   className={cn(
-                    "group w-full flex items-start gap-2.5 px-3 py-2.5 text-left transition-colors",
+                    "group w-full flex items-start gap-2.5 px-3 py-2.5 transition-colors",
                     selectedId === nb.id ? "bg-black/[0.04]" : "hover:bg-black/[0.02]"
                   )}
                 >
-                  <span
-                    className="material-symbols-outlined text-[18px] text-muted-foreground/50 shrink-0 mt-0.5"
-                    style={{ fontVariationSettings: selectedId === nb.id ? "'FILL' 1" : "'FILL' 0, 'wght' 300, 'GRAD' 0, 'opsz' 18" }}
+                  <button
+                    onClick={() => { setSelectedId(nb.id); setTab("sources"); }}
+                    className="flex-1 min-w-0 flex items-start gap-2.5 text-left"
                   >
-                    book_2
-                  </span>
-                  <div className="flex-1 min-w-0">
-                    <p className={cn("text-[13px] truncate", selectedId === nb.id ? "font-semibold text-foreground" : "text-foreground/80")}>
-                      {nb.title}
-                    </p>
-                    <p className="text-[11px] text-muted-foreground mt-0.5">
-                      {nb.sources_count} source{nb.sources_count !== 1 ? "s" : ""}
-                    </p>
-                  </div>
+                    <span
+                      className="material-symbols-outlined text-[18px] text-muted-foreground/50 shrink-0 mt-0.5"
+                      style={{ fontVariationSettings: selectedId === nb.id ? "'FILL' 1" : "'FILL' 0, 'wght' 300, 'GRAD' 0, 'opsz' 18" }}
+                    >
+                      book_2
+                    </span>
+                    <div className="flex-1 min-w-0">
+                      <p className={cn("text-[13px] truncate", selectedId === nb.id ? "font-semibold text-foreground" : "text-foreground/80")}>
+                        {nb.title}
+                      </p>
+                      <p className="text-[11px] text-muted-foreground mt-0.5">
+                        {nb.sources_count} source{nb.sources_count !== 1 ? "s" : ""}
+                      </p>
+                    </div>
+                  </button>
                   <button
                     className="opacity-0 group-hover:opacity-100 shrink-0 text-muted-foreground/40 hover:text-red-500 transition-all"
-                    onClick={(e) => { e.stopPropagation(); handleDeleteNotebook(nb.id); }}
+                    onClick={() => handleDeleteNotebook(nb.id)}
                     title="Delete notebook"
                   >
                     <span className="material-symbols-outlined text-[15px]">delete</span>
                   </button>
-                </button>
+                </div>
               ))
             )}
           </div>

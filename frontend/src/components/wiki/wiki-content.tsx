@@ -52,16 +52,24 @@ function CopyButton({ text }: { text: string }) {
 
 function extractHeadings(md: string): { id: string; text: string; level: number }[] {
   const headings: { id: string; text: string; level: number }[] = [];
+  const seen = new Map<string, number>();
   const lines = md.split("\n");
   for (const line of lines) {
     const match = line.match(/^(#{2,4})\s+(.+)$/);
     if (match) {
       const level = match[1].length;
       const text = match[2].trim();
-      const id = text
-        .toLowerCase()
-        .replace(/[^\w\s-]/g, "")
-        .replace(/\s+/g, "-");
+      // Non-ASCII text (e.g. Vietnamese diacritics) strips down to nothing or
+      // to the same base for distinct headings — dedupe and fall back to a
+      // stable placeholder so ids/keys never collide.
+      const base =
+        text
+          .toLowerCase()
+          .replace(/[^\w\s-]/g, "")
+          .replace(/\s+/g, "-") || "section";
+      const occurrence = seen.get(base) ?? 0;
+      seen.set(base, occurrence + 1);
+      const id = occurrence === 0 ? base : `${base}-${occurrence}`;
       headings.push({ id, text, level });
     }
   }
@@ -106,6 +114,13 @@ export function WikiContent({
     return () => observer.disconnect();
   }, [headings]);
 
+  // h2/h3/h4 render in the same document order as extractHeadings() parsed
+  // them, so a cursor over that (already deduped) list keeps DOM ids and TOC
+  // links in sync instead of re-deriving (and potentially colliding on) ids
+  // independently in each renderer.
+  let headingCursor = 0;
+  const nextHeadingId = () => headings[headingCursor++]?.id ?? "";
+
   return (
     <div className="relative">
       {/* Table of Contents — only show when enough headings */}
@@ -148,51 +163,30 @@ export function WikiContent({
                 {children}
               </h1>
             ),
-            h2: ({ children }) => {
-              const text = typeof children === "string" ? children : "";
-              const id = String(text)
-                .toLowerCase()
-                .replace(/[^\w\s-]/g, "")
-                .replace(/\s+/g, "-");
-              return (
-                <h2
-                  id={id}
-                  className="font-heading text-2xl font-normal mt-10 mb-3 pb-2 border-b border-border text-foreground scroll-mt-20"
-                >
-                  {children}
-                </h2>
-              );
-            },
-            h3: ({ children }) => {
-              const text = typeof children === "string" ? children : "";
-              const id = String(text)
-                .toLowerCase()
-                .replace(/[^\w\s-]/g, "")
-                .replace(/\s+/g, "-");
-              return (
-                <h3
-                  id={id}
-                  className="font-heading text-xl font-normal mt-7 mb-2 text-foreground scroll-mt-20"
-                >
-                  {children}
-                </h3>
-              );
-            },
-            h4: ({ children }) => {
-              const text = typeof children === "string" ? children : "";
-              const id = String(text)
-                .toLowerCase()
-                .replace(/[^\w\s-]/g, "")
-                .replace(/\s+/g, "-");
-              return (
-                <h4
-                  id={id}
-                  className="font-heading text-lg font-normal mt-5 mb-1.5 text-foreground scroll-mt-20"
-                >
-                  {children}
-                </h4>
-              );
-            },
+            h2: ({ children }) => (
+              <h2
+                id={nextHeadingId()}
+                className="font-heading text-2xl font-normal mt-10 mb-3 pb-2 border-b border-border text-foreground scroll-mt-20"
+              >
+                {children}
+              </h2>
+            ),
+            h3: ({ children }) => (
+              <h3
+                id={nextHeadingId()}
+                className="font-heading text-xl font-normal mt-7 mb-2 text-foreground scroll-mt-20"
+              >
+                {children}
+              </h3>
+            ),
+            h4: ({ children }) => (
+              <h4
+                id={nextHeadingId()}
+                className="font-heading text-lg font-normal mt-5 mb-1.5 text-foreground scroll-mt-20"
+              >
+                {children}
+              </h4>
+            ),
             p: ({ children }) => (
               <p className="text-sm leading-7 text-foreground/90 mb-4">{children}</p>
             ),

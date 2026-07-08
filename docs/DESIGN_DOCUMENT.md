@@ -606,6 +606,8 @@ chat_messages
 }]
 ```
 
+**Response header:** `X-Total-Count` — tổng số page khớp filter (bỏ qua `limit`/`offset`), phục vụ phân trang phía client (Wiki tab + trang `/wiki`) mà không đổi cấu trúc body — không ảnh hưởng consumer hiện có (Export API, v.v).
+
 ---
 
 #### `GET /api/wiki/search`
@@ -1033,6 +1035,13 @@ Chatbot dựa trên RAG (Retrieval-Augmented Generation) — trả lời câu h�
 #### `DELETE /api/chat/conversations/{id}`
 **Auth:** Owner  
 **Response:** 204
+
+---
+
+#### `DELETE /api/chat/conversations`
+**Auth:** Any authenticated user (scoped to own conversations only)  
+**Query params:** `scope_type` (optional), `scope_id` (optional) — restricts the bulk delete to one scope; omitted means "all of the current user's conversations". Powers the Chatbot "Clear All Conversations" action. Messages cascade-delete via the existing `chat_messages.conversation_id` FK (`ondelete=CASCADE`).  
+**Response:** `{"deleted": <int>}`
 
 ---
 

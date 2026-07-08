@@ -10,7 +10,9 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { Badge } from "@/components/ui/badge";
+import { SaharaCard } from "@/components/ui/sahara-card";
 import { EmptyState } from "@/components/shared/empty-state";
+import { LoadingState } from "@/components/shared/loading-state";
 
 export type AuditLogEntry = {
   id: string;
@@ -33,28 +35,26 @@ type Props = {
 export function AuditTable({ logs, loading }: Props) {
   if (loading) {
     return (
-      <div className="bg-card rounded-xl border border-border shadow-sahara flex items-center justify-center py-16">
-        <span className="material-symbols-outlined text-3xl text-muted-foreground animate-spin">
-          progress_activity
-        </span>
-      </div>
+      <SaharaCard>
+        <LoadingState className="py-16" />
+      </SaharaCard>
     );
   }
 
   if (logs.length === 0) {
     return (
-      <div className="bg-card rounded-xl border border-border shadow-sahara">
+      <SaharaCard>
         <EmptyState
           icon="policy"
           title="No audit logs found"
           description="Access control events will appear here."
         />
-      </div>
+      </SaharaCard>
     );
   }
 
   return (
-    <div className="bg-card rounded-xl border border-border shadow-sahara overflow-hidden">
+    <SaharaCard overflowHidden>
       <Table>
         <TableHeader>
           <TableRow className="hover:bg-transparent">
@@ -124,6 +124,6 @@ export function AuditTable({ logs, loading }: Props) {
           ))}
         </TableBody>
       </Table>
-    </div>
+    </SaharaCard>
   );
 }

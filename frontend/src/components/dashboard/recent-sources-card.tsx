@@ -3,7 +3,9 @@
 import { useEffect, useState } from "react";
 import { api } from "@/lib/api";
 import { Badge } from "@/components/ui/badge";
+import { SaharaCard } from "@/components/ui/sahara-card";
 import { EmptyState } from "@/components/shared/empty-state";
+import { LoadingState } from "@/components/shared/loading-state";
 
 type Source = {
   id: string;
@@ -33,17 +35,13 @@ export function RecentSourcesCard() {
   }, []);
 
   return (
-    <div className="bg-card rounded-xl p-6 border border-border shadow-sahara">
+    <SaharaCard className="p-6">
       <h3 className="text-xl tracking-tight text-foreground border-b border-border pb-3 mb-4">
         Recent Documents
       </h3>
 
       {loading ? (
-        <div className="flex items-center justify-center py-8">
-          <span className="material-symbols-outlined text-2xl text-muted-foreground animate-spin">
-            progress_activity
-          </span>
-        </div>
+        <LoadingState className="py-8" />
       ) : sources.length === 0 ? (
         <EmptyState
           icon="description"
@@ -90,7 +88,7 @@ export function RecentSourcesCard() {
           ))}
         </div>
       )}
-    </div>
+    </SaharaCard>
   );
 }
 

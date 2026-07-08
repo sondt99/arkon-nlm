@@ -26,6 +26,8 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { EmptyState } from "@/components/shared/empty-state";
+import { LoadingState } from "@/components/shared/loading-state";
+import { SaharaCard } from "@/components/ui/sahara-card";
 import { ScopeDialog } from "@/components/shared/scope-dialog";
 
 type Employee = {
@@ -163,13 +165,9 @@ export function EmployeeTable({
       </div>
 
       {/* Table */}
-      <div className="bg-card rounded-xl border border-border shadow-sahara overflow-hidden">
+      <SaharaCard overflowHidden>
         {loading ? (
-          <div className="flex items-center justify-center py-16">
-            <span className="material-symbols-outlined text-3xl text-muted-foreground animate-spin">
-              progress_activity
-            </span>
-          </div>
+          <LoadingState className="py-16" />
         ) : employees.length === 0 ? (
           <EmptyState
             icon="group"
@@ -289,7 +287,7 @@ export function EmployeeTable({
             </TableBody>
           </Table>
         )}
-      </div>
+      </SaharaCard>
 
       {/* Pagination */}
       {totalPages > 1 && (

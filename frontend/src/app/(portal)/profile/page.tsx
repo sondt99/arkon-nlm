@@ -8,6 +8,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Badge } from "@/components/ui/badge";
+import { SaharaCard } from "@/components/ui/sahara-card";
 import { McpTokenCard } from "@/components/profile/mcp-token-card";
 
 export default function ProfilePage() {
@@ -59,7 +60,7 @@ export default function ProfilePage() {
 
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
         {/* Profile Info */}
-        <div className="bg-card rounded-xl p-6 border border-border shadow-sahara">
+        <SaharaCard className="p-6">
           <h3 className="text-lg font-semibold text-foreground mb-4">
             Account Information
           </h3>
@@ -88,10 +89,10 @@ export default function ProfilePage() {
               </div>
             </div>
           </div>
-        </div>
+        </SaharaCard>
 
         {/* Change Password */}
-        <div className="bg-card rounded-xl p-6 border border-border shadow-sahara">
+        <SaharaCard className="p-6">
           <h3 className="text-lg font-semibold text-foreground mb-4">
             Change Password
           </h3>
@@ -141,7 +142,7 @@ export default function ProfilePage() {
               {saving ? "Saving..." : "Update Password"}
             </Button>
           </form>
-        </div>
+        </SaharaCard>
 
         {/* MCP Token (self-service) */}
         <div className="lg:col-span-2">

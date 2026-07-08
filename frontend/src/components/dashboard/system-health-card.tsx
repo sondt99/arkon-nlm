@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from "react";
 import { api } from "@/lib/api";
+import { SaharaCard } from "@/components/ui/sahara-card";
 
 type HealthStatus = "healthy" | "error" | "loading";
 
@@ -35,7 +36,7 @@ export function SystemHealthCard() {
   const allHealthy = health.api === "healthy" && health.database === "healthy" && health.worker === "healthy";
 
   return (
-    <div className="bg-card rounded-xl p-6 border border-border shadow-sahara">
+    <SaharaCard className="p-6">
       <div className="flex justify-between items-center border-b border-border pb-3 mb-4">
         <h3 className="text-xl tracking-tight text-foreground">System Health</h3>
         <span className={`text-xs font-medium flex items-center gap-1 ${allHealthy ? "text-primary" : "text-destructive"}`}>
@@ -51,7 +52,7 @@ export function SystemHealthCard() {
         <HealthItem label="Database" status={health.database} />
         <HealthItem label="Worker" status={health.worker} />
       </div>
-    </div>
+    </SaharaCard>
   );
 }
 

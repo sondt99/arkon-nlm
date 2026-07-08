@@ -21,6 +21,8 @@ import {
 } from "@/components/ui/dropdown-menu";
 import { EmptyState } from "@/components/shared/empty-state";
 import { ScopeBadge } from "@/components/shared/scope-badge";
+import { SaharaCard } from "@/components/ui/sahara-card";
+import { ConfirmDialog } from "@/components/ui/confirm-dialog";
 
 import { Skeleton } from "@/components/ui/skeleton";
 import { KnowledgeType, Department, Source } from "./types";
@@ -75,7 +77,9 @@ export function KnowledgeTable({
     setNlmDialogSource(source);
   };
 
-  const handleDelete = async (source: Source) => {
+  const [deleteTarget, setDeleteTarget] = React.useState<{ source: Source; details: string } | null>(null);
+
+  const handleDeleteClick = async (source: Source) => {
     setActionError(null);
     try {
       const impact = await api<{
@@ -91,9 +95,17 @@ export function KnowledgeTable({
         rebuilt ? `${rebuilt} shared page(s) will be rebuilt from remaining sources` : null,
         legacy ? `${legacy} legacy page(s) cannot be fully reconciled` : null,
       ].filter(Boolean).join("\n");
-      if (!window.confirm(`Delete “${source.title}”?\n\n${details || "No compiled knowledge is affected."}`)) return;
+      setDeleteTarget({ source, details: details || "No compiled knowledge is affected." });
+    } catch (err) {
+      setActionError(err instanceof Error ? err.message : "Failed to check delete impact");
+    }
+  };
 
-      onDeleteSource(source.id);
+  const handleConfirmDelete = async () => {
+    if (!deleteTarget) return;
+    const { source } = deleteTarget;
+    onDeleteSource(source.id);
+    try {
       await api(`/api/sources/${source.id}`, { method: "DELETE" });
       onRefresh();
     } catch (err) {
@@ -160,7 +172,7 @@ export function KnowledgeTable({
       </div>
 
       {/* Table */}
-      <div className="bg-card rounded-xl border border-border shadow-sahara overflow-hidden">
+      <SaharaCard overflowHidden>
         {loading ? (
           <Table>
             <TableHeader>
@@ -373,7 +385,7 @@ export function KnowledgeTable({
                         )}
                         <DropdownMenuSeparator />
                         <DropdownMenuItem
-                          onClick={() => handleDelete(source)}
+                          onClick={() => handleDeleteClick(source)}
                           className="text-destructive"
                         >
                           <span className="material-symbols-outlined mr-2" style={{ fontSize: 16 }}>delete</span>
@@ -387,7 +399,7 @@ export function KnowledgeTable({
             </TableBody>
           </Table>
         )}
-      </div>
+      </SaharaCard>
 
       {/* Pagination */}
       {totalPages > 1 && (
@@ -476,6 +488,15 @@ export function KnowledgeTable({
           onClose={() => setNlmDialogSource(null)}
         />
       )}
+
+      <ConfirmDialog
+        open={!!deleteTarget}
+        onOpenChange={(open) => { if (!open) setDeleteTarget(null); }}
+        title={deleteTarget ? `Delete "${deleteTarget.source.title}"?` : ""}
+        description={deleteTarget?.details}
+        confirmLabel="Delete"
+        onConfirm={handleConfirmDelete}
+      />
     </div>
   );
 }

@@ -22,6 +22,8 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { EmptyState } from "@/components/shared/empty-state";
+import { LoadingState } from "@/components/shared/loading-state";
+import { SaharaCard } from "@/components/ui/sahara-card";
 import { Skill } from "./skill-card";
 import { api, apiUpload } from "@/lib/api";
 import {
@@ -112,11 +114,9 @@ export function SkillTable({
       </div>
 
       {/* Table Container */}
-      <div className="bg-card rounded-xl border border-border shadow-sahara overflow-hidden">
+      <SaharaCard overflowHidden>
         {loading ? (
-          <div className="flex items-center justify-center py-24">
-            <span className="material-symbols-outlined text-3xl text-muted-foreground animate-spin">progress_activity</span>
-          </div>
+          <LoadingState className="py-24" />
         ) : skills.length === 0 ? (
           <EmptyState
             icon="smart_toy"
@@ -255,7 +255,7 @@ export function SkillTable({
             </TableBody>
           </Table>
         )}
-      </div>
+      </SaharaCard>
       {editSkill && (
         <EditSkillDialog
           skill={editSkill}

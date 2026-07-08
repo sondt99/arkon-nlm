@@ -28,11 +28,12 @@ def _derive_fernet_key(secret: str) -> bytes:
 def _is_sensitive(key: str) -> bool:
     """A key is sensitive if it stores raw credentials/API keys."""
     return (
-        key in {"embedding_api_key", "llm_api_key", "vision_api_key", "chatbot_api_key"}
+        key in {"embedding_api_key", "llm_api_key", "vision_api_key", "chatbot_api_key", "gateway_api_key"}
         or key.startswith("embedding_api_key__")
         or key.startswith("llm_api_key__")
         or key.startswith("vision_api_key__")
         or key.startswith("chatbot_api_key__")
+        or key.startswith("gateway_api_key__")
     )
 
 
@@ -105,6 +106,17 @@ ALL_CONFIG_KEYS = [
     "chatbot_api_key__ninerouter",
     "chatbot_base_url",
 
+    # --- Gateway provider (optional — falls back to LLM provider if unset) ---
+    "gateway_provider",           # "google" | "openai" | "anthropic" | "ollama" | "ninerouter"
+    "gateway_model_id",
+    "gateway_api_key",
+    "gateway_api_key__google",
+    "gateway_api_key__openai",
+    "gateway_api_key__anthropic",
+    "gateway_api_key__ollama",
+    "gateway_api_key__ninerouter",
+    "gateway_base_url",
+
     # --- Chat ---
     "chat_rag_enabled",           # "true" | "false" — toggle RAG/KB search
 
@@ -113,6 +125,12 @@ ALL_CONFIG_KEYS = [
     "export_api_temperature",     # float 0.0-1.0, empty = provider default
     "export_api_max_tokens",      # int, empty = provider default
     "export_api_top_p",           # float 0.0-1.0, empty = provider default
+
+    # --- Claude Code Gateway ---
+    "claude_gateway_enabled",     # "true" | "false" — toggle /api/claude-gateway/v1/* endpoints
+    "claude_gateway_temperature", # float 0.0-1.0, empty = provider default
+    "claude_gateway_max_tokens",  # int, empty = provider default
+    "claude_gateway_top_p",       # float 0.0-1.0, empty = provider default
 
     # --- System ---
     "session_timeout_minutes",

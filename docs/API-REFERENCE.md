@@ -738,6 +738,45 @@ Direct semantic search over wiki pages — no chat/persona layer, no wiki-link e
 
 ---
 
+## Claude Code Gateway
+
+An Anthropic Messages API-compatible endpoint so the Claude Code CLI (or any Anthropic API client) can point `ANTHROPIC_BASE_URL` at Arkon instead of `api.anthropic.com`. All traffic then routes through whichever LLM provider Arkon has configured (**Settings → Claude Code Gateway**, falls back to **LLM Provider** if unset), governed centrally by an admin. Stateless — the full message history is sent on every request, nothing is persisted server-side.
+
+Authenticates the same way as the Export API — `Authorization: Bearer <mcp_token>` — and additionally accepts `x-api-key: <mcp_token>`, since Claude Code sends different headers depending on whether `ANTHROPIC_AUTH_TOKEN` or `ANTHROPIC_API_KEY` is set.
+
+Client setup (`~/.claude/settings.json`):
+```json
+{
+  "env": {
+    "ANTHROPIC_BASE_URL": "http://<host>/api/claude-gateway",
+    "ANTHROPIC_AUTH_TOKEN": "<mcp_token>"
+  }
+}
+```
+
+An admin can turn the whole gateway off from **Settings → Claude Code Gateway** (`claude_gateway_enabled` config key, defaults to enabled). While disabled, every request returns an Anthropic-shaped `503` error.
+
+**Scope / known limitations (v1):**
+- No RAG/KB injection — this is a pure passthrough to the configured LLM provider, unlike `/api/chat` or the Export API's `/chat`.
+- No image or document content blocks — dropped with a `[image omitted]` placeholder.
+- No extended `thinking` blocks/param.
+- `cache_control` hints are accepted but not applied (Arkon does no prompt caching).
+- `tool_choice` is not enforced — tool use is always effectively `"auto"`.
+- Streaming (`"stream": true`) is spec-correct SSE (`message_start`/`content_block_*`/`message_delta`/`message_stop`) but synthesized from one complete provider response rather than true token-by-token generation — text/tool input arrive as a single delta per block instead of incrementally.
+- `POST /v1/messages/count_tokens` returns a best-effort heuristic (`chars / 4`), not exact Anthropic tokenization.
+
+### POST /api/claude-gateway/v1/messages
+Same request/response shape as Anthropic's `POST /v1/messages` (`model`, `max_tokens`, `messages`, `system`, `tools`, `stream`, `temperature`, `top_p`, etc.). `model` is accepted but ignored for routing — generation always uses the server-configured Claude Code Gateway provider (or LLM Provider fallback); it's only echoed back in the response's `model` field.
+
+An admin can optionally force `temperature`/`top_p`/`max_tokens` via the same Settings card — when set, the admin value wins; otherwise Claude Code's own request value is used.
+
+**Errors:** Anthropic-shaped `{"type":"error","error":{"type":...,"message":...}}` — `401` bad/missing token, `503` gateway disabled, `500` no LLM provider configured, `502` generation failed.
+
+### POST /api/claude-gateway/v1/messages/count_tokens
+Best-effort `{"input_tokens": N}` estimate (character-count heuristic) for context-budget checks.
+
+---
+
 ## Health
 
 ### GET /health

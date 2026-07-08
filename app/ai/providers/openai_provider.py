@@ -143,6 +143,7 @@ class OpenAILLM(LLMProvider):
         system: Optional[str] = None,
         max_tokens: Optional[int] = None,
         temperature: float = 0.2,
+        top_p: Optional[float] = None,
     ) -> AssistantTurn:
         openai_messages = []
         if system:
@@ -157,6 +158,8 @@ class OpenAILLM(LLMProvider):
         }
         if max_tokens is not None:
             kwargs["max_tokens"] = max_tokens
+        if top_p is not None:
+            kwargs["top_p"] = top_p
 
         response = await self.client.chat.completions.create(**kwargs)
 
@@ -171,16 +174,27 @@ class OpenAILLM(LLMProvider):
                     try:
                         args = json.loads(tc.function.arguments)
                     except Exception:
-                        pass
+                        logger.warning(
+                            "OpenAI tool call {} ({}) had malformed JSON arguments: {!r}",
+                            tc.id, tc.function.name, tc.function.arguments,
+                        )
                 tool_calls.append(ToolCall(id=tc.id, name=tc.function.name, arguments=args))
 
         reason_map = {"stop": "end_turn", "tool_calls": "tool_use", "length": "max_tokens"}
         finish_reason = reason_map.get(choice.finish_reason or "stop", "end_turn")
 
+        usage = None
+        if response.usage:
+            usage = {
+                "input_tokens": response.usage.prompt_tokens,
+                "output_tokens": response.usage.completion_tokens,
+            }
+
         return AssistantTurn(
             text=text or None,
             tool_calls=tool_calls,
             finish_reason=finish_reason,
+            usage=usage,
         )
 
     async def test_connection(self) -> tuple[bool, str]:

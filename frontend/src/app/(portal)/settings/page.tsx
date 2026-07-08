@@ -9,6 +9,7 @@ import { ProviderConfigCard } from "@/components/settings/provider-config-card";
 import { EmbeddingSettingsCard } from "@/components/settings/embedding-settings-card";
 import { ChatSettingsCard } from "@/components/settings/chat-settings-card";
 import { ExportApiSettingsCard } from "@/components/settings/export-api-settings-card";
+import { ClaudeGatewaySettingsCard } from "@/components/settings/claude-gateway-settings-card";
 
 export default function SettingsPage() {
   const { user } = useAuth();
@@ -91,6 +92,26 @@ export default function SettingsPage() {
           />
           <AccordionPanel>
             <ChatSettingsCard />
+          </AccordionPanel>
+        </AccordionItem>
+
+        <AccordionItem value="claude-gateway">
+          <AccordionTrigger
+            icon={<span className="material-symbols-outlined">terminal</span>}
+            iconClassName="bg-orange-500/10 text-orange-600 dark:text-orange-400"
+            label={
+              <span className="flex items-center gap-2">
+                Claude Code Gateway
+                <span className="text-[10px] font-medium px-2 py-0.5 rounded-full bg-muted text-muted-foreground border border-border">
+                  Optional — falls back to LLM Provider
+                </span>
+              </span>
+            }
+            description="Let the Claude Code CLI use Arkon as its Anthropic API backend"
+          />
+          <AccordionPanel>
+            <ProviderConfigCard capability="gateway" testEndpoint="/api/settings/test-gateway" />
+            <ClaudeGatewaySettingsCard />
           </AccordionPanel>
         </AccordionItem>
 

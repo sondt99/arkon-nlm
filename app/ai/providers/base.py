@@ -111,6 +111,7 @@ class LLMProvider(ABC):
         system: Optional[str] = None,
         max_tokens: Optional[int] = None,
         temperature: float = 0.2,
+        top_p: Optional[float] = None,
     ) -> "AssistantTurn":
         """
         Multi-turn tool-calling. Messages use neutral format from agent_protocol.

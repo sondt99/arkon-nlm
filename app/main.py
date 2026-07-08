@@ -135,6 +135,7 @@ from app.routers import (  # noqa: E402
     audit,
     auth,
     chat,
+    claude_gateway,
     export_api,
     knowledge_types,
     notebooklm,
@@ -149,6 +150,17 @@ from app.routers import (  # noqa: E402
     wiki_drafts,
     wiki_images,
 )
+
+
+@app.exception_handler(claude_gateway.AnthropicError)
+async def _anthropic_error_handler(_request, exc: claude_gateway.AnthropicError):
+    from fastapi.responses import JSONResponse
+
+    return JSONResponse(
+        status_code=exc.status_code,
+        content={"type": "error", "error": {"type": exc.error_type, "message": exc.message}},
+    )
+
 
 app.include_router(auth.router, prefix="/api", tags=["auth"])
 app.include_router(sources.router, prefix="/api", tags=["sources"])
@@ -168,6 +180,7 @@ app.include_router(skill_contributions.router, prefix="/api", tags=["skill-contr
 app.include_router(notebooklm.router, prefix="/api", tags=["notebooklm"])
 app.include_router(chat.router, prefix="/api", tags=["chat"])
 app.include_router(export_api.router, prefix="/api", tags=["export-api"])
+app.include_router(claude_gateway.router, prefix="/api", tags=["claude-gateway"])
 
 
 @app.get("/")

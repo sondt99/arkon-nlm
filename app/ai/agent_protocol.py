@@ -29,6 +29,8 @@ class AssistantTurn:
     # Stored in the neutral message as "_raw_content" and used by the originating provider
     # to avoid reconstructing content that may lose internal metadata.
     raw_provider_content: Any = field(default=None)
+    # {"input_tokens": int, "output_tokens": int} from the provider's real response, when available.
+    usage: Optional[dict] = field(default=None)
 
 
 # ---------------------------------------------------------------------------
@@ -189,6 +191,97 @@ def neutral_to_gemini_contents(messages: list[dict]):
                     parts = [gtypes.Part(text="")]
                 result.append(gtypes.Content(role="model", parts=parts))
     return result
+
+
+# ---------------------------------------------------------------------------
+# Provider (Anthropic wire format) → neutral converters
+#
+# Used by the Claude Code gateway (app/routers/claude_gateway.py) to translate
+# an inbound Anthropic Messages API request into the neutral format the rest
+# of this module (and every LLMProvider.generate_with_tools) expects.
+# ---------------------------------------------------------------------------
+
+def anthropic_tools_to_neutral(tools: list[dict]) -> list[dict]:
+    """Convert Anthropic tool schemas ({name, description, input_schema}) to
+    the OpenAI-style neutral shape generate_with_tools() expects."""
+    return [
+        {
+            "type": "function",
+            "function": {
+                "name": tool["name"],
+                "description": tool.get("description", ""),
+                "parameters": tool.get("input_schema", {"type": "object", "properties": {}}),
+            },
+        }
+        for tool in tools
+    ]
+
+
+def anthropic_messages_to_neutral(messages: list[dict]) -> list[dict]:
+    """Convert an Anthropic Messages API `messages` array to neutral messages.
+
+    Anthropic message `content` is either a plain string or a list of blocks
+    (text / image / tool_use / tool_result). Image blocks are dropped with a
+    text placeholder — the neutral format and every provider's
+    generate_with_tools() are text/tool-call only today.
+    """
+    result: list[dict] = []
+    for msg in messages:
+        role = msg["role"]
+        content = msg.get("content")
+
+        if isinstance(content, str) or content is None:
+            if role == "assistant":
+                result.append({"role": "assistant", "content": content or "", "tool_calls": []})
+            else:
+                result.append({"role": "user", "content": content or ""})
+            continue
+
+        if role == "user":
+            tool_results = [
+                {"id": b["tool_use_id"], "name": "", "content": _tool_result_text(b.get("content"))}
+                for b in content
+                if b.get("type") == "tool_result"
+            ]
+            if tool_results:
+                result.append({"role": "user", "tool_results": tool_results})
+                continue
+            text_parts = [b["text"] for b in content if b.get("type") == "text"]
+            if any(b.get("type") == "image" for b in content):
+                text_parts.append("[image omitted]")
+            result.append({"role": "user", "content": "\n".join(text_parts)})
+        elif role == "assistant":
+            text_parts = [b["text"] for b in content if b.get("type") == "text"]
+            tool_calls = [
+                ToolCall(id=b["id"], name=b["name"], arguments=b.get("input") or {})
+                for b in content
+                if b.get("type") == "tool_use"
+            ]
+            result.append({
+                "role": "assistant",
+                "content": "\n".join(text_parts) or None,
+                "tool_calls": tool_calls,
+            })
+    return result
+
+
+def _tool_result_text(content: Any) -> str:
+    """Anthropic tool_result `content` is a string or a list of {type:"text", text} blocks."""
+    if content is None:
+        return ""
+    if isinstance(content, str):
+        return content
+    return "\n".join(b.get("text", "") for b in content if isinstance(b, dict) and b.get("type") == "text")
+
+
+def assistant_turn_to_anthropic_content(turn: AssistantTurn) -> list[dict]:
+    """Convert a neutral AssistantTurn to Anthropic Messages API content blocks."""
+    blocks: list[dict] = []
+    if turn.text:
+        blocks.append({"type": "text", "text": turn.text})
+    for tc in turn.tool_calls:
+        blocks.append({"type": "tool_use", "id": tc.id, "name": tc.name, "input": tc.arguments})
+    return blocks or [{"type": "text", "text": ""}]
 
 
 # ---------------------------------------------------------------------------

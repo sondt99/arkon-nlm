@@ -151,7 +151,7 @@ app/
 | `role` | ENUM | `admin` / `employee` |
 | `department_id` | UUID FK→departments | Nullable |
 | `custom_role_id` | UUID FK→roles | Vai trò tùy chỉnh, nullable |
-| `mcp_token` | VARCHAR UNIQUE | Bearer token dùng chung cho MCP (`/mcp`) và Export API (`/api/export/v1/*`), nullable |
+| `mcp_token` | VARCHAR UNIQUE | Bearer token dùng chung cho MCP (`/mcp`), Export API (`/api/export/v1/*`) và Claude Code Gateway (`/api/claude-gateway/v1/*`), nullable |
 | `is_active` | BOOLEAN | Mặc định TRUE |
 | `last_connected` | TIMESTAMP | Lần cuối kết nối |
 
@@ -1158,6 +1158,34 @@ Cho phép công cụ bên ngoài không nói giao thức MCP (n8n, Zapier, scrip
 }
 ```
 **Lỗi:** `401`, `403` (workspace), `422` — `q` rỗng; `502` — lỗi embedding/search backend (ví dụ chưa cấu hình embedding model trong Settings); `503` — Export API đang bị admin tắt.
+
+---
+
+### 4.12 Claude Code Gateway — `/api/claude-gateway`
+
+Cho phép Claude Code CLI (hoặc bất kỳ client nào nói giao thức Anthropic Messages API) trỏ `ANTHROPIC_BASE_URL` vào Arkon thay vì `api.anthropic.com`, để toàn bộ traffic đi qua provider LLM mà Arkon đã cấu hình — quản trị tập trung, không phải KB-grounding (khác hẳn Export API). Stateless hoàn toàn: client gửi lại toàn bộ lịch sử `messages` mỗi request, server không lưu conversation.
+
+**Auth:** dùng lại đúng `mcp_token` (giống MCP + Export API), nhận qua `Authorization: Bearer <token>` **hoặc** `x-api-key: <token>` — Claude Code gửi header khác nhau tùy `ANTHROPIC_AUTH_TOKEN`/`ANTHROPIC_API_KEY` được set. Sai/thiếu token → lỗi dạng Anthropic `{"type":"error","error":{...}}`, không phải envelope `{"detail":...}` mặc định của FastAPI (có `exception_handler` riêng cho `claude_gateway.AnthropicError` trong `app/main.py`).
+
+**Bật/tắt:** config key `claude_gateway_enabled` (mặc định bật), Settings → Claude Code Gateway. Tắt → mọi request trả `503` dạng lỗi Anthropic.
+
+**Model:** capability `gateway` riêng trong `ProviderRegistry` (`get_gateway_llm()`), fallback sang LLM Provider nếu chưa cấu hình — giống hệt pattern của Chatbot Provider. UI dùng lại `ProviderConfigCard` (component đã có, mở rộng thêm `capability="gateway"`) nên có đầy đủ chọn provider/model/API key/Test Connection, không phải xây UI mới.
+
+**Dịch giao thức:** đây là phần việc chính — `app/ai/agent_protocol.py` vốn chỉ có chiều neutral→provider (phục vụ wiki agent), bổ sung chiều ngược: `anthropic_messages_to_neutral()`, `anthropic_tools_to_neutral()` (parse request Anthropic vào), `assistant_turn_to_anthropic_content()` (dựng response Anthropic ra). Không dùng `chat_service.generate_reply()` (gắn chặt RAG/persona của Arkon) — gọi thẳng `llm.generate_with_tools()`.
+
+**Giới hạn v1 (xem chi tiết `docs/API-REFERENCE.md`):** không chèn RAG/KB, bỏ qua block ảnh/document (thay bằng placeholder), không hỗ trợ extended thinking, `cache_control`/`tool_choice` bị bỏ qua, streaming là SSE đúng chuẩn nhưng tổng hợp từ một response hoàn chỉnh (chưa phải streaming token-by-token thật), `count_tokens` là ước lượng heuristic (`ký tự / 4`).
+
+**Tham số sinh:** tương tự Export API — `claude_gateway_temperature`/`top_p`/`max_tokens` optional, chỉ override khi admin cấu hình, ngược lại dùng đúng giá trị Claude Code tự gửi trong request (khác Export API — nơi client không tự gửi tham số sinh). Cần thêm `top_p` vào `LLMProvider.generate_with_tools()` (base + cả 3 provider) vì trước đó chỉ `generate()` có tham số này.
+
+**Usage thật:** trước đây `AssistantTurn` không mang thông tin token usage. Bổ sung field `usage: Optional[dict]`, cả 3 provider (`anthropic_provider`/`openai_provider`/`google`) điền từ response thật của SDK — cần thiết vì Claude Code dùng `usage` để theo dõi ngữ cảnh/chi phí; nếu không có sẽ ước lượng heuristic.
+
+#### `POST /api/claude-gateway/v1/messages`
+Request/response giữ nguyên hình dạng Anthropic Messages API. `model` trong request bị bỏ qua khi routing (luôn dùng provider cấu hình server-side) nhưng vẫn được echo lại trong response.
+
+**Lỗi:** `401` — token sai/thiếu; `500` — chưa cấu hình provider nào (kể cả LLM Provider fallback); `502` — provider lỗi khi sinh; `503` — gateway đang bị admin tắt.
+
+#### `POST /api/claude-gateway/v1/messages/count_tokens`
+Trả `{"input_tokens": N}` ước lượng heuristic, phục vụ Claude Code quản lý ngân sách ngữ cảnh — không chính xác tuyệt đối như tokenizer thật của Anthropic.
 
 ---
 

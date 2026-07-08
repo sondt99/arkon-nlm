@@ -178,6 +178,23 @@ async def test_chatbot(
         return TestConnectionResult(success=False, message=str(e))
 
 
+@router.post("/settings/test-gateway", response_model=TestConnectionResult)
+async def test_gateway(
+    db: AsyncSession = Depends(get_db),
+    _user: Employee = require_permission("org:settings:manage"),
+):
+    """Test the configured Claude Code Gateway provider (falls back to main LLM if not set)."""
+    from app.ai.registry import ProviderRegistry
+
+    try:
+        registry = ProviderRegistry(db)
+        provider = await registry.get_gateway_llm()
+        ok, msg = await provider.test_connection()
+        return TestConnectionResult(success=ok, message=msg)
+    except Exception as e:
+        return TestConnectionResult(success=False, message=str(e))
+
+
 # ---------------------------------------------------------------------------
 # Supported providers list (for admin UI dropdowns)
 # ---------------------------------------------------------------------------

@@ -62,6 +62,7 @@ class AnthropicLLM(LLMProvider):
         system: Optional[str] = None,
         max_tokens: Optional[int] = None,
         temperature: float = 0.2,
+        top_p: Optional[float] = None,
     ) -> AssistantTurn:
         anthropic_messages = neutral_to_anthropic_messages(messages)
         anthropic_tools = openai_tools_to_anthropic(tools)
@@ -75,6 +76,8 @@ class AnthropicLLM(LLMProvider):
         }
         if system:
             kwargs["system"] = system
+        if top_p is not None:
+            kwargs["top_p"] = top_p
 
         response = await self.client.messages.create(**kwargs)
 
@@ -90,10 +93,18 @@ class AnthropicLLM(LLMProvider):
         reason_map = {"end_turn": "end_turn", "tool_use": "tool_use", "max_tokens": "max_tokens"}
         finish_reason = reason_map.get(response.stop_reason or "end_turn", "end_turn")
 
+        usage = None
+        if response.usage:
+            usage = {
+                "input_tokens": response.usage.input_tokens,
+                "output_tokens": response.usage.output_tokens,
+            }
+
         return AssistantTurn(
             text="\n".join(text_parts) or None,
             tool_calls=tool_calls,
             finish_reason=finish_reason,
+            usage=usage,
         )
 
     async def test_connection(self) -> tuple[bool, str]:

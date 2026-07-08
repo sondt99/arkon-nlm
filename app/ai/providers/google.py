@@ -154,6 +154,7 @@ class GoogleLLM(LLMProvider):
         system: Optional[str] = None,
         max_tokens: Optional[int] = None,
         temperature: float = 0.2,
+        top_p: Optional[float] = None,
     ) -> AssistantTurn:
         from google.genai import types as gtypes
 
@@ -164,6 +165,7 @@ class GoogleLLM(LLMProvider):
             system_instruction=system,
             max_output_tokens=max_tokens,
             temperature=temperature,
+            top_p=top_p,
             tools=gemini_tools,  # type: ignore[arg-type]
             tool_config=gtypes.ToolConfig(
                 function_calling_config=gtypes.FunctionCallingConfig(mode="AUTO")  # type: ignore[arg-type]
@@ -200,11 +202,19 @@ class GoogleLLM(LLMProvider):
         # with thought_signature intact (required by gemini-2.5 thinking models).
         raw_content = response.candidates[0].content if response.candidates else None
 
+        usage = None
+        if response.usage_metadata:
+            usage = {
+                "input_tokens": response.usage_metadata.prompt_token_count or 0,
+                "output_tokens": response.usage_metadata.candidates_token_count or 0,
+            }
+
         return AssistantTurn(
             text="\n".join(text_parts) or None,
             tool_calls=tool_calls,
             finish_reason=finish_reason,
             raw_provider_content=raw_content,
+            usage=usage,
         )
 
     async def test_connection(self) -> tuple[bool, str]:

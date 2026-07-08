@@ -187,6 +187,20 @@ class ProviderRegistry:
             # No chatbot-specific provider — fall back to the main LLM
             return await self.get_llm()
 
+    async def get_gateway_llm(self) -> LLMProvider:
+        """
+        Get the LLM backing the Claude Code gateway (/api/claude-gateway/v1/messages).
+        Uses a dedicated gateway provider if configured; falls back to the
+        general LLM provider otherwise.
+        """
+        try:
+            config = await self._load_config("gateway")
+            cls = _get_llm_class(config.provider)
+            return cls(config)
+        except ValueError:
+            # No gateway-specific provider — fall back to the main LLM
+            return await self.get_llm()
+
     async def get_vision(self) -> Optional[VisionProvider]:
         """Get the configured vision provider. Returns None if not configured."""
         try:

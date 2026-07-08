@@ -121,13 +121,20 @@ const VISION_PROVIDERS: ProviderDef[] = [
   },
 ];
 
-const ALL_PROVIDERS = { llm: LLM_PROVIDERS, vision: VISION_PROVIDERS, chatbot: LLM_PROVIDERS };
+const ALL_PROVIDERS = { llm: LLM_PROVIDERS, vision: VISION_PROVIDERS, chatbot: LLM_PROVIDERS, gateway: LLM_PROVIDERS };
 const PROVIDER_NAMES = ["google", "openai", "anthropic", "ollama", "ninerouter"] as const;
+
+// Capabilities that offer a "fall back to LLM Provider" None option instead of
+// requiring their own dedicated provider.
+const FALLBACK_LABELS: Record<string, string> = {
+  chatbot: "Chatbot",
+  gateway: "Claude Code Gateway",
+};
 
 // ── Props ─────────────────────────────────────────────────────────────────────
 
 type Props = {
-  capability: "llm" | "vision" | "chatbot";
+  capability: "llm" | "vision" | "chatbot" | "gateway";
   testEndpoint: string;
 };
 
@@ -135,6 +142,7 @@ type Props = {
 
 export function ProviderConfigCard({ capability, testEndpoint }: Props) {
   const providers = ALL_PROVIDERS[capability];
+  const fallbackLabel = FALLBACK_LABELS[capability];
 
   const [provider, setProvider] = useState("");
   const [model, setModel] = useState("");
@@ -274,9 +282,9 @@ export function ProviderConfigCard({ capability, testEndpoint }: Props) {
     <>
       {/* Provider selector */}
       <div className="px-6 pb-4">
-        <div className={`grid gap-2 ${capability === "chatbot" ? "grid-cols-3 sm:grid-cols-6" : "grid-cols-3 sm:grid-cols-5"}`}>
-          {/* Chatbot: "None" option = fall back to LLM provider */}
-          {capability === "chatbot" && (
+        <div className={`grid gap-2 ${fallbackLabel ? "grid-cols-3 sm:grid-cols-6" : "grid-cols-3 sm:grid-cols-5"}`}>
+          {/* Chatbot/Gateway: "None" option = fall back to LLM provider */}
+          {fallbackLabel && (
             <button
               onClick={() => { setProvider(""); setModel(""); setBaseUrl(""); setFetchedModels(null); setFetchError(""); setTestResult(null); }}
               className={`relative flex flex-col items-center gap-1.5 py-3 px-2 rounded-lg border transition-all text-xs font-medium ${
@@ -327,14 +335,14 @@ export function ProviderConfigCard({ capability, testEndpoint }: Props) {
         </div>
       </div>
 
-      {/* Chatbot fallback notice */}
-      {capability === "chatbot" && !provider && (
+      {/* Chatbot/Gateway fallback notice */}
+      {fallbackLabel && !provider && (
         <div className="px-6 pb-5 border-t border-border/60 pt-4">
           <div className="flex items-start gap-3 rounded-lg bg-muted/50 border border-border px-4 py-3">
             <span className="material-symbols-outlined text-muted-foreground text-base mt-0.5">info</span>
             <p className="text-xs text-muted-foreground leading-relaxed">
-              Chatbot will use the <strong>LLM Provider</strong> configured above.
-              Select a dedicated provider here if you want to use a different model for chat (e.g. a faster or cheaper one).
+              {fallbackLabel} will use the <strong>LLM Provider</strong> configured above.
+              Select a dedicated provider here if you want to use a different model (e.g. a faster or cheaper one).
             </p>
           </div>
         </div>

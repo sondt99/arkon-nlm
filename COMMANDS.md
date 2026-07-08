@@ -123,11 +123,16 @@ The build output shows TypeScript check + route list. If it fails, the container
 
 ---
 
-## Backend: run tests / check imports (Bash tool)
+## Backend: run tests / lint (Bash tool)
+
+> Use the local `.venv` — it already has pytest/ruff installed and is faster than a
+> docker exec round-trip. `docker exec ... pytest app/tests/` does NOT work: tests
+> live in `tests/` at the repo root, not `app/tests/`.
 
 ```bash
+cd E:/AI-CLAUDE/arkon && ./.venv/Scripts/python.exe -m pytest tests/ -q
+cd E:/AI-CLAUDE/arkon && ./.venv/Scripts/python.exe -m ruff check app/ tests/
 docker exec arkon_api python -c "from app.routers.chat import router; print('OK')"
-docker exec arkon_api python -m pytest app/tests/ -x -q
 ```
 
 ---

@@ -9,7 +9,8 @@ Two system roles:
 
 from typing import Optional
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request
+from loguru import logger
 from pydantic import BaseModel
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -26,6 +27,24 @@ from app.services.auth_service import (
 from app.services.permission_engine import get_effective_permissions
 
 router = APIRouter()
+
+# ---------------------------------------------------------------------------
+# Login rate limiting (Redis-backed, per-IP)
+# ---------------------------------------------------------------------------
+_LOGIN_MAX_ATTEMPTS = 10
+_LOGIN_WINDOW_SECONDS = 300
+
+
+async def _check_login_rate_limit(request: Request) -> None:
+    """Block login if IP exceeds threshold within the time window."""
+    from app.services.rate_limiter import check_rate_limit
+    client_ip = request.client.host if request.client else "unknown"
+    await check_rate_limit(
+        key=f"arkon:login_attempts:{client_ip}",
+        max_requests=_LOGIN_MAX_ATTEMPTS,
+        window_seconds=_LOGIN_WINDOW_SECONDS,
+        error_message="Too many login attempts. Please try again later.",
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -108,11 +127,12 @@ def _build_user_dict(employee: Employee, permissions: list[str], workspace_membe
 # ---------------------------------------------------------------------------
 
 @router.post("/auth/login", response_model=LoginResponse)
-async def login(req: LoginRequest, db: AsyncSession = Depends(get_db)):
+async def login(req: LoginRequest, request: Request, db: AsyncSession = Depends(get_db)):
     """
     Authenticate with email + password. Returns JWT token.
     Works for both admin and employee roles.
     """
+    await _check_login_rate_limit(request)
     employee = await authenticate_employee(db, req.email, req.password)
     if not employee:
         raise HTTPException(status_code=401, detail="Invalid email or password")
@@ -168,8 +188,8 @@ async def change_password(
     if not verify_password(req.current_password, current_user.password_hash):
         raise HTTPException(401, "Current password is incorrect")
 
-    if len(req.new_password) < 6:
-        raise HTTPException(400, "New password must be at least 6 characters")
+    if len(req.new_password) < 8:
+        raise HTTPException(400, "New password must be at least 8 characters")
 
     current_user.password_hash = hash_password(req.new_password)
     await db.flush()

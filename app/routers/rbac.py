@@ -171,7 +171,8 @@ async def list_employees(
         base = base.where(Employee.department_id == uuid.UUID(department_id))
         count_base = count_base.where(Employee.department_id == uuid.UUID(department_id))
     if search:
-        like = f"%{search}%"
+        escaped = search.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+        like = f"%{escaped}%"
         base = base.where(Employee.name.ilike(like) | Employee.email.ilike(like))
         count_base = count_base.where(Employee.name.ilike(like) | Employee.email.ilike(like))
 

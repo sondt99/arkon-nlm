@@ -30,7 +30,7 @@ class DashboardStats(BaseModel):
 @router.get("/dashboard/stats", response_model=DashboardStats)
 async def dashboard_stats(
     db: AsyncSession = Depends(get_db),
-    _user: Employee = Depends(get_current_user),
+    _user: Employee = require_permission("org:settings:manage"),
 ):
     repo = Repository(db)
     return DashboardStats(
@@ -58,7 +58,7 @@ class TestConnectionResult(BaseModel):
 @router.get("/settings")
 async def get_settings(
     db: AsyncSession = Depends(get_db),
-    _user: Employee = Depends(get_current_user),
+    _user: Employee = require_permission("org:settings:manage"),
 ):
     """Get current app settings (masked sensitive values for UI)."""
     from app.services.config_service import ConfigService
@@ -200,7 +200,9 @@ async def test_gateway(
 # ---------------------------------------------------------------------------
 
 @router.get("/settings/providers")
-async def list_providers():
+async def list_providers(
+    _user: Employee = Depends(get_current_user),
+):
     """Get supported providers and models for each capability."""
     from app.ai.registry import SUPPORTED_PROVIDERS
     return SUPPORTED_PROVIDERS
@@ -219,6 +221,39 @@ class FetchModelsResult(BaseModel):
     models: list[str]
 
 
+def _validate_external_url(raw_url: str) -> str:
+    """Block requests to private/internal networks (SSRF prevention)."""
+    import ipaddress
+    import socket
+    from urllib.parse import urlparse
+
+    from fastapi import HTTPException
+
+    parsed = urlparse(raw_url)
+    if parsed.scheme not in ("http", "https"):
+        raise HTTPException(status_code=400, detail="Only http/https URLs are allowed")
+
+    hostname = parsed.hostname
+    if not hostname:
+        raise HTTPException(status_code=400, detail="Invalid URL: no hostname")
+
+    blocked_hosts = {"localhost", "127.0.0.1", "::1", "0.0.0.0"}
+    if hostname.lower() in blocked_hosts:
+        raise HTTPException(status_code=400, detail="Requests to localhost are not allowed")
+
+    try:
+        resolved = socket.getaddrinfo(hostname, None, socket.AF_UNSPEC, socket.SOCK_STREAM)
+    except socket.gaierror:
+        raise HTTPException(status_code=400, detail=f"Cannot resolve hostname: {hostname}")
+
+    for _, _, _, _, addr in resolved:
+        ip = ipaddress.ip_address(addr[0])
+        if ip.is_private or ip.is_loopback or ip.is_link_local or ip.is_reserved:
+            raise HTTPException(status_code=400, detail="Requests to private/internal networks are not allowed")
+
+    return raw_url
+
+
 @router.post("/settings/fetch-models", response_model=FetchModelsResult)
 async def fetch_models_from_url(
     body: FetchModelsBody,
@@ -228,13 +263,14 @@ async def fetch_models_from_url(
     import httpx
     from fastapi import HTTPException
 
+    _validate_external_url(body.base_url)
     url = body.base_url.rstrip("/") + "/models"
     headers: dict[str, str] = {}
     if body.api_key:
         headers["Authorization"] = f"Bearer {body.api_key}"
 
     try:
-        async with httpx.AsyncClient(timeout=10.0, verify=False) as client:
+        async with httpx.AsyncClient(timeout=10.0) as client:
             resp = await client.get(url, headers=headers)
             resp.raise_for_status()
             data = resp.json()
@@ -248,11 +284,11 @@ async def fetch_models_from_url(
     except httpx.HTTPStatusError as e:
         raise HTTPException(
             status_code=400,
-            detail=f"API returned {e.response.status_code}: {e.response.text[:300]}",
+            detail=f"API returned {e.response.status_code}",
         )
     except httpx.ConnectError:
-        raise HTTPException(status_code=400, detail=f"Cannot connect to {url}")
+        raise HTTPException(status_code=400, detail="Cannot connect to the provided URL")
     except httpx.TimeoutException:
-        raise HTTPException(status_code=400, detail=f"Connection timed out: {url}")
-    except Exception as e:
-        raise HTTPException(status_code=400, detail=f"Failed to fetch models: {e}")
+        raise HTTPException(status_code=400, detail="Connection timed out")
+    except Exception:
+        raise HTTPException(status_code=400, detail="Failed to fetch models")

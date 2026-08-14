@@ -238,10 +238,9 @@ async def send_message(
             persona=body.persona,
             exclude_message_id=user_msg.id,
         )
-    except Exception as exc:
-        # Save error as assistant message so the UI shows feedback
+    except Exception:
         logger.exception("Chat generation failed for conversation={}", conv.id)
-        answer = f"Sorry, I encountered an error: {exc}"
+        answer = "Sorry, I encountered an error generating a response. Please try again."
         sources = []
 
     # Save assistant message
@@ -323,9 +322,9 @@ async def edit_message(
             persona=body.persona,
             exclude_message_id=msg.id,
         )
-    except Exception as exc:
+    except Exception:
         logger.exception("Chat regeneration failed for conversation={}", conv.id)
-        answer = f"Sorry, I encountered an error: {exc}"
+        answer = "Sorry, I encountered an error generating a response. Please try again."
         sources = []
 
     assistant_msg = await chat_service.save_message(

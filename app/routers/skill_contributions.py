@@ -502,11 +502,10 @@ async def approve_skill_contribution(
     Enforces department-level review for non-admin users if scope is 'department'.
     """
     contribution = await db.get(SkillContribution, contribution_id)
-    if contribution.status in [SkillContributionStatus.APPROVED.value,SkillContributionStatus.REJECTED.value,]:
-        raise HTTPException(400, "Contribution already approved")
-    
     if not contribution:
         raise HTTPException(404, "Contribution not found")
+    if contribution.status in [SkillContributionStatus.APPROVED.value, SkillContributionStatus.REJECTED.value]:
+        raise HTTPException(400, "Contribution already reviewed")
 
     # Permission check: 
     # 1. Global admins can approve anything.
@@ -546,10 +545,13 @@ async def reject_skill_contribution(
     admin: Employee = require_permission("skill:contribution:review"),
 ):
     """Reject a skill contribution request (moves back to draft)."""
+    contribution = await db.get(SkillContribution, contribution_id)
+    if not contribution:
+        raise HTTPException(404, "Contribution not found")
+    if contribution.status in [SkillContributionStatus.APPROVED.value, SkillContributionStatus.REJECTED.value]:
+        raise HTTPException(400, "Contribution already reviewed")
+
     contribution = await SkillService.reject_contribution(db, contribution_id)
-    if contribution.status in [SkillContributionStatus.APPROVED.value,SkillContributionStatus.REJECTED.value]:
-        raise HTTPException(400, "Contribution already approved")
-    
     return {"status": contribution.status}
 
 @router.get("/skill-contributions/{contribution_id}/diff-status")

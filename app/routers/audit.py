@@ -56,7 +56,7 @@ async def get_audit_log(
     decision: Optional[str] = None,
     resource_type: Optional[str] = None,
     db: AsyncSession = Depends(get_db),
-    _user: Employee = require_permission("audit.read"),
+    _user: Employee = require_permission("org:audit:read"),
 ):
     """
     Query audit log with pagination and filters.

@@ -23,6 +23,7 @@ tool_choice enforcement, and streaming is synthesized from one complete
 provider response rather than true token-by-token streaming.
 """
 
+import asyncio
 import json
 import uuid
 from typing import Any, Optional
@@ -42,6 +43,7 @@ from app.ai.agent_protocol import (
 from app.ai.registry import ProviderRegistry
 from app.database import get_db
 from app.services.mcp_auth_service import MCPAuthService, ResolvedIdentity
+from app.services.rate_limiter import check_token_rate_limit
 
 router = APIRouter()
 
@@ -271,6 +273,7 @@ async def create_message(
     _identity: ResolvedIdentity = Depends(get_identity_from_gateway_token),
 ):
     await _require_enabled(db)
+    await check_token_rate_limit(_identity.employee_id, "gateway_messages", max_requests=30, window_seconds=60)
 
     system_text = _normalize_system(body.system)
     neutral_messages = anthropic_messages_to_neutral([m.model_dump() for m in body.messages])
@@ -290,18 +293,29 @@ async def create_message(
             f"No LLM provider configured for the Claude Code Gateway: {exc}",
         ) from exc
 
+    from app.config import settings
+
     try:
-        turn = await llm.generate_with_tools(
-            messages=neutral_messages,
-            tools=neutral_tools,
-            system=system_text,
-            max_tokens=max_tokens,
-            temperature=temperature,
-            top_p=top_p,
+        turn = await asyncio.wait_for(
+            llm.generate_with_tools(
+                messages=neutral_messages,
+                tools=neutral_tools,
+                system=system_text,
+                max_tokens=max_tokens,
+                temperature=temperature,
+                top_p=top_p,
+            ),
+            timeout=settings.chat_generation_timeout,
         )
+    except asyncio.TimeoutError as exc:
+        logger.warning("Claude Code Gateway generation timed out after {}s", settings.chat_generation_timeout)
+        raise AnthropicError(
+            504, "api_error",
+            f"Generation timed out after {settings.chat_generation_timeout}s — the configured provider is slow or unreachable",
+        ) from exc
     except Exception as exc:
         logger.exception("Claude Code Gateway generation failed")
-        raise AnthropicError(502, "api_error", f"Generation failed: {exc}") from exc
+        raise AnthropicError(502, "api_error", "Generation failed — the configured provider returned an error") from exc
 
     input_tokens_estimate = _estimate_input_tokens(system_text, neutral_messages)
 

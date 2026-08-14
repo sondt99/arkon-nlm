@@ -282,12 +282,6 @@ export function SkillEditor({ contributionId, onSubmitted, onStatusChange, mode 
             setOriginalContent(null);
           }
         }
-      } else {
-        console.log("[Diff] Conditions not met for fetching original content:", {
-          hasContribution: !!contribution,
-          canSee: isPending || isAdmin || canReview,
-          hasSkillId: !!contribution?.skill_id
-        });
       }
     } catch (err) {
       console.error("Failed to load file content:", err);

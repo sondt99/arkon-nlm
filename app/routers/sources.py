@@ -218,7 +218,8 @@ async def list_sources(
         base = base.where(Source.status == status)
         count_base = count_base.where(Source.status == status)
     if search:
-        like = f"%{search}%"
+        escaped = search.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+        like = f"%{escaped}%"
         base = base.where(Source.title.ilike(like) | Source.file_name.ilike(like))
         count_base = count_base.where(Source.title.ilike(like) | Source.file_name.ilike(like))
 
@@ -322,6 +323,9 @@ async def get_source_progress(
     source = await db.get(Source, source_id)
     if not source:
         raise HTTPException(status_code=404, detail="Source not found")
+    from app.services.permission_engine import can_access_document
+    if not await can_access_document(db, _user, source, "read"):
+        raise HTTPException(status_code=403, detail="Not allowed to view this source")
     wiki_count = await _wiki_page_count(db, source_id)
     return {
         "id": str(source.id),
@@ -344,8 +348,18 @@ async def upload_source(
     db: AsyncSession = Depends(get_db),
     user: Employee = require_permission("doc:create"),
 ):
-    file_data = await file.read()
     file_name = file.filename or "unknown"
+
+    import os as _os
+    from app.services.zip_service import ALLOWED_EXTENSIONS
+    ext = _os.path.splitext(file_name)[1].lower()
+    if ext not in ALLOWED_EXTENSIONS:
+        raise HTTPException(
+            400,
+            f"File type '{ext}' is not supported. Allowed: {', '.join(sorted(ALLOWED_EXTENSIONS))}",
+        )
+
+    file_data = await file.read()
 
     # Parse department_ids
     dept_uuids: list[uuid.UUID] = []
@@ -597,6 +611,9 @@ async def update_source(
     source = await db.get(Source, source_id)
     if not source:
         raise HTTPException(status_code=404, detail="Source not found")
+    from app.services.permission_engine import can_access_document
+    if not await can_access_document(db, _user, source, "edit"):
+        raise HTTPException(status_code=403, detail="Not allowed to edit this source")
     if body.title is not None:
         source.title = body.title
     if body.knowledge_type_id is not None:
@@ -645,6 +662,9 @@ async def retry_source(
     )).scalar_one_or_none()
     if not source:
         raise HTTPException(status_code=404, detail="Source not found")
+    from app.services.permission_engine import can_access_document
+    if not await can_access_document(db, _user, source, "edit"):
+        raise HTTPException(status_code=403, detail="Not allowed to retry this source")
     allowed_statuses = ("error", "plan_ready")
     if source.status not in allowed_statuses:
         raise HTTPException(
@@ -937,6 +957,9 @@ async def delete_source(
     source = await repo.get_by_id(Source, source_id)
     if not source:
         raise HTTPException(status_code=404, detail="Source not found")
+    from app.services.permission_engine import can_access_document
+    if not await can_access_document(db, _user, source, "delete"):
+        raise HTTPException(status_code=403, detail="Not allowed to delete this source")
 
     try:
         from app.services.storage_service import storage_service

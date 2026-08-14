@@ -29,7 +29,7 @@ export function WikiGraphInline({ projectId, onBack }: { projectId: string; onBa
   useEffect(() => {
     if (!previewSlug) { setPreviewData(null); return; }
     setPreviewLoading(true);
-    api<WikiPageDetail>(`/api/wiki/pages/${previewSlug}?scope_type=project&scope_id=${projectId}`)
+    api<WikiPageDetail>(`/api/wiki/pages/${encodeURIComponent(previewSlug)}?scope_type=project&scope_id=${encodeURIComponent(projectId)}`)
       .then(setPreviewData)
       .catch(() => setPreviewData(null))
       .finally(() => setPreviewLoading(false));

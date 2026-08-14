@@ -60,5 +60,11 @@ uv.lock
 # Grapuco
 .grapuco/
 
+# Certificates / keys
+*.pem
+*.key
+*.crt
+*.p12
+
 # Reference
 .rtk/

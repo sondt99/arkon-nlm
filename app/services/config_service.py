@@ -174,9 +174,8 @@ class ConfigService:
         try:
             return self.fernet.decrypt(value.encode()).decode()
         except Exception:
-            # If decryption fails (e.g. key changed), return raw value
-            logger.warning("Failed to decrypt config value, returning raw")
-            return value
+            logger.warning("Failed to decrypt config value — SECRET_KEY may have changed")
+            return None
 
     async def get(self, key: str) -> Optional[str]:
         """

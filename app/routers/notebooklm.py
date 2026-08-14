@@ -28,7 +28,7 @@ from sqlalchemy.orm import selectinload
 
 from app.database import get_db
 from app.database.models import NotebookLMArtifact, NotebookLMNotebook, Source
-from app.services.auth_service import get_current_user
+from app.services.auth_service import get_current_user, require_admin
 from app.worker import get_arq_pool
 
 router = APIRouter()
@@ -221,7 +221,7 @@ class CookieImport(BaseModel):
 @router.post("/notebooklm/auth/import-cookies", status_code=200)
 async def import_cookies(
     body: CookieImport,
-    current_user=Depends(get_current_user),
+    current_user=Depends(require_admin),
 ):
     """Import Google session cookies exported from a browser extension (Cookie-Editor format).
 
@@ -311,7 +311,7 @@ async def import_cookies(
 
 @router.delete("/notebooklm/auth/session", status_code=200)
 async def clear_session(
-    current_user=Depends(get_current_user),
+    current_user=Depends(require_admin),
 ):
     """Clear the stored NotebookLM session (logout)."""
     from app.services.notebooklm_service import _storage_path

@@ -92,10 +92,15 @@ async def lifespan(app: FastAPI):
         if settings.default_admin_password == "change-me-admin-password":
             logger.warning("⚠️  DEFAULT_ADMIN_PASSWORD is unchanged — change the admin password after first login!")
         if "*" in settings.cors_origin_list:
+            import os
+            if os.environ.get("ARKON_ALLOW_CORS_WILDCARD") != "1":
+                raise RuntimeError(
+                    "CORS_ORIGINS is '*' with credentials enabled — any website can call this "
+                    "API using a user's token. Set CORS_ORIGINS to your actual frontend origin(s). "
+                    "To bypass in development, set ARKON_ALLOW_CORS_WILDCARD=1."
+                )
             logger.warning(
-                "⚠️  CORS_ORIGINS is '*' with credentials enabled — any website can call this "
-                "API using a user's token. Set CORS_ORIGINS to your actual frontend origin(s) "
-                "before deploying to production!"
+                "⚠️  CORS_ORIGINS is '*' (development bypass active) — do NOT use in production!"
             )
 
         # MCP server ready

@@ -50,12 +50,18 @@ def verify_password(password: str, password_hash: str) -> bool:
 # JWT tokens
 # ---------------------------------------------------------------------------
 
+JWT_ISSUER = "arkon"
+JWT_AUDIENCE = "arkon-api"
+
+
 def create_access_token(employee_id: str, role: str, name: str) -> str:
     """Create a signed JWT token."""
     payload = {
         "sub": employee_id,
         "role": role,
         "name": name,
+        "iss": JWT_ISSUER,
+        "aud": JWT_AUDIENCE,
         "exp": datetime.now(timezone.utc) + timedelta(hours=JWT_EXPIRE_HOURS),
         "iat": datetime.now(timezone.utc),
     }
@@ -65,7 +71,10 @@ def create_access_token(employee_id: str, role: str, name: str) -> str:
 def decode_access_token(token: str) -> Optional[dict]:
     """Decode and validate a JWT token. Returns payload or None."""
     try:
-        return jwt.decode(token, settings.secret_key, algorithms=[JWT_ALGORITHM])
+        return jwt.decode(
+            token, settings.secret_key, algorithms=[JWT_ALGORITHM],
+            issuer=JWT_ISSUER, audience=JWT_AUDIENCE,
+        )
     except jwt.ExpiredSignatureError:
         return None
     except jwt.InvalidTokenError:

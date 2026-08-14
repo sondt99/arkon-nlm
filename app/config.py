@@ -112,6 +112,31 @@ class Settings(BaseSettings):
     model_config = {"env_file": ".env", "env_file_encoding": "utf-8", "extra": "ignore"}
 
     @model_validator(mode="after")
+    def validate_secrets(self):
+        import os
+        import sys
+        bypass = "pytest" in sys.modules or os.environ.get("ARKON_ALLOW_DEFAULT_SECRET") == "1"
+        if bypass:
+            return self
+
+        if self.secret_key == "change-me-to-a-random-secret-string":
+            raise ValueError(
+                "SECRET_KEY is still the default value. Set a strong random secret "
+                "in your .env file. To bypass in development, set ARKON_ALLOW_DEFAULT_SECRET=1."
+            )
+        weak_admin = {"change-me-admin-password", "admin123", "admin", "password"}
+        if self.default_admin_password in weak_admin:
+            raise ValueError(
+                "DEFAULT_ADMIN_PASSWORD is a weak default. Set a strong password in your .env file."
+            )
+        if self.minio_access_key == "minioadmin" and self.minio_secret_key == "minioadmin123":
+            raise ValueError(
+                "MINIO_ACCESS_KEY / MINIO_SECRET_KEY are still MinIO factory defaults. "
+                "Set unique credentials in your .env file."
+            )
+        return self
+
+    @model_validator(mode="after")
     def validate_mrp_accuracy_relationships(self):
         if self.mrp_chunk_overlap_chars >= self.mrp_chunk_target_chars:
             raise ValueError("MRP chunk overlap must be smaller than the chunk target")

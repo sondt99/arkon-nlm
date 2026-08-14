@@ -39,7 +39,7 @@ export function WikiDetailInline({
   const canPropose = canEdit || roleAtLeast(wsRole, "contributor");
   const canReview = canEdit;
 
-  const scopeParams = `?scope_type=project&scope_id=${projectId}`;
+  const scopeParams = `?scope_type=project&scope_id=${encodeURIComponent(projectId)}`;
 
   const loadPage = useCallback(() => {
     setLoading(true);

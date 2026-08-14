@@ -4,6 +4,20 @@ WORKDIR /app
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
     build-essential \
+    && rm -rf /var/lib/apt/lists/*
+
+RUN pip install --upgrade pip --no-cache-dir
+
+# Install dependencies in a separate layer so they're cached on code-only changes
+COPY pyproject.toml ./
+RUN pip install --no-cache-dir .
+
+# --- Runtime stage: no build tools ---
+FROM python:3.12-slim AS runtime
+
+WORKDIR /app
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
     libgl1 \
     libglib2.0-0 \
     tesseract-ocr \
@@ -12,11 +26,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     gosu \
     && rm -rf /var/lib/apt/lists/*
 
-RUN pip install --upgrade pip --no-cache-dir
-
-# Install dependencies in a separate layer so they're cached on code-only changes
-COPY pyproject.toml ./
-RUN pip install --no-cache-dir .
+COPY --from=builder /usr/local/lib/python3.12/site-packages /usr/local/lib/python3.12/site-packages
+COPY --from=builder /usr/local/bin /usr/local/bin
 
 # Copy application source and migration files
 COPY app/ ./app/

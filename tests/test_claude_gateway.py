@@ -221,13 +221,38 @@ async def test_messages_no_provider_configured_returns_500(monkeypatch):
 async def test_messages_generation_failure_returns_502(monkeypatch):
     class _FakeLLM:
         async def generate_with_tools(self, **kwargs):
-            raise TimeoutError("provider timed out")
+            raise ConnectionError("provider unreachable")
 
     monkeypatch.setattr(claude_gateway, "ProviderRegistry", _fake_registry(_FakeLLM()))
 
     with pytest.raises(claude_gateway.AnthropicError) as exc:
         await claude_gateway.create_message(_messages_request(), db=_FakeSession(), _identity=_identity())
     assert exc.value.status_code == 502
+
+
+@pytest.mark.asyncio
+async def test_messages_generation_hang_times_out_as_504(monkeypatch):
+    """A hung/slow provider must fail fast with 504, not hang indefinitely.
+    Patches only claude_gateway's own `asyncio` name binding (not the real
+    global asyncio module) so pytest-asyncio's own internals stay untouched."""
+    import asyncio as real_asyncio
+
+    async def fake_wait_for(coro, timeout):
+        coro.close()
+        raise real_asyncio.TimeoutError()
+
+    fake_asyncio = SimpleNamespace(wait_for=fake_wait_for, TimeoutError=real_asyncio.TimeoutError)
+    monkeypatch.setattr(claude_gateway, "asyncio", fake_asyncio)
+
+    class _FakeLLM:
+        async def generate_with_tools(self, **kwargs):
+            return AssistantTurn(text="unused", finish_reason="end_turn")
+
+    monkeypatch.setattr(claude_gateway, "ProviderRegistry", _fake_registry(_FakeLLM()))
+
+    with pytest.raises(claude_gateway.AnthropicError) as exc:
+        await claude_gateway.create_message(_messages_request(), db=_FakeSession(), _identity=_identity())
+    assert exc.value.status_code == 504
 
 
 # ---------------------------------------------------------------------------

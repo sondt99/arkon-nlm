@@ -87,7 +87,7 @@ export default function WikiPageViewer() {
     setPage(null);
     setMode("view");
 
-    const scopeParams = isScoped ? `?scope_type=${scopeType}&scope_id=${scopeId}` : "";
+    const scopeParams = isScoped ? `?scope_type=${encodeURIComponent(scopeType ?? "")}&scope_id=${encodeURIComponent(scopeId ?? "")}` : "";
     api<WikiPageDetail>(`/api/wiki/pages/${encodeURIComponent(fullSlug)}${scopeParams}`)
       .then((data) => setPage(data))
       .catch((err) => {
@@ -104,7 +104,7 @@ export default function WikiPageViewer() {
   const fetchDrafts = React.useCallback(() => {
     if (!page || !canReview) return;
     api<DraftResponse[]>(
-      `/api/wiki/pages/${encodeURIComponent(fullSlug)}/drafts${isScoped ? `?scope_type=${scopeType}&scope_id=${scopeId}` : ""}`
+      `/api/wiki/pages/${encodeURIComponent(fullSlug)}/drafts${isScoped ? `?scope_type=${encodeURIComponent(scopeType ?? "")}&scope_id=${encodeURIComponent(scopeId ?? "")}` : ""}`
     )
       .then((data) => setDrafts(data.filter((d) => d.status === "pending")))
       .catch(() => setDrafts([]));
@@ -132,7 +132,7 @@ export default function WikiPageViewer() {
   // Save handlers
   // ---------------------------------------------------------------------------
   const handleSaveEdit = async (content: string, note: string) => {
-    const scopeParams = isScoped ? `?scope_type=${scopeType}&scope_id=${scopeId}` : "";
+    const scopeParams = isScoped ? `?scope_type=${encodeURIComponent(scopeType ?? "")}&scope_id=${encodeURIComponent(scopeId ?? "")}` : "";
     const updated = await api<WikiPageDetail>(
       `/api/wiki/pages/${encodeURIComponent(fullSlug)}${scopeParams}`,
       {
@@ -145,7 +145,7 @@ export default function WikiPageViewer() {
   };
 
   const handleSaveProposal = async (content: string, note: string) => {
-    const scopeParams = isScoped ? `?scope_type=${scopeType}&scope_id=${scopeId}` : "";
+    const scopeParams = isScoped ? `?scope_type=${encodeURIComponent(scopeType ?? "")}&scope_id=${encodeURIComponent(scopeId ?? "")}` : "";
     await api(
       `/api/wiki/pages/${encodeURIComponent(fullSlug)}/drafts${scopeParams}`,
       {
@@ -159,7 +159,7 @@ export default function WikiPageViewer() {
   const handleDraftApproved = (draftId: string) => {
     setDrafts((prev) => prev.filter((d) => d.id !== draftId));
     // Reload page content — the approved draft has been applied
-    const scopeParams = isScoped ? `?scope_type=${scopeType}&scope_id=${scopeId}` : "";
+    const scopeParams = isScoped ? `?scope_type=${encodeURIComponent(scopeType ?? "")}&scope_id=${encodeURIComponent(scopeId ?? "")}` : "";
     api<WikiPageDetail>(`/api/wiki/pages/${encodeURIComponent(fullSlug)}${scopeParams}`)
       .then(setPage)
       .catch(() => {});

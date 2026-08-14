@@ -25,6 +25,7 @@ from app.database.models import ChatConversation, Employee
 from app.services import chat_service
 from app.services.mcp_auth_service import ResolvedIdentity, get_identity_from_export_token
 from app.services.permission_engine import can_access_workspace
+from app.services.rate_limiter import check_token_rate_limit
 
 router = APIRouter()
 
@@ -135,6 +136,7 @@ async def export_chat(
     identity: ResolvedIdentity = Depends(get_identity_from_export_token),
 ) -> ExportChatResponse:
     await _require_enabled(db)
+    await check_token_rate_limit(identity.employee_id, "export_chat", max_requests=30, window_seconds=60)
     if body.persona not in _VALID_PERSONAS:
         raise HTTPException(status_code=422, detail=f"persona must be one of {sorted(_VALID_PERSONAS)}")
     if not body.question.strip():
@@ -184,7 +186,7 @@ async def export_chat(
         )
     except Exception as exc:
         logger.exception("Export API chat generation failed for conversation={}", conv.id)
-        raise HTTPException(status_code=502, detail=f"Chat generation failed: {exc}") from exc
+        raise HTTPException(status_code=502, detail="Chat generation failed — the configured provider returned an error") from exc
 
     await chat_service.save_message(
         session=db,
@@ -215,6 +217,7 @@ async def export_search(
     identity: ResolvedIdentity = Depends(get_identity_from_export_token),
 ) -> ExportSearchResponse:
     await _require_enabled(db)
+    await check_token_rate_limit(identity.employee_id, "export_search", max_requests=60, window_seconds=60)
     if not q.strip():
         raise HTTPException(status_code=422, detail="q cannot be empty")
     top_k = min(max(1, top_k), 50)
@@ -238,7 +241,7 @@ async def export_search(
         )
     except Exception as exc:
         logger.exception("Export API search failed for query={!r}", q)
-        raise HTTPException(status_code=502, detail=f"Search failed: {exc}") from exc
+        raise HTTPException(status_code=502, detail="Search failed — the configured provider returned an error") from exc
 
     return ExportSearchResponse(
         query=q,

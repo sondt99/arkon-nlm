@@ -87,7 +87,7 @@ export default function WikiGraphPage() {
       return;
     }
     setPreviewLoading(true);
-    const scopeParams = projectId ? `?scope_type=project&scope_id=${projectId}` : "";
+    const scopeParams = projectId ? `?scope_type=project&scope_id=${encodeURIComponent(projectId)}` : "";
     api<WikiPageDetail>(`/api/wiki/pages/${encodeURIComponent(previewSlug)}${scopeParams}`)
       .then(setPreviewData)
       .catch(() => setPreviewData(null))
@@ -304,7 +304,7 @@ export default function WikiGraphPage() {
               <Button
                 variant="outline"
                 size="sm"
-                onClick={() => router.push(`/wiki/${previewSlug}${projectId ? `?scope_type=project&scope_id=${projectId}` : ""}`)}
+                onClick={() => router.push(`/wiki/${previewSlug}${projectId ? `?scope_type=project&scope_id=${encodeURIComponent(projectId)}` : ""}`)}
                 className="h-8 text-xs font-medium"
               >
                 View Full

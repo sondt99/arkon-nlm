@@ -3,7 +3,7 @@
  * All API calls go through this module.
  */
 
-const API_BASE = process.env.NEXT_PUBLIC_API_URL !== undefined ? process.env.NEXT_PUBLIC_API_URL : "http://localhost:5055";
+const API_BASE = process.env.NEXT_PUBLIC_API_URL ?? "";
 const REQUEST_TIMEOUT_MS = 30_000;
 
 type RequestOptions = {

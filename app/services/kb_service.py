@@ -320,8 +320,38 @@ async def _extract_text_from_file(file_data: bytes, file_name: str) -> list[dict
         return [{"content": "", "page_number": 1}]
 
 
+def _validate_url_not_internal(url: str) -> None:
+    """Block URLs pointing to private/internal networks (SSRF prevention)."""
+    import ipaddress
+    import socket
+    from urllib.parse import urlparse
+
+    parsed = urlparse(url)
+    if parsed.scheme not in ("http", "https"):
+        raise ValueError("Only http/https URLs are allowed")
+
+    hostname = parsed.hostname
+    if not hostname:
+        raise ValueError("Invalid URL: no hostname")
+
+    blocked_hosts = {"localhost", "127.0.0.1", "::1", "0.0.0.0"}
+    if hostname.lower() in blocked_hosts:
+        raise ValueError("URLs pointing to localhost are not allowed")
+
+    try:
+        resolved = socket.getaddrinfo(hostname, None, socket.AF_UNSPEC, socket.SOCK_STREAM)
+    except socket.gaierror:
+        raise ValueError(f"Cannot resolve hostname: {hostname}")
+
+    for _, _, _, _, addr in resolved:
+        ip = ipaddress.ip_address(addr[0])
+        if ip.is_private or ip.is_loopback or ip.is_link_local or ip.is_reserved:
+            raise ValueError("URLs pointing to private/internal networks are not allowed")
+
+
 async def _extract_text_from_url(url: str) -> list[dict]:
     """Extract text from a URL — markdown output preferred."""
+    _validate_url_not_internal(url)
     try:
         from content_core.content.extraction import extract_content
         result = await extract_content({"url": url, "output_format": "markdown"})

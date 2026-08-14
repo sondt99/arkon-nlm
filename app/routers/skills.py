@@ -331,6 +331,12 @@ async def get_skill_file_content(
     if not is_text_file(path):
         raise HTTPException(status_code=400, detail="Only text-based files can be viewed.")
 
+    from app.services.storage_service import safe_relative_path
+    try:
+        path = safe_relative_path(path)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Invalid file path")
+
     # Ensure exactly one slash between prefix and path
     p = prefix.rstrip("/")
     f = path.lstrip("/")
@@ -398,7 +404,7 @@ async def get_skill_file_content(
         raise
     except Exception as e:
         logger.error(f"[Debug] Failed to read skill file {path}: {e}")
-        raise HTTPException(status_code=500, detail=f"Failed to read file content: {str(e)}")
+        raise HTTPException(status_code=500, detail="Failed to read file content")
 
 
 # --- Individual Skill Routes (MUST BE LAST) ---

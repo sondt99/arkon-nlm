@@ -19,7 +19,12 @@ from app.ai.agent_protocol import (
     tool_results_message,
 )
 from app.ai.registry import ProviderRegistry
-from app.ai.wiki_agent_tools import TOOL_SCHEMAS, AgentState, build_tool_handlers, load_source_images
+from app.ai.wiki_agent_tools import (
+    TOOL_SCHEMAS,
+    AgentState,
+    build_tool_handlers,
+    load_source_images,
+)
 from app.ai.wiki_analyzer import analyze_source, format_analysis_section
 from app.database.models import Source
 from app.services import wiki_service

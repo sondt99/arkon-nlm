@@ -11,7 +11,6 @@ import hashlib
 import re
 from typing import Any
 
-
 _SECURITY_MARKERS = (
     "pentest", "penetration", "offensive", "redteam", "red-team", "exploit",
     "sqli", "injection", "bypass", "vulnerability", "cve", "ttp", "att&ck",

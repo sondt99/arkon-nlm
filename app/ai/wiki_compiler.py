@@ -371,7 +371,7 @@ async def compile_source_into_wiki(
                     continue
                     
                 # Acquire advisory lock for this slug to prevent race conditions
-                from sqlalchemy import select, func
+                from sqlalchemy import func, select
                 await session.execute(select(func.pg_advisory_xact_lock(func.hashtext(slug))))
 
                 if await wiki_service.get_page_by_slug(
@@ -417,7 +417,7 @@ async def compile_source_into_wiki(
                     continue
                     
                 # Acquire advisory lock for this slug
-                from sqlalchemy import select, func
+                from sqlalchemy import func, select
                 await session.execute(select(func.pg_advisory_xact_lock(func.hashtext(slug))))
 
                 applied = await _apply_update(

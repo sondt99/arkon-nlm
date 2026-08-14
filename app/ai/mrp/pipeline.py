@@ -13,7 +13,6 @@ Phase 5 (COMMIT) is implemented inline here. It reuses existing wiki_service
 functions (apply_create / apply_update) and embedding_storage utilities.
 """
 
-import asyncio
 import uuid
 from typing import Optional
 
@@ -26,7 +25,6 @@ from app.ai.mrp.reducer import run_reduce_phase
 from app.ai.mrp.verifier import run_verify_phase
 from app.ai.mrp.writer import PageWriteResult, run_refine_phase
 from app.utils.progress import ProgressTracker
-
 
 # ---------------------------------------------------------------------------
 # Phase 5 — COMMIT
@@ -48,17 +46,20 @@ async def run_commit_phase(
     Uses apply_create / apply_update from wiki_service (idempotent via upsert
     fallback). All pages are flushed then committed in a single transaction.
     """
-    from sqlalchemy import select, func
+    from sqlalchemy import func, select
+
     from app.ai.mrp.merger import merge_page_content
-    from app.database.models import Source, SourceCompilationPlan
-    from app.database.models import SourceImage
+    from app.ai.wiki_agent_tools import (  # noqa: F401
+        _IMAGE_MARKER_RE,
+        _strip_invalid_image_markers,
+    )
+    from app.database.models import Source, SourceImage
     from app.services import wiki_service
     from app.services.embedding_storage import (
         compute_content_hash,
         embedding_input_text,
         upsert_page_embedding,
     )
-    from app.ai.wiki_agent_tools import _strip_invalid_image_markers, _IMAGE_MARKER_RE  # noqa: F401
 
     scope_type = source.scope_type or "global"
     scope_id = source.scope_id

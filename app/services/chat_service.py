@@ -25,7 +25,6 @@ from app.config import settings
 from app.database.models import ChatConversation, ChatMessage, WikiLink, WikiPage
 from app.services import wiki_service
 
-
 _BRIEF_REQUEST = re.compile(
     r"(?i)\b(?:brief|briefly|short|concise|one sentence|one paragraph|summary only|"
     r"ngắn gọn|tóm tắt ngắn|một câu|một đoạn|[1-5]\s+(?:bullet|gạch đầu dòng))\b"

@@ -4,7 +4,6 @@ from __future__ import annotations
 
 from typing import Optional
 
-
 DESCRIPTION_LIMIT = 4_000
 CUSTOM_HINTS_LIMIT = 20_000
 

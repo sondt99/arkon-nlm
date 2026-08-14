@@ -141,7 +141,9 @@ async def ingest_source(
                 kt_slug = kt.slug
                 kt_name = kt.name
                 kt_desc = kt.description
-                from app.ai.knowledge_type_context import build_effective_extraction_hints
+                from app.ai.knowledge_type_context import (
+                    build_effective_extraction_hints,
+                )
                 kt_hints = build_effective_extraction_hints(
                     kt.slug, kt.name, kt.description, kt.extraction_hints,
                 )

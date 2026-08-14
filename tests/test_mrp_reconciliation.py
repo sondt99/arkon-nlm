@@ -1,4 +1,9 @@
-from app.ai.mrp.reducer import _lexical_similarity, _normalize, _slug_tail, enforce_reconciliation
+from app.ai.mrp.reducer import (
+    _lexical_similarity,
+    _normalize,
+    _slug_tail,
+    enforce_reconciliation,
+)
 
 
 def test_normalization_matches_title_and_slug_tail():

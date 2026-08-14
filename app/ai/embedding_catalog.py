@@ -92,8 +92,8 @@ EMBEDDING_CATALOG: dict[str, EmbeddingModelSpec] = {
         notes="Local model via Ollama. Set Base URL = http://host.docker.internal:11434/v1",
     ),
     # --- 9Router (OpenAI-compatible proxy) ---
-    "ninerouter/text-embedding-3-small": EmbeddingModelSpec(
-        id="ninerouter/text-embedding-3-small",
+    "ninerouter/openai/text-embedding-3-small": EmbeddingModelSpec(
+        id="ninerouter/openai/text-embedding-3-small",
         provider="ninerouter",
         model_id="openai/text-embedding-3-small",
         dimension=1536,
@@ -102,8 +102,8 @@ EMBEDDING_CATALOG: dict[str, EmbeddingModelSpec] = {
         cost_per_1m_tokens=None,
         notes="Via 9Router proxy. Set Base URL to your 9Router endpoint.",
     ),
-    "ninerouter/text-embedding-3-large": EmbeddingModelSpec(
-        id="ninerouter/text-embedding-3-large",
+    "ninerouter/openai/text-embedding-3-large": EmbeddingModelSpec(
+        id="ninerouter/openai/text-embedding-3-large",
         provider="ninerouter",
         model_id="openai/text-embedding-3-large",
         dimension=3072,
@@ -124,7 +124,24 @@ class UnknownEmbeddingModel(KeyError):
     """Raised when a spec_id is not in the catalog."""
 
 
+# Spec IDs that existed before the "<provider>/<model_id>" convention was
+# enforced (the 9Router entries used a shortened tail). Installs may have
+# persisted the old IDs in app_config, embedding_jobs, or
+# wiki_page_embeddings_<dim> rows; a data migration rewrites those, and this
+# alias keeps any stragglers resolving.
+LEGACY_SPEC_ID_ALIASES: dict[str, str] = {
+    "ninerouter/text-embedding-3-small": "ninerouter/openai/text-embedding-3-small",
+    "ninerouter/text-embedding-3-large": "ninerouter/openai/text-embedding-3-large",
+}
+
+
+def normalize_spec_id(spec_id: str) -> str:
+    """Map a possibly-legacy spec_id to its canonical catalog ID."""
+    return LEGACY_SPEC_ID_ALIASES.get(spec_id, spec_id)
+
+
 def get_spec(spec_id: str) -> EmbeddingModelSpec:
+    spec_id = normalize_spec_id(spec_id)
     try:
         return EMBEDDING_CATALOG[spec_id]
     except KeyError as e:

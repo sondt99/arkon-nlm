@@ -1,4 +1,4 @@
-import { test } from "./fixtures";
+import { fetchToken, test } from "./fixtures";
 import { VIEWPORTS } from "./routes";
 import { checkRoute } from "./check-route";
 
@@ -11,18 +11,7 @@ async function authedFetch(path: string, token: string, init: RequestInit = {}) 
   });
 }
 
-async function getToken(): Promise<string> {
-  const res = await fetch(`${API_URL}/api/auth/login`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      email: process.env.PLAYWRIGHT_ADMIN_EMAIL || "admin@arkon.local",
-      password: process.env.PLAYWRIGHT_ADMIN_PASSWORD || "admin123",
-    }),
-  });
-  const data = (await res.json()) as { access_token: string };
-  return data.access_token;
-}
+const getToken = fetchToken;
 
 test.describe("skill detail + edit (uses an existing system skill, read-only navigation)", () => {
   let slug: string | undefined;

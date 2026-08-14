@@ -19,6 +19,7 @@ async def check_rate_limit(
     """
     try:
         import redis.asyncio as aioredis
+
         from app.config import settings
 
         r = aioredis.Redis(
@@ -44,8 +45,10 @@ async def check_rate_limit(
             await r.aclose()
     except HTTPException:
         raise
-    except Exception:
-        pass
+    except Exception as exc:
+        # Fail open by design (Redis outage must not block logins), but never
+        # silently: an unreachable Redis means rate limiting is OFF.
+        logger.error("Rate limiter unavailable (failing open): key={} error={}", key, exc)
 
 
 async def check_token_rate_limit(

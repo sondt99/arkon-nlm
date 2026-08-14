@@ -45,8 +45,13 @@ dependencies = [
     # NotebookLM integration
     "notebooklm-py[markdown]>=0.4.1",
     # Security
-    "cryptography>=44.0",
+    "cryptography>=50.0",       # PYSEC-2026-3552
     "mammoth>=1.12.0",
+    # Security floors for transitive deps (pulled in via content-core etc.)
+    "aiohttp>=3.14.3",          # PYSEC-2026-3545/3546/3547
+    "pyasn1>=0.6.4",            # PYSEC-2026-3455/3456/3457
+    # NOTE: pillow has open PYSEC advisories fixed in 12.x, but moviepy
+    # (via content-core) pins pillow<12.0 — upgrade blocked upstream.
 ]
 
 [project.optional-dependencies]

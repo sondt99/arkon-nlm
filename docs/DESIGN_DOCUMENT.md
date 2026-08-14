@@ -1182,10 +1182,10 @@ Cho phép Claude Code CLI (hoặc bất kỳ client nào nói giao thức Anthro
 #### `POST /api/claude-gateway/v1/messages`
 Request/response giữ nguyên hình dạng Anthropic Messages API. `model` trong request bị bỏ qua khi routing (luôn dùng provider cấu hình server-side) nhưng vẫn được echo lại trong response.
 
-**Lỗi:** `401` — token sai/thiếu; `500` — chưa cấu hình provider nào (kể cả LLM Provider fallback); `502` — provider lỗi khi sinh; `503` — gateway đang bị admin tắt.
+**Lỗi:** `400` — content block sai định dạng; `401` — token sai/thiếu; `429` — vượt rate limit (30 req/phút/token); `500` — chưa cấu hình provider nào (kể cả LLM Provider fallback, thông báo generic không lộ chi tiết config); `502` — provider lỗi khi sinh; `503` — gateway đang bị admin tắt.
 
 #### `POST /api/claude-gateway/v1/messages/count_tokens`
-Trả `{"input_tokens": N}` ước lượng heuristic, phục vụ Claude Code quản lý ngân sách ngữ cảnh — không chính xác tuyệt đối như tokenizer thật của Anthropic.
+Trả `{"input_tokens": N}` ước lượng heuristic, phục vụ Claude Code quản lý ngân sách ngữ cảnh — không chính xác tuyệt đối như tokenizer thật của Anthropic. Rate limit riêng 120 req/phút/token; content block sai định dạng → `400`.
 
 ---
 

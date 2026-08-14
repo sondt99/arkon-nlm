@@ -275,9 +275,12 @@ async def create_message(
     await _require_enabled(db)
     await check_token_rate_limit(_identity.employee_id, "gateway_messages", max_requests=30, window_seconds=60)
 
-    system_text = _normalize_system(body.system)
-    neutral_messages = anthropic_messages_to_neutral([m.model_dump() for m in body.messages])
-    neutral_tools = anthropic_tools_to_neutral([t.model_dump() for t in body.tools]) if body.tools else []
+    try:
+        system_text = _normalize_system(body.system)
+        neutral_messages = anthropic_messages_to_neutral([m.model_dump() for m in body.messages])
+        neutral_tools = anthropic_tools_to_neutral([t.model_dump() for t in body.tools]) if body.tools else []
+    except (AttributeError, KeyError, TypeError, ValueError) as exc:
+        raise AnthropicError(400, "invalid_request_error", "Malformed message content blocks") from exc
 
     overrides = await _generation_overrides(db)
     temperature = overrides.get("temperature", body.temperature if body.temperature is not None else 0.2)
@@ -288,9 +291,10 @@ async def create_message(
         registry = ProviderRegistry(db)
         llm = await registry.get_gateway_llm()
     except ValueError as exc:
+        logger.warning("Claude Code Gateway provider not configured: {}", exc)
         raise AnthropicError(
             500, "api_error",
-            f"No LLM provider configured for the Claude Code Gateway: {exc}",
+            "No LLM provider configured for the Claude Code Gateway — ask an administrator to configure one in Settings",
         ) from exc
 
     from app.config import settings
@@ -334,8 +338,12 @@ async def count_tokens(
     _identity: ResolvedIdentity = Depends(get_identity_from_gateway_token),
 ):
     await _require_enabled(db)
+    await check_token_rate_limit(_identity.employee_id, "gateway_count_tokens", max_requests=120, window_seconds=60)
 
-    system_text = _normalize_system(body.system)
-    neutral_messages = anthropic_messages_to_neutral([m.model_dump() for m in body.messages])
-    tools_chars = sum(len(json.dumps(t.model_dump())) for t in (body.tools or []))
+    try:
+        system_text = _normalize_system(body.system)
+        neutral_messages = anthropic_messages_to_neutral([m.model_dump() for m in body.messages])
+        tools_chars = sum(len(json.dumps(t.model_dump())) for t in (body.tools or []))
+    except (AttributeError, KeyError, TypeError, ValueError) as exc:
+        raise AnthropicError(400, "invalid_request_error", "Malformed message content blocks") from exc
     return {"input_tokens": _estimate_input_tokens(system_text, neutral_messages) + max(0, tools_chars // 4)}

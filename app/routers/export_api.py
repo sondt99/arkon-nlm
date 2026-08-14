@@ -23,7 +23,10 @@ from app.ai.registry import ProviderRegistry
 from app.database import get_db
 from app.database.models import ChatConversation, Employee
 from app.services import chat_service
-from app.services.mcp_auth_service import ResolvedIdentity, get_identity_from_export_token
+from app.services.mcp_auth_service import (
+    ResolvedIdentity,
+    get_identity_from_export_token,
+)
 from app.services.permission_engine import can_access_workspace
 from app.services.rate_limiter import check_token_rate_limit
 

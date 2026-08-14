@@ -978,15 +978,31 @@ class SkillService:
                 # and share the same first segment.
                 first_segments = {p.split('/')[0] for p in all_files}
                 has_single_root = len(first_segments) == 1 and all('/' in p for p in all_files)
-                
+
+                # [Security] Zip Slip + zip bomb guards (same limits as worker.py)
+                MAX_UNCOMPRESSED_SIZE = 10 * 1024 * 1024  # 10 MB
+                MAX_FILE_COUNT = 100
+                file_count = 0
+                total_size = 0
+
                 for member in zf.infolist():
-                    if member.is_dir(): 
+                    if member.is_dir():
                         continue
-                    
+
+                    filename = member.filename
+                    if filename.startswith(("/", "\\")) or "../" in filename or "..\\" in filename:
+                        raise HTTPException(400, "ZIP contains an unsafe file path.")
+                    file_count += 1
+                    if file_count > MAX_FILE_COUNT:
+                        raise HTTPException(400, f"ZIP contains too many files (max {MAX_FILE_COUNT}).")
+                    total_size += member.file_size
+                    if total_size > MAX_UNCOMPRESSED_SIZE:
+                        raise HTTPException(400, "ZIP uncompressed size too large (max 10MB).")
+
                     # Extract content
                     with zf.open(member) as f:
                         content = f.read()
-                    
+
                     member_path = member.filename
                     
                     # If the ZIP is "flat" (files at root), wrap them in skill_slug/
@@ -1007,7 +1023,7 @@ class SkillService:
             raise
         except Exception as e:
             logger.error(f"Failed to ingest ZIP to contribution: {e}")
-            raise HTTPException(500, f"ZIP extraction failed: {str(e)}")
+            raise HTTPException(500, "ZIP extraction failed.")
             
         await db.commit()
         return contribution

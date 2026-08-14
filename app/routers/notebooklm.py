@@ -140,6 +140,7 @@ async def notebooklm_auth_status(
 ):
     """Check whether a valid NotebookLM session exists (file-only check, no network)."""
     import json
+
     from app.services.notebooklm_service import _storage_path
 
     storage = _storage_path()
@@ -285,6 +286,7 @@ async def import_cookies(
 
     # Determine storage directory
     import json
+
     from app.services.notebooklm_service import _storage_path
 
     storage = _storage_path()
@@ -673,7 +675,7 @@ def _parse_drive_url(url: str) -> tuple[str, str, str]:
     m = re.search(r"/file/d/([a-zA-Z0-9_-]+)", url)
     if m:
         return m.group(1), "application/pdf", "Drive file"
-    from urllib.parse import urlparse, parse_qs
+    from urllib.parse import parse_qs, urlparse
     qs = parse_qs(urlparse(url).query)
     if "id" in qs:
         return qs["id"][0], "application/pdf", "Drive file"
@@ -753,7 +755,7 @@ async def nlm_add_source(
     db: AsyncSession = Depends(get_db),
     current_user=Depends(get_current_user),
 ):
-    from app.services.notebooklm_service import add_nlm_source_url, add_nlm_source_text
+    from app.services.notebooklm_service import add_nlm_source_text, add_nlm_source_url
     try:
         if body.kind == "url":
             if not body.url:
@@ -819,6 +821,7 @@ async def nlm_upload_source(
     """Upload a file (PDF, DOCX, markdown, CSV, EPUB, image) as a notebook source."""
     import os
     import tempfile
+
     from app.services.notebooklm_service import add_nlm_source_file
 
     content = await file.read()
@@ -875,7 +878,11 @@ async def nlm_artifact_preview_data(
     current_user=Depends(get_current_user),
 ):
     """Return structured preview data for a completed artifact."""
-    from app.services.notebooklm_service import TEXT_ARTIFACT_TYPES, get_artifact_preview_data, list_nlm_artifacts
+    from app.services.notebooklm_service import (
+        TEXT_ARTIFACT_TYPES,
+        get_artifact_preview_data,
+        list_nlm_artifacts,
+    )
 
     try:
         artifacts = await list_nlm_artifacts(nlm_id)
@@ -914,8 +921,12 @@ async def nlm_ingest_artifact(
     Binary PDF artifacts (slide_deck): download → MinIO → file ingestion pipeline.
     """
     from app.services.notebooklm_service import (
-        TEXT_ARTIFACT_TYPES, ARTIFACT_EXT, ARTIFACT_MIME,
-        get_artifact_text, get_artifact_bytes, list_nlm_artifacts,
+        ARTIFACT_EXT,
+        ARTIFACT_MIME,
+        TEXT_ARTIFACT_TYPES,
+        get_artifact_bytes,
+        get_artifact_text,
+        list_nlm_artifacts,
     )
     from app.worker import get_arq_pool
 
@@ -1013,8 +1024,11 @@ async def nlm_download_artifact(
     current_user=Depends(get_current_user),
 ):
     from app.services.notebooklm_service import (
-        ARTIFACT_EXT, ARTIFACT_MIME, BINARY_ARTIFACT_TYPES,
-        get_artifact_bytes, list_nlm_artifacts,
+        ARTIFACT_EXT,
+        ARTIFACT_MIME,
+        BINARY_ARTIFACT_TYPES,
+        get_artifact_bytes,
+        list_nlm_artifacts,
     )
     try:
         artifacts = await list_nlm_artifacts(nlm_id)

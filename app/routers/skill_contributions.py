@@ -30,8 +30,17 @@ from app.services.auth_service import (
 )
 from app.services.permission_engine import _get_user_permissions
 from app.services.skill_service import SkillService
+from app.services.storage_service import safe_relative_path
 
 router = APIRouter()
+
+
+def _safe_path(path: str) -> str:
+    """Sanitize a user-supplied contribution file path or raise 400."""
+    try:
+        return safe_relative_path(path)
+    except ValueError:
+        raise HTTPException(400, "Invalid file path")
 
 class SkillContributionCreate(BaseModel):
     skill_id: Optional[uuid.UUID] = None
@@ -271,12 +280,13 @@ async def get_skill_contribution_file_content(
     if user.role != "admin" and str(contribution.contributor_id) != str(user.id) and "skill:contribution:review" not in _get_user_permissions(user):
         raise HTTPException(403, "Access denied")
         
-    full_path = f"{contribution.storage_path}{path.lstrip('/')}"
+    full_path = f"{contribution.storage_path}{_safe_path(path)}"
     try:
         content_bytes = storage_service.download_file(full_path)
         return {"content": content_bytes.decode("utf-8", errors="ignore")}
     except Exception as e:
-        raise HTTPException(500, f"Failed to read file: {str(e)}")
+        logger.error(f"Failed to read contribution file {full_path}: {e}")
+        raise HTTPException(500, "Failed to read file")
 
 @router.post("/skill-contributions/{contribution_id}/rename")
 async def rename_skill_contribution_file(
@@ -298,15 +308,20 @@ async def rename_skill_contribution_file(
     if contribution.status == SkillContributionStatus.APPROVED.value:
         raise HTTPException(400, f"Cannot edit contribution in status: {contribution.status}")
 
-    parts = old_path.strip("/").split("/")
+    # Guards run on the NORMALIZED paths — checking the raw input would let
+    # shapes like "root/SKILL.md/." slip past endswith after normalization.
+    old_path = _safe_path(old_path)
+    new_path = _safe_path(new_path)
+
+    parts = old_path.split("/")
     if len(parts) == 1:
         raise HTTPException(400, "Cannot rename the root folder.")
-    
+
     if old_path.endswith("SKILL.md"):
         raise HTTPException(400, "Cannot rename SKILL.md.")
 
-    full_old_path = f"{contribution.storage_path}{old_path.lstrip('/')}"
-    full_new_path = f"{contribution.storage_path}{new_path.lstrip('/')}"
+    full_old_path = f"{contribution.storage_path}{old_path}"
+    full_new_path = f"{contribution.storage_path}{new_path}"
     
     if contribution.status == SkillContributionStatus.PENDING.value:
         contribution.status = SkillContributionStatus.DRAFT.value
@@ -334,8 +349,8 @@ async def delete_skill_contribution_file(
     if contribution.status == SkillContributionStatus.APPROVED.value:
         raise HTTPException(400, f"Cannot edit contribution in status: {contribution.status}")
 
-    full_path = f"{contribution.storage_path}{path.lstrip('/')}"
-    
+    full_path = f"{contribution.storage_path}{_safe_path(path)}"
+
     if contribution.status == SkillContributionStatus.PENDING.value:
         contribution.status = SkillContributionStatus.DRAFT.value
 
@@ -363,8 +378,8 @@ async def upload_skill_contribution_file(
     if contribution.status == SkillContributionStatus.APPROVED.value:
         raise HTTPException(400, f"Cannot edit contribution in status: {contribution.status}")
 
-    file_path = path if path else file.filename
-    
+    file_path = _safe_path(path if path else file.filename)
+
     # 1. Determine the actual root folder by checking existing files in storage
     from app.config import settings
     objects = storage_service.client.list_objects(settings.minio_bucket, prefix=contribution.storage_path, recursive=True)
@@ -407,7 +422,7 @@ async def upload_skill_contribution_file(
         return {"status": "ok", "path": file_path, "contribution_status": contribution.status}
     except Exception as e:
         logger.error(f"Failed to upload to MinIO: {str(e)}")
-        raise HTTPException(500, f"MinIO upload failed: {str(e)}")
+        raise HTTPException(500, "File upload failed")
 
 @router.put("/skill-contributions/{contribution_id}/files")
 async def put_skill_contribution_file(
@@ -428,9 +443,9 @@ async def put_skill_contribution_file(
     if contribution.status == SkillContributionStatus.APPROVED.value:
         raise HTTPException(400, f"Cannot edit contribution in status: {contribution.status}")
     
-    file_path = request.path
+    file_path = _safe_path(request.path)
     content = request.content
-    
+
     # 1. Determine the actual root folder by checking existing files in storage
     from app.config import settings
     objects = storage_service.client.list_objects(settings.minio_bucket, prefix=contribution.storage_path, recursive=True)

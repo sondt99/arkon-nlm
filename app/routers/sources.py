@@ -351,6 +351,7 @@ async def upload_source(
     file_name = file.filename or "unknown"
 
     import os as _os
+
     from app.services.zip_service import ALLOWED_EXTENSIONS
     ext = _os.path.splitext(file_name)[1].lower()
     if ext not in ALLOWED_EXTENSIONS:

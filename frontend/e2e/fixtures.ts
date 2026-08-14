@@ -6,7 +6,10 @@ const ADMIN_PASSWORD = process.env.PLAYWRIGHT_ADMIN_PASSWORD || "admin123";
 
 let cachedToken: string | null = null;
 
-async function fetchToken(): Promise<string> {
+export async function fetchToken(): Promise<string> {
+  // Token from global-setup (one login per run) — avoids the per-IP login
+  // rate limit that N parallel workers would otherwise trip.
+  if (process.env.PLAYWRIGHT_SHARED_TOKEN) return process.env.PLAYWRIGHT_SHARED_TOKEN;
   if (cachedToken) return cachedToken;
   const res = await fetch(`${API_URL}/api/auth/login`, {
     method: "POST",

@@ -13,6 +13,19 @@ from minio.error import S3Error
 from app.config import settings
 
 
+def safe_relative_path(path: str) -> str:
+    """Normalize a user-supplied relative object path and reject traversal.
+
+    Raises ValueError on absolute paths, backslashes resolving to traversal,
+    or any '..' segment — callers must translate that into an HTTP 400.
+    """
+    normalized = (path or "").replace("\\", "/").lstrip("/")
+    parts = [seg for seg in normalized.split("/") if seg not in ("", ".")]
+    if not parts or any(seg == ".." for seg in parts):
+        raise ValueError(f"Unsafe object path: {path!r}")
+    return "/".join(parts)
+
+
 class StorageService:
     """S3-compatible object storage via MinIO."""
 

@@ -439,7 +439,7 @@ async def conversation_to_wiki(
 
     # Generate summary (first non-empty line of content)
     summary_line = next(
-        (l.lstrip("#").strip() for l in content_md.splitlines() if l.strip() and not l.startswith("#")),
+        (line.lstrip("#").strip() for line in content_md.splitlines() if line.strip() and not line.startswith("#")),
         body.title.strip(),
     )
     summary = summary_line[:300]

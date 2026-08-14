@@ -8,11 +8,13 @@ import pytest
 
 from app.ai.embedding_catalog import (
     EMBEDDING_CATALOG,
+    LEGACY_SPEC_ID_ALIASES,
     SUPPORTED_DIMENSIONS,
     UnknownEmbeddingModel,
     get_spec,
     list_specs,
     list_specs_by_provider,
+    normalize_spec_id,
     specs_for_dimension,
 )
 
@@ -74,6 +76,19 @@ def test_specs_for_dimension_filters():
         out = list(specs_for_dimension(dim))
         assert out, f"no specs for dimension {dim}"
         assert all(s.dimension == dim for s in out)
+
+
+def test_legacy_aliases_resolve_to_canonical_specs():
+    """Pre-rename 9Router IDs must keep resolving (installs persisted them)."""
+    for legacy, canonical in LEGACY_SPEC_ID_ALIASES.items():
+        assert legacy not in EMBEDDING_CATALOG, "alias must not shadow a real spec"
+        assert canonical in EMBEDDING_CATALOG
+        assert normalize_spec_id(legacy) == canonical
+        assert get_spec(legacy).id == canonical
+
+
+def test_normalize_spec_id_passes_through_unknown_ids():
+    assert normalize_spec_id("custom/whatever") == "custom/whatever"
 
 
 def test_no_duplicate_provider_model_pairs():

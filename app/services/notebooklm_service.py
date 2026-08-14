@@ -10,14 +10,12 @@ Before any API call can succeed, the user must have logged in once with:
 (or via the /api/notebooklm/auth/status + /auth/login-url endpoints).
 """
 
-import uuid
 from pathlib import Path
 from typing import Optional
 
 from loguru import logger
 
 from app.config import settings
-
 
 # ---------------------------------------------------------------------------
 # Client factory
@@ -181,7 +179,8 @@ async def get_artifact_bytes(
     artifact_type: str,
 ) -> Optional[bytes]:
     """Download binary artifact bytes (audio, video, infographic, slide_deck)."""
-    import os, tempfile
+    import os
+    import tempfile
     _ext = {"audio": "mp3", "video": "mp4", "infographic": "png", "slide_deck": "pdf"}
     ext = _ext.get(artifact_type, "bin")
     async with await get_client() as client:

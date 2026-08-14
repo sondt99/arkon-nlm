@@ -13,11 +13,10 @@ Steps:
 """
 
 import asyncio
-from difflib import SequenceMatcher
 import json
 import re
 import string
-import uuid
+from difflib import SequenceMatcher
 from typing import TYPE_CHECKING, Optional
 
 from loguru import logger
@@ -623,10 +622,9 @@ async def run_planning_call(
     kt_extraction_hints: Optional[str] = None,
 ) -> dict:
     """Single LLM call to produce the Compilation Plan JSON."""
-    n_chars = len(source.full_text or "")
     # Calculate target based on the actual number of extracted concepts rather than just document length
     total_extracted_items = len(canonical_entities) + len(canonical_concepts)
-    
+
     if strategy == "single_pass":
         # Usually 1 page per 2-3 items, minimum 3, maximum 15
         target_pages = max(3, min(15, total_extracted_items // 2))
@@ -918,7 +916,10 @@ async def run_reduce_phase(
         kt_extraction_hints=kt_extraction_hints,
     )
 
-    from app.ai.mrp.security_artifacts import extract_security_artifacts, is_security_domain
+    from app.ai.mrp.security_artifacts import (
+        extract_security_artifacts,
+        is_security_domain,
+    )
     if is_security_domain(None, kt_extraction_hints):
         plan_dict["_security_artifacts"] = extract_security_artifacts(source.full_text or "")
     else:
@@ -937,7 +938,6 @@ async def run_reduce_phase(
     plan_dict["_concepts"] = canonical_concepts
 
     # 2.8 Persist plan (upsert: safe to re-run)
-    from sqlalchemy.dialects.postgresql import insert as pg_insert
 
     existing = (await session.execute(
         select(SourceCompilationPlan).where(SourceCompilationPlan.source_id == source.id)

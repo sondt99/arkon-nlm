@@ -116,7 +116,7 @@ class ProviderRegistry:
 
     async def get_active_embedding_spec_id(self) -> Optional[str]:
         """Return the spec_id currently active for search, or None if unset."""
-        from app.ai.embedding_catalog import EMBEDDING_CATALOG
+        from app.ai.embedding_catalog import EMBEDDING_CATALOG, normalize_spec_id
         from app.services.config_service import (
             ACTIVE_EMBEDDING_MODEL_KEY,
             ConfigService,
@@ -124,8 +124,10 @@ class ProviderRegistry:
 
         svc = ConfigService(self.db)
         spec_id = await svc.get(ACTIVE_EMBEDDING_MODEL_KEY)
-        if spec_id and spec_id in EMBEDDING_CATALOG:
-            return spec_id
+        if spec_id:
+            spec_id = normalize_spec_id(spec_id)
+            if spec_id in EMBEDDING_CATALOG:
+                return spec_id
         return None
 
     async def get_llm(self) -> LLMProvider:

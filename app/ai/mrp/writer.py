@@ -13,7 +13,6 @@ All writers run in parallel (asyncio.Semaphore(MAX_WRITER_CONCURRENCY)).
 """
 
 import asyncio
-import json
 import re
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, Optional
@@ -492,7 +491,10 @@ async def _write_page_simple(
         if existing_content else ""
     )
     evidence_blocks, citations_meta = _format_evidence_blocks(evidence)
-    from app.ai.mrp.security_artifacts import format_artifacts_for_prompt, preserve_missing_artifacts
+    from app.ai.mrp.security_artifacts import (
+        format_artifacts_for_prompt,
+        preserve_missing_artifacts,
+    )
     security_artifacts = security_artifacts or []
 
     prompt = _SIMPLE_WRITER_PROMPT.format(
@@ -611,7 +613,10 @@ async def _write_page_complex(
     Returns (content_md, summary, citations_meta).
     """
     from app.ai.agent_protocol import assistant_message_from_turn, tool_results_message
-    from app.ai.mrp.security_artifacts import format_artifacts_for_prompt, preserve_missing_artifacts
+    from app.ai.mrp.security_artifacts import (
+        format_artifacts_for_prompt,
+        preserve_missing_artifacts,
+    )
     security_artifacts = security_artifacts or []
     evidence_blocks, citations_meta = _format_evidence_blocks(evidence)
     existing_section = (

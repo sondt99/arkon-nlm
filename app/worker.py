@@ -13,7 +13,8 @@ import uuid
 import zipfile
 from typing import Optional
 
-from arq import cron, func as arq_func
+from arq import cron
+from arq import func as arq_func
 from arq.connections import ArqRedis, RedisSettings, create_pool
 from loguru import logger
 from sqlalchemy import select
@@ -48,7 +49,6 @@ async def get_arq_pool() -> ArqRedis:
 
 from app.utils.progress import ProgressTracker  # noqa: E402
 
-
 # ---------------------------------------------------------------------------
 # Ingestion tasks
 # ---------------------------------------------------------------------------
@@ -61,7 +61,7 @@ async def ingest_file_task(ctx: dict, source_id: str):
     File must already be uploaded to MinIO before this task is enqueued.
     """
     from app.database import async_session_factory
-    from app.database.models import KnowledgeType, Source, SourceImage
+    from app.database.models import Source, SourceImage
     from app.services.image_service import extract_images
     from app.services.kb_service import (
         _extract_text_from_file,
@@ -141,14 +141,8 @@ async def ingest_file_task(ctx: dict, source_id: str):
             await session.commit()
             await tracker.update(50, f"Outline: {len(source.outline_json or [])} top-level sections")
 
-            # --- Step 5: Resolve KnowledgeType context (52%) ---
-            kt_slug = kt_name = kt_desc = None
-            if source.knowledge_type_id:
-                kt = await session.get(KnowledgeType, source.knowledge_type_id)
-                if kt:
-                    kt_slug, kt_name, kt_desc = kt.slug, kt.name, kt.description
-
-            # --- Step 6: Enqueue MRP pipeline + image captioning in parallel ---
+            # --- Step 5: Enqueue MRP pipeline + image captioning in parallel ---
+            # (KnowledgeType context is resolved by ingest_map_reduce_task itself.)
             await tracker.update(55, "Queuing compilation pipeline...")
             pool = await get_arq_pool()
             job, _ = await asyncio.gather(
@@ -192,7 +186,7 @@ async def ingest_file_task(ctx: dict, source_id: str):
 async def ingest_url_task(ctx: dict, source_id: str):
     """arq task: URL ingestion → wiki compilation."""
     from app.database import async_session_factory
-    from app.database.models import KnowledgeType, Source
+    from app.database.models import Source
     from app.services.kb_service import _extract_text_from_url
     from app.services.source_outline import assemble_full_text, build_outline
 
@@ -230,12 +224,6 @@ async def ingest_url_task(ctx: dict, source_id: str):
             source.full_text = full_text
             source.page_offsets = page_offsets
             await session.commit()
-
-            kt_slug = kt_name = kt_desc = None
-            if source.knowledge_type_id:
-                kt = await session.get(KnowledgeType, source.knowledge_type_id)
-                if kt:
-                    kt_slug, kt_name, kt_desc = kt.slug, kt.name, kt.description
 
             await tracker.update(55, "Queuing compilation pipeline...")
             pool = await get_arq_pool()
@@ -487,11 +475,12 @@ async def notebooklm_generate_task(ctx: dict, artifact_db_id: str):
         report_format = artifact.report_format
 
         try:
+            from pathlib import Path
+
             from notebooklm import NotebookLMClient
             from notebooklm.rpc import ReportFormat
 
             from app.config import settings
-            from pathlib import Path
 
             storage_path = Path(settings.notebooklm_storage_path) if settings.notebooklm_storage_path else None
             async with await NotebookLMClient.from_storage(path=storage_path) as client:
@@ -589,10 +578,10 @@ async def notebooklm_ingest_artifact_task(ctx: dict, artifact_db_id: str):
 
         try:
             from app.services.notebooklm_service import (
-                BINARY_ARTIFACT_TYPES,
-                TEXT_ARTIFACT_TYPES,
                 ARTIFACT_EXT,
                 ARTIFACT_MIME,
+                BINARY_ARTIFACT_TYPES,
+                TEXT_ARTIFACT_TYPES,
                 get_artifact_bytes,
                 get_artifact_text,
             )
@@ -905,7 +894,9 @@ async def ingest_map_reduce_task(ctx: dict, source_id: str, auto_approve: bool =
                 kt = await session.get(KnowledgeType, source.knowledge_type_id)
                 if kt:
                     kt_slug, kt_name, kt_desc = kt.slug, kt.name, kt.description
-                    from app.ai.knowledge_type_context import build_effective_extraction_hints
+                    from app.ai.knowledge_type_context import (
+                        build_effective_extraction_hints,
+                    )
                     kt_hints = build_effective_extraction_hints(
                         kt.slug, kt.name, kt.description, kt.extraction_hints,
                     )
@@ -951,7 +942,7 @@ async def ingest_map_reduce_task(ctx: dict, source_id: str, auto_approve: bool =
                         src.status = "error"
                         src.error_message = error_msg
                         src.progress = 0
-                        src.progress_message = f"Error: {str(e)[:200]}"
+                        src.progress_message = f"Error: {error_msg[:200]}"
                         await err_session.commit()
 
             try:
@@ -998,7 +989,9 @@ async def ingest_refine_task(ctx: dict, source_id: str):
                 kt = await session.get(KnowledgeType, source.knowledge_type_id)
                 if kt:
                     kt_slug, kt_name, kt_desc = kt.slug, kt.name, kt.description
-                    from app.ai.knowledge_type_context import build_effective_extraction_hints
+                    from app.ai.knowledge_type_context import (
+                        build_effective_extraction_hints,
+                    )
                     kt_hints = build_effective_extraction_hints(
                         kt.slug, kt.name, kt.description, kt.extraction_hints,
                     )
@@ -1077,7 +1070,7 @@ async def caption_images_task(ctx: dict, source_id: str):
         registry = ProviderRegistry(session)
         vision_provider = await registry.get_vision()
         if not vision_provider:
-            logger.info(f"caption_images_task: no vision provider configured, skipping")
+            logger.info("caption_images_task: no vision provider configured, skipping")
             return
 
         rows = (await session.execute(

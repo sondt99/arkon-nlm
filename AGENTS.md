@@ -175,12 +175,14 @@ Arkon exposes a FastMCP server for Codex Desktop and Codex to query the enterpri
 {
   "mcpServers": {
     "arkon": {
-      "url": "http://localhost:8000/mcp",
+      "url": "http://localhost:3119/mcp",
       "headers": { "Authorization": "Bearer <your-mcp-token>" }
     }
   }
 }
 ```
+
+Use `https://arkon.ladybug.net/mcp` instead of `localhost:3119` when connecting from another machine. Both go through nginx, which routes `/mcp` to the API (`nginx/nginx.conf`) — the API port itself is not published.
 
 Get a token from an Arkon admin. Tokens are scoped to specific knowledge types — what you can read depends on your token.
 

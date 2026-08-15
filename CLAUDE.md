@@ -175,12 +175,14 @@ Arkon exposes a FastMCP server for Claude Desktop and Claude Code to query the e
 {
   "mcpServers": {
     "arkon": {
-      "url": "http://localhost:8000/mcp",
+      "url": "http://localhost:3119/mcp",
       "headers": { "Authorization": "Bearer <your-mcp-token>" }
     }
   }
 }
 ```
+
+Use `https://arkon.ladybug.net/mcp` instead of `localhost:3119` when connecting from another machine. Both go through nginx, which routes `/mcp` to the API (`nginx/nginx.conf`) — the API port itself is not published.
 
 Get a token from an Arkon admin. Tokens are scoped to specific knowledge types — what you can read depends on your token.
 

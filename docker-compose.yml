@@ -262,6 +262,7 @@ services:
     networks:
       - frontend
       - backend
+      - npm
 
 # Persistent data lives in Docker NAMED VOLUMES (Docker VM disk), NOT E: bind
 # mounts. E: is a spinning HDD whose mount into the Docker VM keeps dropping
@@ -277,3 +278,12 @@ volumes:
 networks:
   frontend:
   backend:
+  # Shared with the LAN nginx-proxy-manager, which proxies arkon.ladybug.net to
+  # http://arkon_nginx:80 by container name. NPM lives on this pre-existing
+  # network; without joining it, a recreated arkon_nginx is invisible to NPM
+  # and every request through the domain returns 502 (localhost:3119 still
+  # works, which makes the breakage easy to miss). Declared external so compose
+  # only joins it and never creates/removes it.
+  npm:
+    external: true
+    name: arkon_default

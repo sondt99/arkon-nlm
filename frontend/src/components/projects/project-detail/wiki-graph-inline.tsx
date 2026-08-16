@@ -178,9 +178,10 @@ export function WikiGraphInline({ projectId, onBack }: { projectId: string; onBa
               {previewLoading ? "Loading..." : previewData?.title ?? previewSlug}
             </SheetTitle>
             <SheetClose
+              aria-label="Close preview"
               render={<Button variant="ghost" size="icon-sm" className="h-8 w-8 rounded-full text-muted-foreground hover:text-foreground" />}
             >
-              <span className="material-symbols-outlined text-[18px]">close</span>
+              <span className="material-symbols-outlined text-[18px]" aria-hidden="true">close</span>
             </SheetClose>
           </SheetHeader>
           <div className="flex-1 overflow-y-auto p-6 bg-background">

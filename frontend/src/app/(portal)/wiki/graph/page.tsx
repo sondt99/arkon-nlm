@@ -310,11 +310,12 @@ export default function WikiGraphPage() {
                 View Full
               </Button>
               <SheetClose
+                aria-label="Close preview"
                 render={
                   <Button variant="ghost" size="icon-sm" className="h-8 w-8 rounded-full text-muted-foreground hover:text-foreground" />
                 }
               >
-                <span className="material-symbols-outlined text-[18px]">close</span>
+                <span className="material-symbols-outlined text-[18px]" aria-hidden="true">close</span>
               </SheetClose>
             </div>
           </SheetHeader>

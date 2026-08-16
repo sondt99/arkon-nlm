@@ -672,8 +672,8 @@ export function SkillEditor({ contributionId, onSubmitted, onStatusChange, mode 
                 className="hidden"
                 onChange={handleUploadFile}
               />
-              <Button variant="ghost" size="icon" className="h-7 w-7" onClick={loadFiles} title="Refresh">
-                <span className="material-symbols-outlined text-sm">refresh</span>
+              <Button variant="ghost" size="icon" className="h-7 w-7" onClick={loadFiles} title="Refresh" aria-label="Refresh file list">
+                <span className="material-symbols-outlined text-sm" aria-hidden="true">refresh</span>
               </Button>
             </div>
           </div>

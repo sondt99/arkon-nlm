@@ -75,19 +75,20 @@
   --secondary: #e4eee8;
   --secondary-foreground: #284a3c;
   --muted: #e6efea;
-  --muted-foreground: #64766e;
+  --muted-foreground: #566860; /* darkened from #64766e for WCAG AA (≥4.5:1) on the light background */
   --accent: #dcf5e8;
   --accent-foreground: #075e45;
   --destructive: #d13b4a;
   --border: rgba(22, 91, 64, 0.15);
   --input: rgba(22, 91, 64, 0.2);
   --ring: #0aa574;
-  /* Charts */
-  --chart-1: #c2652a;
-  --chart-2: #e08850;
-  --chart-3: #f0a878;
-  --chart-4: #fbe8d8;
-  --chart-5: #78706a;
+  /* Charts — green/teal categorical set, harmonized with the emerald primary
+     (was a leftover warm sienna palette that clashed with the lab-terminal system). */
+  --chart-1: #087f5b;
+  --chart-2: #0e7490;
+  --chart-3: #51cf99;
+  --chart-4: #0f766e;
+  --chart-5: #64766e;
   --radius: 0.625rem;
   /* Sidebar */
   --sidebar: #edf4f0;
@@ -291,6 +292,32 @@
   to { transform: rotate(360deg); }
 }
 
+/* Skeleton shimmer — a soft light sweep over the pulsing base, so loading
+   states read as "working" rather than static. Falls back to the base pulse
+   under prefers-reduced-motion (the sweep is disabled by the global rule). */
+.arkon-skeleton {
+  position: relative;
+  overflow: hidden;
+}
+
+.arkon-skeleton::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  transform: translateX(-100%);
+  background: linear-gradient(
+    90deg,
+    transparent,
+    color-mix(in srgb, var(--foreground) 6%, transparent),
+    transparent
+  );
+  animation: arkon-shimmer 1.8s ease-in-out infinite;
+}
+
+@keyframes arkon-shimmer {
+  100% { transform: translateX(100%); }
+}
+
 /* Sahara shadow utility */
 .shadow-sahara {
   box-shadow: 0 12px 36px rgba(2, 24, 15, 0.06), 0 0 0 1px var(--grid-line);
@@ -376,12 +403,14 @@ input, textarea, select {
 }
 
 .sidebar-scrollbar::-webkit-scrollbar-thumb {
-  background: rgba(0, 0, 0, 0.08);
+  /* Token-based so the thumb stays visible in dark mode (was hardcoded black,
+     invisible against the near-black dark sidebar). */
+  background: color-mix(in srgb, var(--foreground) 14%, transparent);
   border-radius: 4px;
 }
 
 .sidebar-scrollbar::-webkit-scrollbar-thumb:hover {
-  background: rgba(0, 0, 0, 0.14);
+  background: color-mix(in srgb, var(--foreground) 24%, transparent);
 }
 
 /* Hide scrollbar until hover */
@@ -391,5 +420,5 @@ input, textarea, select {
 }
 
 .sidebar-scrollbar:hover {
-  scrollbar-color: rgba(0, 0, 0, 0.08) transparent;
+  scrollbar-color: color-mix(in srgb, var(--foreground) 14%, transparent) transparent;
 }

@@ -142,10 +142,16 @@ function ImportCookiesDialog({
     }
     setLoading(true);
     try {
-      const res = await api<{ success: boolean; message: string; email?: string }>(
+      const res = await api<{ success: boolean; verified?: boolean; message: string; email?: string }>(
         "/api/notebooklm/auth/import-cookies",
         { method: "POST", body: { cookies } }
       );
+      // The server now live-verifies the cookies. Only treat it as connected when
+      // Google actually accepted them; otherwise show why (e.g. Chrome DBSC → use Firefox).
+      if (res.verified === false) {
+        setError(res.message || "Cookies were saved but Google rejected them.");
+        return;
+      }
       setCookieJson("");
       onConnected(res.email ?? null);
       onClose();
@@ -169,7 +175,8 @@ function ImportCookiesDialog({
               <span className="text-foreground/80">
                 Install the{" "}
                 <a href="https://cookie-editor.com" target="_blank" rel="noopener noreferrer" className="text-primary underline underline-offset-2">Cookie-Editor</a>{" "}
-                browser extension (Chrome or Firefox).
+                extension in <strong>Firefox</strong> (recommended). Chrome sessions are
+                device-locked (DBSC) and its cookies are rejected when replayed from the server.
               </span>
             </li>
             <li className="flex gap-2.5">

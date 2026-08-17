@@ -308,7 +308,39 @@ async def import_cookies(
     )
     logger.info(f"NLM session cookies saved: {len(converted)} cookies, required present: {MINIMUM_REQUIRED_COOKIES}")
 
-    return {"success": True, "message": f"Session cookies saved ({len(converted)} cookies). Try creating a notebook to verify."}
+    # Live verification: saving the file only proves the format is valid, not that
+    # Google accepts the cookies. Do one real call so the user learns immediately
+    # whether the session works — and gets the DBSC/Firefox hint if it doesn't.
+    from app.services.notebooklm_service import get_client
+
+    try:
+        async with await get_client() as client:
+            await client.refresh_auth()
+        return {
+            "success": True,
+            "verified": True,
+            "message": f"Connected — session verified ({len(converted)} cookies).",
+        }
+    except Exception as e:
+        if _is_auth_expired(e):
+            logger.warning("NLM cookies saved but rejected by Google (likely DBSC-bound): {}", e)
+            return {
+                "success": True,
+                "verified": False,
+                "message": (
+                    "Cookies saved but Google rejected them. This usually means the "
+                    "session is Chrome DBSC-bound (device-locked) and cannot be replayed "
+                    "from the server. Export the SAME account's cookies from FIREFOX "
+                    "(logged in to notebooklm.google.com) and import those — Firefox "
+                    "sessions are not DBSC-enrolled and work server-side."
+                ),
+            }
+        logger.exception("NLM cookie verification failed with a non-auth error")
+        return {
+            "success": True,
+            "verified": False,
+            "message": f"Cookies saved but verification failed: {e}",
+        }
 
 
 @router.delete("/notebooklm/auth/session", status_code=200)

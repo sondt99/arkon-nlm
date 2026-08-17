@@ -1594,6 +1594,7 @@ export default function NotebookLMPage() {
   const [disconnecting, setDisconnecting] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
   const [lastRefreshed, setLastRefreshed] = useState<number | null>(null);
+  const [sessionMsg, setSessionMsg] = useState<string | null>(null);
 
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
@@ -1614,11 +1615,22 @@ export default function NotebookLMPage() {
 
   const handleRefreshSession = async () => {
     setRefreshing(true);
+    setSessionMsg(null);
     try {
       const r = await api<{ success: boolean; message: string; last_refreshed?: number }>("/api/notebooklm/auth/refresh", { method: "POST" });
-      if (r.success && r.last_refreshed) setLastRefreshed(r.last_refreshed);
-    } catch {
-      // ignore
+      if (r.success) {
+        setAuthOk(true);
+        if (r.last_refreshed) setLastRefreshed(r.last_refreshed);
+      } else {
+        // The status endpoint only checks that the cookie file exists; a live
+        // refresh is what actually proves the session works. If it fails, the
+        // session is dead — flip to the reconnect prompt and say why.
+        setAuthOk(false);
+        setSessionMsg(r.message || "Session expired. Reconnect to continue.");
+      }
+    } catch (e) {
+      if (isSessionExpired(e)) setAuthOk(false);
+      setSessionMsg(e instanceof Error ? e.message : "Could not refresh the session.");
     } finally {
       setRefreshing(false);
     }
@@ -1776,7 +1788,9 @@ export default function NotebookLMPage() {
             <span className="material-symbols-outlined text-[16px] text-amber-600">warning</span>
             <div className="flex-1 min-w-0">
               <span className="text-[13px] font-medium text-amber-800">No active NotebookLM session</span>
-              <span className="text-[12px] text-amber-700 ml-2">Import your Google cookies to connect.</span>
+              <span className="text-[12px] text-amber-700 ml-2">
+                {sessionMsg || "Import your Google cookies to connect."}
+              </span>
             </div>
             <Button size="sm" className="h-7 px-3 text-[12px] gap-1.5 shrink-0" onClick={() => setShowImport(true)}>
               <span className="material-symbols-outlined text-[13px]">login</span>
@@ -1923,6 +1937,7 @@ export default function NotebookLMPage() {
         onConnected={(email) => {
           setAuthOk(true);
           setAuthEmail(email);
+          setSessionMsg(null);
           loadNotebooks();
         }}
       />

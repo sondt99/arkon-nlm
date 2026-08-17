@@ -693,16 +693,35 @@ class NLMChatAsk(BaseModel):
     conversation_id: Optional[str] = None
 
 
-def _nlm_error(e: Exception) -> HTTPException:
+# Substrings notebooklm-py emits when the Google session is dead but the error
+# is NOT the typed AuthError (e.g. a login redirect surfaced as a generic error).
+# Matching these keeps expiry mapped to 401 so the UI reliably prompts a reconnect.
+_AUTH_EXPIRED_MARKERS = (
+    "authentication expired",
+    "accounts.google.com",
+    "notebooklm login",
+    "re-authenticate",
+    "not authenticated",
+)
+
+
+def _is_auth_expired(e: Exception) -> bool:
     try:
         from notebooklm.exceptions import AuthError
         if isinstance(e, AuthError):
-            return HTTPException(
-                status_code=401,
-                detail="NotebookLM session expired. Re-import cookies to reconnect.",
-            )
+            return True
     except ImportError:
         pass
+    msg = str(e).lower()
+    return any(marker in msg for marker in _AUTH_EXPIRED_MARKERS)
+
+
+def _nlm_error(e: Exception) -> HTTPException:
+    if _is_auth_expired(e):
+        return HTTPException(
+            status_code=401,
+            detail="NotebookLM session expired. Re-import cookies to reconnect.",
+        )
     return HTTPException(status_code=502, detail=f"NotebookLM API error: {e}")
 
 

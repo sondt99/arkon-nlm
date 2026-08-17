@@ -123,7 +123,9 @@ function ImportCookiesDialog({
   onClose: () => void;
   onConnected: (email: string | null) => void;
 }) {
+  const [mode, setMode] = useState<"master" | "cookies">("master");
   const [cookieJson, setCookieJson] = useState("");
+  const [masterJson, setMasterJson] = useState("");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
 
@@ -162,12 +164,116 @@ function ImportCookiesDialog({
     }
   };
 
+  const submitMaster = async () => {
+    setError("");
+    let parsed: { master_token?: string; email?: string; android_id?: string };
+    try {
+      parsed = JSON.parse(masterJson.trim());
+    } catch {
+      setError("Invalid JSON — paste the whole master_token.json file.");
+      return;
+    }
+    if (!parsed.master_token || !parsed.email || !parsed.android_id) {
+      setError("master_token.json must contain master_token, email and android_id.");
+      return;
+    }
+    setLoading(true);
+    try {
+      const res = await api<{ success: boolean; verified?: boolean; message: string }>(
+        "/api/notebooklm/auth/master-token",
+        { method: "POST", body: { master_token: parsed.master_token, email: parsed.email, android_id: parsed.android_id } }
+      );
+      if (res.verified === false) {
+        setError(res.message || "Master token was saved but Google rejected it.");
+        return;
+      }
+      setMasterJson("");
+      onConnected(parsed.email ?? null);
+      onClose();
+    } catch (e: unknown) {
+      setError(e instanceof Error ? e.message : "Failed to install master token");
+    } finally {
+      setLoading(false);
+    }
+  };
+
   return (
     <Dialog open={open} onOpenChange={(v) => !v && onClose()}>
       <DialogContent className="max-w-lg">
         <DialogHeader>
           <DialogTitle>Connect NotebookLM Session</DialogTitle>
         </DialogHeader>
+
+        {/* Mode switch: master token (headless, recommended for servers) vs raw cookies */}
+        <div className="flex items-center gap-1 mb-1 border-b border-border">
+          {([["master", "Master token"], ["cookies", "Cookies"]] as const).map(([m, label]) => (
+            <button
+              key={m}
+              onClick={() => { setMode(m); setError(""); }}
+              className={`px-3 py-2 text-xs font-medium border-b-2 transition-colors ${
+                mode === m ? "border-primary text-primary" : "border-transparent text-muted-foreground hover:text-foreground"
+              }`}
+            >
+              {label}
+              {m === "master" && <span className="ml-1.5 text-[10px] text-primary/70">recommended</span>}
+            </button>
+          ))}
+        </div>
+
+        {mode === "master" ? (
+          <div className="space-y-4 pt-1">
+            <div className="rounded-md bg-primary/5 border border-primary/20 px-3 py-2.5 text-[12px] text-foreground/80 space-y-1.5">
+              <p>
+                A <strong>master token</strong> lets this server mint NotebookLM sessions on its own —
+                it survives cookie expiry and works where cookie import is blocked (device-bound / DBSC).
+              </p>
+              <p className="text-amber-700">
+                ⚠ It is a <strong>full-account, long-lived</strong> credential (survives password changes).
+                Use a <strong>dedicated / throwaway Google account</strong>, never your primary one.
+              </p>
+            </div>
+            <ol className="space-y-2.5 text-[13px]">
+              <li className="flex gap-2.5">
+                <span className="flex-none w-5 h-5 rounded-full bg-primary/10 text-primary text-[11px] font-semibold flex items-center justify-center mt-0.5">1</span>
+                <span className="text-foreground/80">On any machine with a browser: <code className="text-[11px] bg-muted px-1 rounded">pip install &quot;notebooklm-py[headless]&quot;</code></span>
+              </li>
+              <li className="flex gap-2.5">
+                <span className="flex-none w-5 h-5 rounded-full bg-primary/10 text-primary text-[11px] font-semibold flex items-center justify-center mt-0.5">2</span>
+                <span className="text-foreground/80">Run <code className="text-[11px] bg-muted px-1 rounded">notebooklm login --master-token</code> and sign in with the dedicated account (one time).</span>
+              </li>
+              <li className="flex gap-2.5">
+                <span className="flex-none w-5 h-5 rounded-full bg-primary/10 text-primary text-[11px] font-semibold flex items-center justify-center mt-0.5">3</span>
+                <span className="text-foreground/80">Open the generated <code className="text-[11px] bg-muted px-1 rounded">master_token.json</code> and paste its contents below.</span>
+              </li>
+            </ol>
+            <div>
+              <label className="text-[13px] font-medium text-foreground mb-1.5 block">master_token.json</label>
+              <textarea
+                value={masterJson}
+                onChange={(e) => setMasterJson(e.target.value)}
+                placeholder='{"master_token": "aas_et/...", "email": "...", "android_id": "..."}'
+                rows={5}
+                className="w-full rounded-md border border-border bg-muted/30 px-3 py-2 text-[12px] font-mono text-foreground placeholder:text-muted-foreground/50 focus:outline-none focus:ring-2 focus:ring-primary/30 resize-none"
+              />
+            </div>
+            {error && (
+              <p className="text-[12px] text-red-600 flex items-start gap-1.5">
+                <span className="material-symbols-outlined text-[13px] mt-0.5">error</span>
+                {error}
+              </p>
+            )}
+            <div className="flex justify-end gap-2 pt-1">
+              <Button variant="outline" onClick={onClose} disabled={loading}>Cancel</Button>
+              <Button onClick={submitMaster} disabled={loading || !masterJson.trim()} className="gap-1.5">
+                {loading ? (
+                  <><span className="material-symbols-outlined text-[14px] animate-spin">progress_activity</span>Connecting…</>
+                ) : (
+                  <><span className="material-symbols-outlined text-[14px]">key</span>Install &amp; connect</>
+                )}
+              </Button>
+            </div>
+          </div>
+        ) : (
         <div className="space-y-4 pt-1">
           <ol className="space-y-2.5 text-[13px]">
             <li className="flex gap-2.5">
@@ -224,6 +330,7 @@ function ImportCookiesDialog({
             </Button>
           </div>
         </div>
+        )}
       </DialogContent>
     </Dialog>
   );

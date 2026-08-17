@@ -42,8 +42,11 @@ dependencies = [
     # Worker queue
     "arq>=0.26",
     "redis[hiredis]>=5.0",
-    # NotebookLM integration
-    "notebooklm-py[markdown]>=0.4.1",
+    # NotebookLM integration. The [headless] extra adds gpsoauth for master-token
+    # auth (ADR-0023): mint web cookies server-side from a durable master token, so
+    # a headless deploy survives cookie expiry without a per-session browser and
+    # without replaying DBSC-bound browser cookies (which Google refuses server-side).
+    "notebooklm-py[markdown,headless]>=0.8.1",
     # Security
     "cryptography>=50.0",       # PYSEC-2026-3552
     "mammoth>=1.12.0",

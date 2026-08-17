@@ -60,17 +60,24 @@ expiring cookie file. The library's own guidance: **use a dedicated / throwaway 
 account for servers**, never your primary account. It is stored `0600` and redacted from
 logs. The flow uses Google's unofficial Android auth path (`gpsoauth`) and is ToS-grey.
 
-### Adoption plan for arkon (proposed)
-1. Bump the backend dependency to `notebooklm-py[markdown,headless]>=0.8.1` (adds `gpsoauth`
-   + the complete master-token modules) and rebuild the API image.
-2. Get a `master_token.json` into the `notebooklm` volume beside `storage_state.json`, via
-   one of:
-   - **A** — run `notebooklm login --master-token` once (anywhere with the lib + a browser),
-     then upload the resulting `master_token.json` through a small arkon admin endpoint.
-   - **B** — an arkon endpoint that takes the single-use `oauth_token` (captured from a
-     browser visiting the EmbeddedSetup URL) and mints `master_token.json` in-container.
-3. Point the client's profile dir at the volume so it finds `master_token.json` and
-   auto-recovers.
+### Adoption in arkon (IMPLEMENTED)
+1. Backend dependency is `notebooklm-py[markdown,headless]>=0.8.1` (adds `gpsoauth` + the
+   master-token modules).
+2. `POST /api/notebooklm/auth/master-token` (admin only) accepts the contents of a
+   `master_token.json` (`{master_token, email, android_id}`), writes it `0600` beside
+   `storage_state.json` in the `notebooklm` volume, removes the stale cookie session so the
+   client mints cleanly, and **live-verifies** by minting a session (`verified: true|false`).
+   `DELETE /api/notebooklm/auth/session` now also removes the master token.
+3. The NotebookLM page's Connect dialog has a **Master token** tab (default) with the mint
+   instructions and the dedicated-account warning; the Cookies tab remains for the fallback.
+
+**How to mint (one time, on any machine with a browser):**
+```
+pip install "notebooklm-py[headless]"
+notebooklm login --master-token      # sign in with a DEDICATED / throwaway account
+```
+Then open the generated `master_token.json` and paste its contents into the Master token tab.
+The value is never logged and lives only in the runtime `notebooklm` volume.
 
 ### Fallback without master token
 - A **personal Google account without Advanced Protection** and not under a Workspace policy

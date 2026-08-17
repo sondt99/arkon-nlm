@@ -354,11 +354,97 @@ async def import_cookies(
         }
 
 
+class MasterTokenImport(BaseModel):
+    # Contents of the master_token.json produced by `notebooklm login --master-token`.
+    master_token: str
+    email: str
+    android_id: str
+
+
+@router.post("/notebooklm/auth/master-token", status_code=200)
+async def import_master_token(
+    body: MasterTokenImport,
+    current_user=Depends(require_admin),
+):
+    """Install a Google master token for headless auth (notebooklm-py ADR-0023).
+
+    Unlike cookie import, a master token lets the server MINT fresh NotebookLM web
+    cookies on demand (via gpsoauth), so it survives cookie expiry and Google's
+    server-side rejection of DBSC-bound browser cookies. Mint the token once with
+    `notebooklm login --master-token` (a dedicated/throwaway account is strongly
+    recommended — it is a full-account, long-lived credential) and paste the
+    resulting master_token.json here.
+
+    Stored 0600 beside storage_state.json; the value is never logged.
+    """
+    import json
+    import os
+
+    from app.services.notebooklm_service import _storage_path
+
+    if not (body.master_token.strip() and body.email.strip() and body.android_id.strip()):
+        raise HTTPException(status_code=400, detail="master_token, email and android_id are required")
+
+    storage = _storage_path()
+    if storage is None:
+        try:
+            from notebooklm.paths import get_storage_path as nlm_storage_path
+            storage = nlm_storage_path().parent
+        except Exception:
+            raise HTTPException(status_code=500, detail="NOTEBOOKLM_STORAGE_PATH is not configured on the server.")
+
+    storage.mkdir(parents=True, exist_ok=True)
+    mt_file = storage / "master_token.json"
+    mt_file.write_text(
+        json.dumps({
+            "master_token": body.master_token.strip(),
+            "email": body.email.strip(),
+            "android_id": body.android_id.strip(),
+        }),
+        encoding="utf-8",
+    )
+    try:
+        os.chmod(mt_file, 0o600)
+    except OSError:
+        pass
+
+    # Remove any stale cookie session so the client mints cleanly from the token
+    # (from_storage takes the "storage absent -> mint from sibling token" path).
+    stale = storage / "storage_state.json"
+    if stale.exists():
+        stale.unlink()
+
+    logger.info("NLM master token installed for {} (value not logged)", body.email.strip())
+
+    # Verify: the client should now mint a working session from the token.
+    from app.services.notebooklm_service import get_client
+
+    try:
+        async with await get_client() as client:
+            await client.refresh_auth()
+        return {"success": True, "verified": True, "message": f"Connected — master token verified for {body.email.strip()}."}
+    except Exception as e:
+        if _is_auth_expired(e):
+            logger.warning("NLM master token installed but Google rejected the mint: {}", e)
+            return {
+                "success": True,
+                "verified": False,
+                "message": (
+                    "Master token saved, but Google rejected it when minting a session. "
+                    "The token may be revoked/invalid, or the account blocks the Android "
+                    "auth path (2FA/Advanced Protection). Re-run 'notebooklm login "
+                    "--master-token' with a personal/throwaway account and try again."
+                ),
+            }
+        logger.exception("NLM master token verification failed with a non-auth error")
+        return {"success": True, "verified": False, "message": f"Master token saved but verification failed: {e}"}
+
+
 @router.delete("/notebooklm/auth/session", status_code=200)
 async def clear_session(
     current_user=Depends(require_admin),
 ):
-    """Clear the stored NotebookLM session (logout)."""
+    """Clear the stored NotebookLM session (logout). Also removes the master token."""
     from app.services.notebooklm_service import _storage_path
 
     storage = _storage_path()
@@ -371,8 +457,9 @@ async def clear_session(
 
     state_file = storage / "storage_state.json"
     context_file = storage / "context.json"
+    master_token_file = storage / "master_token.json"
 
-    for f in [state_file, context_file]:
+    for f in [state_file, context_file, master_token_file]:
         if f.exists():
             f.unlink()
 

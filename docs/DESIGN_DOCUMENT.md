@@ -888,7 +888,14 @@ chat_messages
   ]
 }
 ```
-**Validation:** Yêu cầu tối thiểu `SID` và `__Secure-1PSIDTS`.
+**Validation:** Yêu cầu tối thiểu `SID` và `__Secure-1PSIDTS`. Sau khi lưu, endpoint **live-verify** (gọi `refresh_auth` thật) và trả `verified: true|false`. Lưu ý: Google chặn replay cookie server-side với nhiều tài khoản (DBSC/Workspace policy) — khi đó `verified=false`; dùng master token (dưới đây). Xem `docs/notebooklm-auth.md`.
+
+---
+
+#### `POST /api/notebooklm/auth/master-token`
+**Mô tả:** Cài **master token** Google (headless auth, notebooklm-py ADR-0023) để server tự mint cookie NotebookLM — không cần replay cookie browser, vượt được DBSC. Chỉ admin.
+**Request Body:** `{ "master_token": "aas_et/...", "email": "...", "android_id": "..." }` (nội dung `master_token.json` do `notebooklm login --master-token` tạo).
+**Hành vi:** ghi `master_token.json` (0600) cạnh `storage_state.json`, xóa cookie session cũ, rồi mint + verify → `verified: true|false`. **Bảo mật:** master token là credential toàn tài khoản, lâu dài — dùng tài khoản riêng/throwaway. Giá trị không bao giờ log.
 
 ---
 

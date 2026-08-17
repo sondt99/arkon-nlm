@@ -17,26 +17,30 @@ returns 200 (and a CSRF token); an invalid one **302s to `accounts.google.com`**
 library reports as "Authentication expired or invalid". Before the GET it also POSTs
 `accounts.google.com/RotateCookies` to refresh the rotating `__Secure-1PSIDTS` token.
 
-## Known blocker (investigated 2026-08): Google rejects server-side replay
-For at least one account, importing **fresh** cookies still fails, and a deep trace showed
-this is **not** an arkon or `notebooklm-py` bug:
+## Cookie import: works only while the session is FRESH (investigated 2026-08)
+Cookie import **does** work — but only if the cookies are imported while
+`__Secure-1PSIDTS` is still valid. That token rotates ~every 30 min, so a delay between
+exporting in the browser and importing here makes Google reject the whole session.
 
-- Raw `GET notebooklm.google.com/` with a hand-built `Cookie:` header (bypassing arkon
-  and the library) → **302 → login**.
-- `POST accounts.google.com/RotateCookies` → **401 Unauthorized** — Google rejects the
-  *stable* session cookies (SID / SAPISID / `__Secure-1PSID`) outright, not just a stale
-  rotating token.
-- Reproduces with cookies from **both Chrome and Firefox**.
-- Container egress IP **equals** the host IP, so it is not an IP/VPN mismatch.
-- The cookie set satisfies `notebooklm-py`'s own requirements
-  (`MINIMUM_REQUIRED_COOKIES = {SID, __Secure-1PSIDTS}` plus a secondary binding via
-  `OSID` or `APISID`+`SAPISID`).
+Confirmed working: a fresh Chrome export, imported immediately, verified live and listed
+**63 real notebooks** (`/nlm/notebooks` → 200). The same account had previously failed
+across several attempts — but those attempts had long multi-step delays between export and
+import, during which the trace showed the tell-tale stale-session signature:
+`GET notebooklm.google.com/` → 302 login and `POST accounts.google.com/RotateCookies` → 401.
+So the earlier "DBSC blocks this account" conclusion was **wrong**: the real cause was a
+**stale `__Secure-1PSIDTS`**, not device binding. (Egress IP equals the host IP, and the
+cookie set always satisfied `MINIMUM_REQUIRED_COOKIES = {SID, __Secure-1PSIDTS}` + a
+secondary binding.)
 
-**Conclusion:** Google is binding the session to the originating browser/device (DBSC —
-Device Bound Session Credentials — now extended beyond Chrome) or enforcing an account
-security policy (Workspace context-aware access / Advanced Protection). Replaying such a
-session from a headless server is refused by design. No cookie-import variant can work for
-that account; only a real browser holding the device-bound key can mint a usable session.
+**Practical rule:** export cookies and import them **immediately** (within a few minutes).
+If verification fails, re-export and retry right away rather than assuming the account is
+blocked. Once imported, `notebooklm-py`'s keepalive rotates `__Secure-1PSIDTS` to keep the
+session alive; it will still eventually decay when the stable cookies are culled (days/weeks)
+— which is what the master token below solves permanently.
+
+DBSC / Advanced-Protection accounts genuinely *can* refuse server-side replay outright, so
+if a fast fresh import still 401s, that is the likely cause — but freshness is the first
+thing to rule out.
 
 ## The real fix: master-token headless auth (notebooklm-py ≥ 0.8.0, `[headless]` extra)
 `notebooklm-py` 0.8.0 added exactly the server-side auth path we need (ADR-0023). Instead of

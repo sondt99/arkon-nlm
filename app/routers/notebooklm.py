@@ -310,7 +310,7 @@ async def import_cookies(
 
     # Live verification: saving the file only proves the format is valid, not that
     # Google accepts the cookies. Do one real call so the user learns immediately
-    # whether the session works — and gets the DBSC/Firefox hint if it doesn't.
+    # whether the session actually works.
     from app.services.notebooklm_service import get_client
 
     try:
@@ -323,16 +323,27 @@ async def import_cookies(
         }
     except Exception as e:
         if _is_auth_expired(e):
-            logger.warning("NLM cookies saved but rejected by Google (likely DBSC-bound): {}", e)
+            # Empirically (2026-08), Google rejects the whole session on server-side
+            # replay — even accounts.google.com/RotateCookies returns 401, and this
+            # reproduces with fresh cookies from BOTH Chrome and Firefox, same egress
+            # IP. That points to Google session binding (DBSC extended beyond Chrome)
+            # or an account security policy (Workspace context-aware access / Advanced
+            # Protection), not a missing/expired cookie. Cookie import cannot fix this;
+            # only a real browser holding the device-bound key can mint a usable session.
+            logger.warning("NLM cookies saved but Google rejected the session server-side: {}", e)
             return {
                 "success": True,
                 "verified": False,
                 "message": (
-                    "Cookies saved but Google rejected them. This usually means the "
-                    "session is Chrome DBSC-bound (device-locked) and cannot be replayed "
-                    "from the server. Export the SAME account's cookies from FIREFOX "
-                    "(logged in to notebooklm.google.com) and import those — Firefox "
-                    "sessions are not DBSC-enrolled and work server-side."
+                    "Cookies saved, but Google rejected this session on the server "
+                    "(its cookie-rotation endpoint returned 401). Replaying cookies from "
+                    "the server is blocked for this account — typically device-bound "
+                    "sessions (DBSC) or an account security policy (Workspace "
+                    "context-aware access / Advanced Protection). This reproduces with "
+                    "cookies from both Chrome and Firefox, so re-exporting will not help. "
+                    "Try a plain personal Google account without those protections, or "
+                    "use a browser-based login (notebooklm login) on a host that has a "
+                    "browser. See docs/notebooklm-auth.md."
                 ),
             }
         logger.exception("NLM cookie verification failed with a non-auth error")

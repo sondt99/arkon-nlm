@@ -175,8 +175,9 @@ function ImportCookiesDialog({
               <span className="text-foreground/80">
                 Install the{" "}
                 <a href="https://cookie-editor.com" target="_blank" rel="noopener noreferrer" className="text-primary underline underline-offset-2">Cookie-Editor</a>{" "}
-                extension in <strong>Firefox</strong> (recommended). Chrome sessions are
-                device-locked (DBSC) and its cookies are rejected when replayed from the server.
+                extension. Note: Google now blocks server-side cookie replay for many
+                accounts (device-bound sessions / Workspace policy); if import keeps failing,
+                a personal account without Advanced Protection is most likely to work.
               </span>
             </li>
             <li className="flex gap-2.5">

@@ -13,6 +13,24 @@ export type WikiPageSummary = {
   updated_at: string;
 };
 
+/** Slim item for the navigation sidebar tree (GET /wiki/tree). A full
+ * WikiPageSummary is structurally assignable to this. */
+export type WikiTreeItem = {
+  slug: string;
+  title: string;
+  page_type: WikiPageType;
+  summary?: string;
+  scope_type?: string;
+  scope_id?: string;
+};
+
+/** Facet counts for the wiki landing page (GET /wiki/stats). */
+export type WikiStats = {
+  total: number;
+  by_type: Partial<Record<WikiPageType, number>>;
+  last_updated: string | null;
+};
+
 export type WikiSearchResult = {
   slug: string;
   title: string;

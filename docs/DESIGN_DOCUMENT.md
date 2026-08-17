@@ -606,7 +606,23 @@ chat_messages
 }]
 ```
 
-**Response header:** `X-Total-Count` — tổng số page khớp filter (bỏ qua `limit`/`offset`), phục vụ phân trang phía client (Wiki tab + trang `/wiki`) mà không đổi cấu trúc body — không ảnh hưởng consumer hiện có (Export API, v.v).
+**Response header:** `X-Total-Count` — tổng số page khớp filter (bỏ qua `limit`/`offset`), phục vụ phân trang server-side (Wiki tab + trang `/wiki`) mà không đổi cấu trúc body — không ảnh hưởng consumer hiện có (Export API, v.v).
+
+> **Phân trang trang `/wiki` (2026-08):** trang landing KHÔNG còn tải toàn bộ page nữa. Grid gọi `GET /api/wiki/pages?page_type=<tab>&limit=60&offset=<n>` theo từng tab/trang và đọc `X-Total-Count`; stats bar + đếm tab lấy từ `GET /api/wiki/stats`; sidebar tree lấy từ `GET /api/wiki/tree` (slim). Compiled index (`/api/wiki/index`) chỉ tải khi người dùng mở mục "Wiki Index overview". Trước đây trang fetch `?limit=2000` (~642KB) + index (~400KB) mỗi lần vào; nay tải ban đầu ~180KB.
+
+---
+
+#### `GET /api/wiki/stats`
+**Mô tả:** Facet counts cho trang landing wiki — tổng số page, số lượng theo `page_type`, và thời điểm cập nhật gần nhất. Hai truy vấn aggregate rẻ thay cho việc kéo toàn bộ page về đếm phía client. Scope theo quyền giống `GET /api/wiki/pages`.
+
+**Response:** `{ "total": 1044, "by_type": { "concept": 503, "entity": 440, ... }, "last_updated": "2026-06-23T01:58:06Z" }`
+
+---
+
+#### `GET /api/wiki/tree`
+**Mô tả:** Danh sách slim (chỉ `slug`, `title`, `page_type`, `scope_type`, `scope_id`) cho sidebar navigation tree — khoảng 1/7 payload của `/wiki/pages` summary. Sắp theo `(page_type, title)`. Scope theo quyền giống `GET /api/wiki/pages`.
+
+**Response:** `WikiTreeItem[]`
 
 ---
 

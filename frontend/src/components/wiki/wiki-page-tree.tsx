@@ -7,7 +7,7 @@ import { useVirtualizer } from "@tanstack/react-virtual";
 import { cn } from "@/lib/utils";
 import { api } from "@/lib/api";
 import { useDebounce } from "@/lib/hooks/use-debounce";
-import { WikiPageSummary } from "@/types/wiki";
+import { WikiTreeItem } from "@/types/wiki";
 import { wikiTypeIcon, wikiTypeColor, wikiTypeGroupLabel } from "./wiki-type-badge";
 
 const GROUP_ORDER = ["entity", "concept", "topic", "source", "synthesis"];
@@ -16,7 +16,7 @@ const ITEM_ROW_HEIGHT = 30;
 
 type FlatRow =
   | { kind: "header"; type: string; count: number; isExpanded: boolean }
-  | { kind: "item"; page: WikiPageSummary };
+  | { kind: "item"; page: WikiTreeItem };
 
 export function WikiPageTree({
   activeSlug,
@@ -30,10 +30,11 @@ export function WikiPageTree({
   activeSlug?: string;
   onDeleted?: () => void;
   /** Pre-fetched pages — when provided, the tree skips its own fetch entirely. */
-  pages?: WikiPageSummary[];
+  pages?: WikiTreeItem[];
   /** Loading flag for the pre-fetched `pages` mode. Ignored in self-fetch mode. */
   loading?: boolean;
-  /** Override the API URL to load pages from (default: /api/wiki/pages). Ignored when `pages` is provided. */
+  /** Override the API URL to load pages from (default: /api/wiki/tree — the slim
+   * nav list). Ignored when `pages` is provided. */
   pagesUrl?: string;
   /** Query params to append to page links (e.g. "?scopeType=project&scopeId=xxx") */
   linkQueryParams?: string;
@@ -42,7 +43,7 @@ export function WikiPageTree({
 }) {
   const pathname = usePathname();
   const usingExternalPages = pagesProp !== undefined;
-  const [internalPages, setInternalPages] = React.useState<WikiPageSummary[]>([]);
+  const [internalPages, setInternalPages] = React.useState<WikiTreeItem[]>([]);
   const [internalLoading, setInternalLoading] = React.useState(!usingExternalPages);
   const pages = usingExternalPages ? pagesProp! : internalPages;
   const loading = usingExternalPages ? (loadingProp ?? false) : internalLoading;
@@ -74,8 +75,8 @@ export function WikiPageTree({
   const loadPages = React.useCallback(() => {
     if (usingExternalPages) return;
     setInternalLoading(true);
-    const url = pagesUrl || "/api/wiki/pages?limit=2000";
-    api<WikiPageSummary[]>(url)
+    const url = pagesUrl || "/api/wiki/tree";
+    api<WikiTreeItem[]>(url)
       .then((data) => setInternalPages(Array.isArray(data) ? data : []))
       .catch(() => setInternalPages([]))
       .finally(() => setInternalLoading(false));
@@ -92,12 +93,12 @@ export function WikiPageTree({
       (p) =>
         p.title.toLowerCase().includes(q) ||
         p.slug.toLowerCase().includes(q) ||
-        p.summary.toLowerCase().includes(q)
+        (p.summary?.toLowerCase().includes(q) ?? false)
     );
   }, [pages, debouncedSearch]);
 
   const grouped = React.useMemo(() => {
-    const map = new Map<string, WikiPageSummary[]>();
+    const map = new Map<string, WikiTreeItem[]>();
     for (const p of filtered) {
       const t = p.page_type;
       if (t === "index" || t === "log") continue;

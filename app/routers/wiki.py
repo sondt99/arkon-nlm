@@ -187,6 +187,96 @@ async def list_wiki_pages(
     return [_summary(p) for p in result.scalars().all()]
 
 
+class WikiStats(BaseModel):
+    total: int
+    by_type: dict[str, int]
+    last_updated: Optional[str] = None
+
+
+@router.get("/wiki/stats", response_model=WikiStats)
+async def get_wiki_stats(
+    db: AsyncSession = Depends(get_db),
+    user: Employee = require_permission("wiki:read"),
+):
+    """Facet counts for the wiki landing page (total, per-type, last updated).
+
+    Lets the UI render the stats bar and tab counts with two cheap aggregate
+    queries instead of pulling every page just to count them client-side.
+    """
+    filters = [WikiPage.slug.notin_([wiki_service.INDEX_SLUG, wiki_service.LOG_SLUG])]
+    scope_filter = _build_wiki_scope_filter(user)
+    if scope_filter is not None:
+        filters.append(scope_filter)
+
+    rows = (
+        await db.execute(
+            select(WikiPage.page_type, func.count())
+            .where(*filters)
+            .group_by(WikiPage.page_type)
+        )
+    ).all()
+    by_type = {ptype: count for ptype, count in rows}
+    total = sum(by_type.values())
+    last_updated = (
+        await db.execute(select(func.max(WikiPage.updated_at)).where(*filters))
+    ).scalar_one_or_none()
+
+    return WikiStats(
+        total=total,
+        by_type=by_type,
+        last_updated=last_updated.isoformat() if last_updated else None,
+    )
+
+
+class WikiTreeItem(BaseModel):
+    slug: str
+    title: str
+    page_type: str
+    scope_type: str = "global"
+    scope_id: Optional[uuid.UUID] = None
+
+
+@router.get("/wiki/tree", response_model=list[WikiTreeItem])
+async def list_wiki_tree(
+    db: AsyncSession = Depends(get_db),
+    user: Employee = require_permission("wiki:read"),
+):
+    """Slim page list for the navigation sidebar tree.
+
+    Returns only the fields the tree renders (slug/title/type/scope) — roughly
+    a seventh of the full `/wiki/pages` summary payload — so the nav tree stays
+    lightweight while the page grid paginates server-side via `/wiki/pages`.
+    """
+    filters = [WikiPage.slug.notin_([wiki_service.INDEX_SLUG, wiki_service.LOG_SLUG])]
+    scope_filter = _build_wiki_scope_filter(user)
+    if scope_filter is not None:
+        filters.append(scope_filter)
+
+    rows = (
+        await db.execute(
+            select(
+                WikiPage.slug,
+                WikiPage.title,
+                WikiPage.page_type,
+                WikiPage.scope_type,
+                WikiPage.scope_id,
+            )
+            .where(*filters)
+            .order_by(WikiPage.page_type, WikiPage.title)
+        )
+    ).all()
+    return [
+        WikiTreeItem(
+            slug=r.slug,
+            title=r.title,
+            page_type=r.page_type,
+            scope_type=r.scope_type or "global",
+            scope_id=r.scope_id,
+        )
+        for r in rows
+    ]
+
+
 class WikiSearchResult(BaseModel):
     slug: str
     title: str

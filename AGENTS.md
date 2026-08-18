@@ -1,151 +1,20 @@
-<!-- rtk-instructions v2 -->
-# RTK (Rust Token Killer) - Token-Optimized Commands
-
-## Golden Rule
-
-**Always prefix commands with `rtk`**. If RTK has a dedicated filter, it uses it. If not, it passes through unchanged. This means RTK is always safe to use.
-
-**Important**: Even in command chains with `&&`, use `rtk`:
-```bash
-# ❌ Wrong
-git add . && git commit -m "msg" && git push
-
-# ✅ Correct
-rtk git add . && rtk git commit -m "msg" && rtk git push
-```
-
-## RTK Commands by Workflow
-
-### Build & Compile (80-90% savings)
-```bash
-rtk cargo build         # Cargo build output
-rtk cargo check         # Cargo check output
-rtk cargo clippy        # Clippy warnings grouped by file (80%)
-rtk tsc                 # TypeScript errors grouped by file/code (83%)
-rtk lint                # ESLint/Biome violations grouped (84%)
-rtk prettier --check    # Files needing format only (70%)
-rtk next build          # Next.js build with route metrics (87%)
-```
-
-### Test (60-99% savings)
-```bash
-rtk cargo test          # Cargo test failures only (90%)
-rtk go test             # Go test failures only (90%)
-rtk jest                # Jest failures only (99.5%)
-rtk vitest              # Vitest failures only (99.5%)
-rtk playwright test     # Playwright failures only (94%)
-rtk pytest              # Python test failures only (90%)
-rtk rake test           # Ruby test failures only (90%)
-rtk rspec               # RSpec test failures only (60%)
-rtk test <cmd>          # Generic test wrapper - failures only
-```
-
-### Git (59-80% savings)
-```bash
-rtk git status          # Compact status
-rtk git log             # Compact log (works with all git flags)
-rtk git diff            # Compact diff (80%)
-rtk git show            # Compact show (80%)
-rtk git add             # Ultra-compact confirmations (59%)
-rtk git commit          # Ultra-compact confirmations (59%)
-rtk git push            # Ultra-compact confirmations
-rtk git pull            # Ultra-compact confirmations
-rtk git branch          # Compact branch list
-rtk git fetch           # Compact fetch
-rtk git stash           # Compact stash
-rtk git worktree        # Compact worktree
-```
-
-Note: Git passthrough works for ALL subcommands, even those not explicitly listed.
-
-### GitHub (26-87% savings)
-```bash
-rtk gh pr view <num>    # Compact PR view (87%)
-rtk gh pr checks        # Compact PR checks (79%)
-rtk gh run list         # Compact workflow runs (82%)
-rtk gh issue list       # Compact issue list (80%)
-rtk gh api              # Compact API responses (26%)
-```
-
-### JavaScript/TypeScript Tooling (70-90% savings)
-```bash
-rtk pnpm list           # Compact dependency tree (70%)
-rtk pnpm outdated       # Compact outdated packages (80%)
-rtk pnpm install        # Compact install output (90%)
-rtk npm run <script>    # Compact npm script output
-rtk npx <cmd>           # Compact npx command output
-rtk prisma              # Prisma without ASCII art (88%)
-```
-
-### Files & Search (60-75% savings)
-```bash
-rtk ls <path>           # Tree format, compact (65%)
-rtk read <file>         # Code reading with filtering (60%)
-rtk grep <pattern>      # Search grouped by file (75%)
-rtk find <pattern>      # Find grouped by directory (70%)
-```
-
-### Analysis & Debug (70-90% savings)
-```bash
-rtk err <cmd>           # Filter errors only from any command
-rtk log <file>          # Deduplicated logs with counts
-rtk json <file>         # JSON structure without values
-rtk deps                # Dependency overview
-rtk env                 # Environment variables compact
-rtk summary <cmd>       # Smart summary of command output
-rtk diff                # Ultra-compact diffs
-```
-
-### Infrastructure (85% savings)
-```bash
-rtk docker ps           # Compact container list
-rtk docker images       # Compact image list
-rtk docker logs <c>     # Deduplicated logs
-rtk kubectl get         # Compact resource list
-rtk kubectl logs        # Deduplicated pod logs
-```
-
-### Network (65-70% savings)
-```bash
-rtk curl <url>          # Compact HTTP responses (70%)
-rtk wget <url>          # Compact download output (65%)
-```
-
-### Meta Commands
-```bash
-rtk gain                # View token savings statistics
-rtk gain --history      # View command history with savings
-rtk discover            # Analyze Codex sessions for missed RTK usage
-rtk proxy <cmd>         # Run command without filtering (for debugging)
-rtk init                # Add RTK instructions to AGENTS.md
-rtk init --global       # Add RTK to ~/.Codex/AGENTS.md
-```
-
-## Token Savings Overview
-
-| Category | Commands | Typical Savings |
-|----------|----------|-----------------|
-| Tests | vitest, playwright, cargo test | 90-99% |
-| Build | next, tsc, lint, prettier | 70-87% |
-| Git | status, log, diff, add, commit | 59-80% |
-| GitHub | gh pr, gh run, gh issue | 26-87% |
-| Package Managers | pnpm, npm, npx | 70-90% |
-| Files | ls, read, grep, find | 60-75% |
-| Infrastructure | docker, kubectl | 85% |
-| Network | curl, wget | 65-70% |
-
-Overall average: **60-90% token reduction** on common development operations.
-<!-- /rtk-instructions -->
-
 # Common Commands
 
-**Read `COMMANDS.md` before running any shell command.** It contains verified commands for this project (git, docker, tsc, alembic) with the correct flags for Windows/PowerShell. Do not guess OS-specific syntax — check there first.
+**Read `COMMANDS.md` before running any shell command.** It contains verified commands for this
+project (git, docker, tsc, alembic, pytest) plus the non-obvious traps. Do not guess — check there
+first.
 
 Key rules from COMMANDS.md:
-- Git: always use `git -C "E:\AI-Codex\arkon" <subcommand>` (never `cd` first)
-- Docker: always use `docker compose -f "E:\AI-Codex\arkon\docker-compose.yml" ...`
-- TypeScript check: use Bash tool with `./node_modules/.bin/tsc --noEmit`
-- Parentheses in Next.js paths need backtick-escaping in PowerShell: `` `(portal`) ``
+- Run commands from the **repo root**, using relative paths. Never hardcode an absolute checkout
+  path — that is exactly what rotted the previous version of these docs.
+- Docker: always pass `--env-file .env.docker`. Omitting it silently substitutes the placeholder
+  passwords from `docker-compose.yml` and crash-loops the workers.
+- Backend tests live in `tests/`, **not** `app/tests/`, and need the `dev` extra:
+  `uv run --extra dev pytest tests/ -q`
+- Quote Next.js route-group paths — `(portal)` is a glob pattern in bash and zsh:
+  `git add "frontend/src/app/(portal)/chat/page.tsx"`
+- A fresh clone has no `.venv`, no `frontend/node_modules`, and no `.env.docker`. Bootstrap before
+  assuming any local tool is runnable.
 
 ---
 
@@ -167,9 +36,10 @@ Key rules from COMMANDS.md:
 
 # Arkon MCP — Knowledge Base Access
 
-Arkon exposes a FastMCP server for Codex Desktop and Codex to query the enterprise knowledge base.
+Arkon exposes a FastMCP server that any MCP-compatible client can use to query the enterprise
+knowledge base.
 
-## Setup (Codex Desktop)
+## Setup (MCP client)
 
 ```json
 {
@@ -184,7 +54,14 @@ Arkon exposes a FastMCP server for Codex Desktop and Codex to query the enterpri
 
 Use `https://arkon.ladybug.net/mcp` instead of `localhost:3119` when connecting from another machine. Both go through nginx, which routes `/mcp` to the API (`nginx/nginx.conf`) — the API port itself is not published.
 
-Get a token from an Arkon admin. Tokens are scoped to specific knowledge types — what you can read depends on your token.
+Get a token from an Arkon admin.
+
+> ⚠️ **Do not rely on token scoping — it is not implemented.** These docs used to state that tokens
+> are scoped to specific knowledge types. They are not: `ResolvedIdentity.allowed_knowledge_types` is
+> read in eight places and never assigned, so it is always `None`, which every call site treats as
+> *unrestricted*. A token currently grants read access to the whole wiki regardless of what the
+> issuing admin intended. Tracked in issue #11; the MCP wiki tools also skip the `wiki:read`
+> permission entirely (#35). Treat any token as full-wiki-read until both are fixed.
 
 ## Skills
 
@@ -194,10 +71,15 @@ Get a token from an Arkon admin. Tokens are scoped to specific knowledge types �
 | `/arkon-edit` | "update wiki", "propose edit", "fix this page" | Contributor+ |
 | `/arkon-review` | "review drafts", "approve draft", "check queue" | Editor/Admin |
 
-Skills live in `skills/`. Codex picks them up automatically when working in this repo.
+Skills live in `skills/` as `SKILL.md` files. Claude Code discovers them automatically when working
+in this repo; other agents may need them referenced explicitly.
 
 ## Key Principles
 
 - **Wiki first, sources second.** `search_wiki` → `read_wiki_page` → source drill-down only for precise citations.
-- **Your token is your scope.** RBAC is enforced server-side; "access denied" means contact an admin.
+- **RBAC is enforced server-side, but incompletely.** "Access denied" means contact an admin. The
+  converse does not hold: access being *granted* does not mean you were authorized — see the token
+  scoping warning above, and the open access-control issues.
 - **Always confirm before writing.** `propose_wiki_edit` and `edit_wiki_page` modify the live KB — get user approval first.
+- **MCP writes are not audited.** The four KB-mutating tools write no audit-log entry (#43), so a
+  write made through MCP is currently unattributable. Be correspondingly careful.

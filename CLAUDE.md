@@ -52,7 +52,14 @@ Arkon exposes a FastMCP server for Claude Desktop and Claude Code to query the e
 
 Use `https://arkon.ladybug.net/mcp` instead of `localhost:3119` when connecting from another machine. Both go through nginx, which routes `/mcp` to the API (`nginx/nginx.conf`) — the API port itself is not published.
 
-Get a token from an Arkon admin. Tokens are scoped to specific knowledge types — what you can read depends on your token.
+Get a token from an Arkon admin.
+
+> ⚠️ **Do not rely on token scoping — it is not implemented.** These docs used to state that tokens
+> are scoped to specific knowledge types. They are not: `ResolvedIdentity.allowed_knowledge_types` is
+> read in eight places and never assigned, so it is always `None`, which every call site treats as
+> *unrestricted*. A token currently grants read access to the whole wiki regardless of what the
+> issuing admin intended. Tracked in issue #11; the MCP wiki tools also skip the `wiki:read`
+> permission entirely (#35). Treat any token as full-wiki-read until both are fixed.
 
 ## Skills
 
@@ -67,5 +74,9 @@ Skills live in `skills/`. Claude Code picks them up automatically when working i
 ## Key Principles
 
 - **Wiki first, sources second.** `search_wiki` → `read_wiki_page` → source drill-down only for precise citations.
-- **Your token is your scope.** RBAC is enforced server-side; "access denied" means contact an admin.
+- **RBAC is enforced server-side, but incompletely.** "Access denied" means contact an admin. The
+  converse does not hold: access being *granted* does not mean you were authorized — see the token
+  scoping warning above, and the open access-control issues.
 - **Always confirm before writing.** `propose_wiki_edit` and `edit_wiki_page` modify the live KB — get user approval first.
+- **MCP writes are not audited.** The four KB-mutating tools write no audit-log entry (#43), so a
+  write made through MCP is currently unattributable. Be correspondingly careful.

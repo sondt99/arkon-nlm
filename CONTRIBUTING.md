@@ -1,328 +1,239 @@
 # Contributing to Arkon
 
-First off, thank you for considering contributing to Arkon! Every contribution — bug reports, feature requests, code, documentation — is valuable and appreciated.
+Thank you for helping improve Arkon. Bug reports, docs, and code are all useful.
 
-## 📋 Table of Contents
-
-- [Code of Conduct](#code-of-conduct)
-- [Getting Started](#getting-started)
-- [Project Structure](#project-structure)
-- [Development Workflow](#development-workflow)
-- [Coding Standards](#coding-standards)
-- [Commit Conventions](#commit-conventions)
-- [Pull Request Process](#pull-request-process)
-- [Reporting Issues](#reporting-issues)
-- [License](#license)
+Repository: [github.com/sondt99/arkon-nlm](https://github.com/sondt99/arkon-nlm)
 
 ---
 
-## Code of Conduct
+## Before you start
 
-Be respectful, constructive, and professional. We want Arkon to be a welcoming space for everyone regardless of experience level, identity, or background.
+Read:
+
+1. [README](README.md) — what the product is
+2. [docs/HOW_TO_RUN.md](docs/HOW_TO_RUN.md) — how to run it locally
+3. [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) — how the pieces fit
+4. [docs/DESIGN_DOCUMENT.md](docs/DESIGN_DOCUMENT.md) — the formal spec
+
+If your change touches APIs, data models, pipeline behavior, permissions, or MCP tools, update `docs/DESIGN_DOCUMENT.md` in the same pull request.
 
 ---
 
-## Getting Started
+## Prerequisites
 
-### Prerequisites
+| Tool | Version | Why |
+|---|---|---|
+| Python | 3.11 – 3.14 | Backend |
+| Node.js | 20+ | Frontend |
+| Docker + Compose v2 | current | Postgres, Redis, MinIO — or the full stack |
+| Git | current | Source control |
 
-| Tool       | Version    | Purpose                           |
-|------------|------------|-----------------------------------|
-| Python     | 3.11 – 3.12 | Backend runtime                 |
-| Node.js    | 20+        | Frontend (Next.js)                |
-| PostgreSQL | 15+        | Main database (with pgvector)     |
-| Redis      | 7+         | Background job queue              |
-| MinIO      | Latest     | S3-compatible file storage        |
-| Neo4j      | 5+         | Knowledge graph (optional)        |
+You do **not** need Neo4j.
 
-### Setup
+---
 
-1. **Fork & clone** the repository:
-
-   ```bash
-   git clone https://github.com/<your-fork>/arkon.git
-   cd arkon
-   ```
-
-2. **Backend setup:**
-
-   ```bash
-   python -m venv .venv
-   # Windows:
-   .venv\Scripts\activate
-   # macOS/Linux:
-   source .venv/bin/activate
-
-   pip install -e ".[dev]"
-   ```
-
-3. **Environment:**
-
-   ```bash
-   cp .env.local.example .env.local
-   # Edit .env.local with your local values (see docs/HOW_TO_RUN.md for details)
-   ```
-
-4. **Database:**
-
-   ```bash
-   alembic upgrade head
-   ```
-
-5. **Frontend setup:**
-
-   ```bash
-   cd frontend
-   npm install
-   echo "NEXT_PUBLIC_API_URL=http://localhost:5055" > .env.local
-   ```
-
-Refer to [`blob/docs/HOW_TO_RUN.md`](blob/docs/HOW_TO_RUN.md) for full infrastructure setup (Docker commands, etc.).
-
-### Running in Development
-
-You need **3 terminals**:
+## Setup
 
 ```bash
-# Terminal 1 — API server
+git clone https://github.com/sondt99/arkon-nlm.git
+cd arkon-nlm
+```
+
+### Infrastructure
+
+Easiest path — start only the data services, then run the app on the host:
+
+```bash
+docker network create arkon_default   # required once
+# or start postgres / redis / minio individually; see docs/HOW_TO_RUN.md
+```
+
+For a full stack that matches production, use Docker:
+
+```bash
+cp .env.docker.example .env.docker
+# edit secrets
+docker compose --env-file .env.docker up -d --build
+```
+
+### Backend (host)
+
+```bash
+python -m venv .venv
+source .venv/bin/activate          # Windows: .venv\Scripts\activate
+pip install -e ".[dev]"
+cp .env.local.example .env.local   # edit DATABASE_URL, SECRET_KEY, MinIO, Redis
+alembic upgrade head
+```
+
+Set `ARKON_ALLOW_DEFAULT_SECRET=1` in `.env.local` only if you keep the example secrets on a private machine.
+
+### Frontend
+
+```bash
+cd frontend
+npm install
+```
+
+For host-run backend, create `frontend/.env.local`:
+
+```env
+NEXT_PUBLIC_API_URL=http://localhost:5055
+```
+
+---
+
+## Running in development
+
+You typically need **four** processes:
+
+```bash
+# 1 — API
 uvicorn app.main:app --host 0.0.0.0 --port 5055 --reload
 
-# Terminal 2 — Background worker
+# 2 — document / wiki / NotebookLM worker
 python -m arq app.worker.WorkerSettings
 
-# Terminal 3 — Frontend
+# 3 — skills worker
+python -m arq app.worker.SkillWorkerSettings
+
+# 4 — frontend
 cd frontend && npm run dev
 ```
 
-- **Backend API:** http://localhost:5055
-- **API Docs (Swagger):** http://localhost:5055/docs
-- **Frontend:** http://localhost:3000
+| URL | What |
+|---|---|
+| http://localhost:3000 | Portal |
+| http://localhost:5055 | API |
+| http://localhost:5055/docs | Swagger |
+| http://localhost:5055/mcp | MCP (host-run) |
+| http://localhost:3119 | Portal + API + MCP when using the Docker nginx stack |
+
+Documents stay `pending` if worker 2 is not running. Skills stay `pending` if worker 3 is not running.
 
 ---
 
-## Project Structure
+## Project layout
 
-```
-arkon/
-├── app/                    # Backend (FastAPI)
-│   ├── ai/                 # AI providers (Google, OpenAI, Anthropic)
-│   │   └── providers/      # Provider implementations
-│   ├── database/           # SQLAlchemy models & DB init
-│   ├── mcp/                # MCP server (Claude Desktop integration)
-│   ├── routers/            # API route handlers
-│   ├── services/           # Business logic layer
-│   ├── config.py           # Pydantic settings
-│   ├── main.py             # FastAPI app entry point
-│   └── worker.py           # ARQ background worker
-├── alembic/                # Database migrations
-│   └── versions/           # Migration files
-├── frontend/               # Frontend (Next.js + TypeScript)
-│   └── src/
-│       ├── app/            # Pages (App Router)
-│       ├── components/     # React components
-│       └── lib/            # Utilities, API client, auth
-├── blob/docs/              # Documentation
-├── pyproject.toml          # Python dependencies & tooling config
-├── docker-compose.yml      # Docker services (Postgres, Redis, MinIO, API, workers, frontend)
-├── .env.docker.example     # Env template for `docker compose`
-└── .env.local.example      # Env template for local development
+```text
+arkon-nlm/
+├── app/                    # FastAPI backend
+│   ├── ai/                 # Providers + MRP pipeline
+│   ├── database/           # SQLAlchemy models
+│   ├── mcp/                # MCP tools and resources
+│   ├── routers/            # HTTP endpoints
+│   ├── services/           # Business logic
+│   ├── main.py             # App entry
+│   └── worker.py           # arq jobs
+├── alembic/versions/       # Migrations (never rewrite a merged file)
+├── frontend/src/           # Next.js App Router
+├── nginx/                  # Reverse proxy
+├── skills/                 # Claude Code skills that call Arkon MCP
+├── tests/                  # pytest
+└── docs/                   # Human docs (this is the source of truth)
 ```
 
-### Architecture Quick Reference
-
-| Layer         | Tech              | Notes                                |
-|---------------|-------------------|--------------------------------------|
-| API           | FastAPI           | Async, auto-docs at `/docs`          |
-| ORM           | SQLAlchemy 2.0    | Async sessions, pgvector extension   |
-| Migrations    | Alembic           | Auto-generate from model changes     |
-| Worker        | ARQ + Redis       | Document ingestion pipeline          |
-| AI Providers  | Multi-provider    | Google, OpenAI, Anthropic, Ollama    |
-| Frontend      | Next.js 15        | App Router, TypeScript, Tailwind CSS |
-| Auth          | JWT + bcrypt      | Role-based (admin/employee)          |
-| Storage       | MinIO (S3)        | File uploads and image extraction    |
-| Graph DB      | Neo4j (optional)  | Entity extraction & knowledge graph  |
+Business logic belongs in `app/services/`, not in routers.
 
 ---
 
-## Development Workflow
+## Coding standards
 
-1. **Create a branch** from `main`:
+### Python
 
-   ```bash
-   git checkout -b feat/your-feature-name
-   # or
-   git checkout -b fix/issue-description
-   ```
-
-2. **Make your changes** — keep them focused on a single concern.
-
-3. **Test your changes:**
-
-   ```bash
-   # Backend — lint
-   ruff check app/
-
-   # Backend — format
-   ruff format app/
-
-   # Backend — tests
-   pytest
-
-   # Frontend — lint
-   cd frontend && npm run lint
-
-   # Frontend — type check
-   cd frontend && npx tsc --noEmit
-   ```
-
-4. **Commit** with a descriptive message (see [Commit Conventions](#commit-conventions)).
-
-5. **Push** and open a Pull Request.
-
----
-
-## Coding Standards
-
-### Backend (Python)
-
-- **Formatter/Linter:** [Ruff](https://docs.astral.sh/ruff/) — config in `pyproject.toml`
-- **Line length:** 88 characters
-- **Style:** PEP 8 with Ruff rules `E`, `F`, `I`
-- **Type hints:** Use type annotations for function parameters and return types
-- **Async:** All database and I/O operations must be async (`async/await`)
-- **Docstrings:** Use `"""triple-quote"""` docstrings for public functions and classes
-- **Imports:** Use absolute imports (`from app.services.config_service import ...`)
-- **Models:** SQLAlchemy models go in `app/database/models.py`
-- **Routes:** Each domain gets its own router file in `app/routers/`
-- **Services:** Business logic lives in `app/services/`, not in routers
-
-### Frontend (TypeScript / React)
-
-- **Framework:** Next.js 15 with App Router
-- **Language:** TypeScript — no `any` unless absolutely necessary
-- **Styling:** Tailwind CSS with the project's design tokens
-- **Components:**
-  - Shared/reusable → `src/components/ui/` (shadcn/ui)
-  - Feature-specific → `src/components/<feature>/`
-  - Layout → `src/components/layout/`
-- **API calls:** Use the `api()` helper from `src/lib/api.ts`
-- **State:** Prefer local state (`useState`) over global state; use context only when needed
-- **Naming:** Components in PascalCase, files in kebab-case
-
-### Database Migrations
-
-When changing models, **always** create a migration:
+- Ruff (`E`, `F`, `I`), line length 88
+- Type hints on public functions
+- All database and I/O is `async`
+- Absolute imports: `from app.services.wiki_service import ...`
+- One router file per domain
 
 ```bash
-alembic revision --autogenerate -m "short description of change"
+ruff check app/ tests/
+ruff format app/ tests/
+pytest
 ```
 
-- Review the generated migration before committing — auto-generate isn't perfect
-- Never edit an existing migration that has been merged to `main`
-- Include seed data in migrations when adding new required lookup tables
+### TypeScript / React
+
+- Next.js App Router, TypeScript, Tailwind
+- Shared UI in `frontend/src/components/ui/`
+- Feature UI in `frontend/src/components/<feature>/`
+- HTTP goes through `frontend/src/lib/api.ts`
+- Prefer local state; use context only when several trees share it
+
+```bash
+cd frontend
+npm run lint
+./node_modules/.bin/tsc --noEmit
+```
+
+### Migrations
+
+```bash
+alembic revision --autogenerate -m "short description"
+```
+
+Review the generated file. Never edit a migration that already landed on `main`.
 
 ---
 
-## Commit Conventions
+## Commit messages
 
-We follow [Conventional Commits](https://www.conventionalcommits.org/):
+[Conventional Commits](https://www.conventionalcommits.org/):
 
+```text
+<type>(<scope>): short summary
 ```
-<type>(<scope>): <short description>
-```
 
-### Types
+| Type | Use for |
+|---|---|
+| `feat` | New behavior |
+| `fix` | Bug fix |
+| `docs` | Documentation only |
+| `refactor` | No behavior change |
+| `test` | Tests |
+| `chore` | Tooling, deps |
 
-| Type       | When to use                                    |
-|------------|------------------------------------------------|
-| `feat`     | New feature                                    |
-| `fix`      | Bug fix                                        |
-| `docs`     | Documentation only                             |
-| `style`    | Code style (formatting, no logic change)       |
-| `refactor` | Code change that neither fixes a bug nor adds a feature |
-| `perf`     | Performance improvement                        |
-| `test`     | Adding or updating tests                       |
-| `chore`    | Build process, dependencies, tooling           |
-| `ci`       | CI/CD configuration                            |
+Common scopes: `api`, `db`, `worker`, `ai`, `mcp`, `ui`, `auth`, `wiki`, `notebooklm`, `docs`.
 
-### Scopes
+Examples:
 
-| Scope      | Covers                         |
-|------------|--------------------------------|
-| `api`      | Backend routers, services      |
-| `db`       | Models, migrations             |
-| `worker`   | Background job processing      |
-| `ai`       | AI providers, embedding, LLM   |
-| `mcp`      | MCP server integration         |
-| `ui`       | Frontend components, pages     |
-| `auth`     | Authentication, RBAC           |
-| `config`   | Settings, environment          |
-| `deps`     | Dependency updates             |
-
-### Examples
-
-```
-feat(api): add bulk delete endpoint for sources
-fix(worker): handle empty PDF files during ingestion
-docs: update HOW_TO_RUN with Neo4j setup
-refactor(ui): extract color picker into reusable component
-chore(deps): bump fastapi to 0.115.0
+```text
+feat(wiki): paginate the landing page on the server
+fix(notebooklm): live-verify imported cookies
+docs: rewrite the quick start for nginx on :3119
 ```
 
 ---
 
-## Pull Request Process
+## Pull requests
 
-1. **Title** should follow commit conventions: `feat(scope): description`
+1. Branch from `main`: `feat/…` or `fix/…`.
+2. Keep the change to one concern.
+3. Update docs if the user-visible behavior, API, model, or permissions changed.
+4. Include a screenshot for UI work.
+5. Never commit `.env`, cookies, master tokens, or API keys.
 
-2. **Description** should include:
-   - What changed and why
-   - Screenshots for UI changes
-   - Migration instructions if DB schema changed
-   - Breaking changes (if any)
+Checklist:
 
-3. **Checklist** before requesting review:
-   - [ ] Code compiles / lints without errors
-   - [ ] New code has appropriate type hints / TypeScript types
-   - [ ] Database migrations are included (if models changed)
-   - [ ] Existing tests pass
-   - [ ] Sensitive data (API keys, passwords) is never hardcoded
-
-4. **Review** — at least 1 approval is required before merging.
-
-5. **Merge** — squash-merge to keep history clean.
+- [ ] `ruff check` and `pytest` pass
+- [ ] Frontend lint / `tsc` pass for UI changes
+- [ ] New migration reviewed (if models changed)
+- [ ] `docs/DESIGN_DOCUMENT.md` updated when APIs, models, pipeline, RBAC, or MCP change
 
 ---
 
-## Reporting Issues
+## Reporting issues
 
-When opening an issue, please include:
+Open an issue at [github.com/sondt99/arkon-nlm/issues](https://github.com/sondt99/arkon-nlm/issues) and include:
 
-- **Environment:** OS, Python version, Node.js version, browser
-- **Steps to reproduce:** Numbered, specific steps
-- **Expected behavior:** What should happen
-- **Actual behavior:** What actually happened
-- **Logs/screenshots:** Console output, error messages, UI screenshots
-- **Related code:** File paths, API endpoints involved
-
-Use the appropriate label:
-
-| Label          | Description                    |
-|----------------|--------------------------------|
-| `bug`          | Something is broken            |
-| `enhancement`  | New feature request            |
-| `docs`         | Documentation improvement      |
-| `question`     | Need help or clarification     |
-| `good first issue` | Beginner-friendly task    |
+- OS, Docker / Python / Node versions
+- Steps to reproduce
+- Expected vs actual
+- Relevant logs (`docker compose --env-file .env.docker logs --tail=80 api worker`)
 
 ---
 
 ## License
 
-By contributing to Arkon, you agree that your contributions will be licensed under the [PolyForm Noncommercial License 1.0.0](LICENSE).
-
-> **Note:** Arkon is licensed for **noncommercial use only**. If you need a commercial license, please contact the Arkon team.
-
----
-
-_Thank you for helping make Arkon better!_ 🚀
+Contributions are licensed under the [PolyForm Noncommercial License 1.0.0](LICENSE).

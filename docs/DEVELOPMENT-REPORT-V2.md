@@ -1,278 +1,87 @@
-# Báo cáo phát triển hệ thống Arkon v2
+# Project status — v0.1.0
 
-> Phiên bản báo cáo: 2.0<br>
-> Ngày cập nhật: 20/06/2026<br>
-> Phạm vi: các thay đổi từ nhánh v1.2.x đến commit `1dd7c2a`
+This page is a snapshot of what **arkon-nlm** contains at the first GitHub release. Feature-level history lives in [CHANGELOG.md](../CHANGELOG.md). How to run it lives in [QUICKSTART.md](QUICKSTART.md).
 
-## 1. Tóm tắt điều hành
+**Repo:** [github.com/sondt99/arkon-nlm](https://github.com/sondt99/arkon-nlm)  
+**Lineage:** fork and extension of [nduckmink/arkon](https://github.com/nduckmink/arkon)
 
-Arkon v2 phát triển từ một nền tảng biên soạn tài liệu thành wiki thành một **Enterprise AI Knowledge Hub** hoàn chỉnh. Đợt phát triển tập trung vào bốn mục tiêu:
+---
 
-1. Nâng độ chính xác khi cập nhật wiki từ nhiều tài liệu.
-2. Hoàn thiện trải nghiệm Chatbot, NotebookLM và Knowledge Graph.
-3. Chuẩn hóa giao diện, nhận diện và khả năng hiển thị đa thiết bị.
-4. Bảo đảm vận hành an toàn bằng migration, Docker health check và cơ chế fallback không làm mất tri thức.
+## What this release is
 
-Kết quả chính là cơ chế **Source-aware Knowledge Provenance**: hệ thống lưu riêng phần tri thức do từng tài liệu đóng góp, sau đó tổng hợp thành wiki page. Khi xóa tài liệu, Arkon có thể xóa đúng contribution tương ứng và dựng lại trang từ các nguồn còn lại.
+A complete, self-hosted knowledge hub:
 
-## 2. Phạm vi chức năng hiện tại
+- Documents in → MRP compiler → wiki out
+- Portal for people, MCP for Claude
+- Department RBAC + workspaces
+- Optional NotebookLM and a Claude Code gateway
 
-| Phân hệ | Năng lực hiện tại |
+It is **not** a hosted SaaS and **not** a drop-in public demo. You bring Docker and an AI key.
+
+---
+
+## Quality bar at tag
+
+| Area | State |
 |---|---|
-| Knowledge Base | Upload file, URL, ZIP; phân loại, scope, phòng ban, theo dõi tiến trình |
-| MRP Pipeline | Map → Reduce → Plan Review → Refine → Verify → Commit |
-| Wiki | Entity, concept, topic, source, synthesis; revision; draft; backlink |
-| Source-aware Knowledge | Provenance theo source, rebuild khi xóa, preview tác động |
-| Chatbot AI | RAG theo wiki, hội thoại, streaming UI, Markdown/code, copy, Add to Wiki |
-| NotebookLM | Quản lý notebook, gửi source, chat, tạo artifact và import lại Arkon |
-| Knowledge Graph | Graph 2D tương tác, lọc loại node, zoom, focus, scoped graph |
-| AI Skills | Quản lý skill, version, contribution workflow và scope truy cập |
-| MCP | Cung cấp tri thức Arkon cho Claude Desktop/Code theo quyền |
-| Quản trị | Employee, department, role, workspace, audit và provider settings |
+| App / frontend version | `0.1.0` |
+| Schema | Alembic through `026` |
+| Ingress | nginx on `:3119`; API/DB/Redis/MinIO unpublished |
+| Tests | `tests/` (chat, gateway, MRP, wiki, paths, export, embeddings) + frontend Playwright |
+| Secrets | Default `SECRET_KEY` / admin / MinIO factory pair refused at boot |
+| Docs | Rewritten for this repo and this topology |
 
-## 3. Kiến trúc triển khai
+---
 
-```text
-Browser
-  │
-  ▼
-Nginx :3119
-  ├── Next.js frontend
-  ├── FastAPI /api + /mcp
-  └── MinIO file gateway
+## Implemented capabilities
 
-FastAPI ── PostgreSQL + pgvector
-   │       ├── nguồn tài liệu
-   │       ├── wiki + contribution provenance
-   │       └── vector embedding
-   │
-   ├── Redis ── arq ingestion worker
-   ├── arq skill worker
-   ├── MinIO object storage
-   └── AI providers / NotebookLM
+| Capability | Notes |
+|---|---|
+| MRP wiki compiler | Map → Reduce → Plan → Refine → Verify → Commit, resumable |
+| Plan review | Human gate, optional auto-approve |
+| Source-aware pages | Citations + security artifact preservation |
+| Portal wiki | Tree, search, graph, drafts, revisions |
+| Workspaces | Isolated wiki + files + members |
+| RBAC | Dual realm, custom roles |
+| MCP | 16 tools, token scope, `/mcp` on nginx |
+| Chatbot | RAG + history + Add to Wiki |
+| Skills | ZIP versions + contribution review |
+| NotebookLM | Cookies or master token, artifacts, ingest |
+| Gateway | Anthropic-compatible messages |
+| Export API | Chat + search with `ark_` token |
+| Multi-provider AI | Google / OpenAI / Anthropic / Ollama / 9Router |
+| Audit | Admin-readable log |
+
+---
+
+## Deliberately not in v0.1.0
+
+- Arkon CLI for one-command employee setup
+- In-app notifications for draft review
+- Usage analytics dashboard
+- One NotebookLM session per user
+- Neo4j, contacts CRM
+
+---
+
+## How to verify a build
+
+```bash
+docker network create arkon_default
+cp .env.docker.example .env.docker   # set real secrets
+docker compose --env-file .env.docker up -d --build
+curl -s http://localhost:3119/api/health
 ```
 
-Các container production hiện gồm: `arkon_nginx`, `arkon_frontend`, `arkon_api`, `arkon_worker`, `arkon_worker_skills`, `arkon_postgres`, `arkon_redis`, `arkon_minio`.
+Then: login → Settings tests → upload one file → approve plan → open Wiki → mint MCP token → `search_wiki`.
 
-## 4. Hạng mục phát triển nổi bật
+---
 
-### 4.1 Source-aware Knowledge Provenance
+## Where to read next
 
-#### Vấn đề trước đây
-
-`wiki_pages.source_ids` chỉ cho biết trang wiki liên quan đến source nào. Nội dung của nhiều source đã được merge thành một khối Markdown duy nhất, nên không thể xác định chính xác câu/đoạn nào thuộc tài liệu nào. Khi xóa source B khỏi trang dùng chung với source A, hệ thống chỉ bỏ ID của B nhưng nội dung do B đóng góp có thể vẫn còn.
-
-#### Giải pháp v2
-
-- Thêm bảng `wiki_page_contributions`, unique theo `(page_id, source_id)`.
-- Lưu nội dung, summary, source title và knowledge type của từng contribution.
-- `wiki_pages` trở thành canonical synthesis; `source_ids` là chỉ mục denormalized.
-- Thêm `wiki_pages.provenance_complete` để phân biệt trang có thể rebuild chính xác và trang legacy.
-- Khi compile lại cùng source, contribution được upsert thay vì cộng dồn trùng lặp.
-- Khi source mới cập nhật concept chung, trang được dựng từ toàn bộ contribution hiện hành.
-- Khi LLM merge lỗi hoặc output bị co ngắn bất thường, fallback ghép lossless giữ cả hai đầu vào.
-
-#### Xóa source
-
-```text
-Yêu cầu xóa source
-   │
-   ├── Preview: GET /api/sources/{id}/knowledge-impact
-   │      ├── delete_page
-   │      ├── rebuild_page
-   │      └── detach_legacy
-   │
-   └── DELETE /api/sources/{id}
-          ├── xóa contribution của source
-          ├── xóa page nếu không còn contribution
-          ├── rebuild page nếu còn source khác
-          ├── refresh wikilinks
-          └── refresh embedding
-```
-
-Migration `023` backfill lossless các trang single-source. Trang multi-source lịch sử không thể tách ngược nội dung một cách chắc chắn nên được đánh dấu `provenance_complete=false`; hệ thống không tự đoán và xóa nội dung của các trang này.
-
-### 4.2 Tối ưu Compilation Plan
-
-- Reconciliation đối chiếu entity/concept mới với wiki theo slug, title, lexical similarity và semantic candidates.
-- Plan `CREATE` được chuyển thành `UPDATE` khi tìm thấy trang tương ứng.
-- Nhóm chứa cả concept cũ và mới được tách thành update/create riêng.
-- Kiểm tra lại collision tại thời điểm approve để xử lý race condition.
-- Review Plan UI hiển thị lý do match, confidence và cho phép chỉnh sửa plan.
-
-Kết quả: giảm số concept trùng lặp và tăng tỷ lệ cập nhật đúng trang cũ.
-
-### 4.3 Chatbot AI
-
-- Tin nhắn người dùng được optimistic render ngay khi gửi.
-- Phản hồi hiển thị theo luồng, giảm cảm giác chờ toàn bộ response.
-- Renderer dùng `react-markdown` và `remark-gfm`: heading, list, table, quote và code block.
-- Có copy toàn bộ message và copy nhanh từng code block.
-- RAG tìm wiki bằng embedding, mở rộng qua wiki links và đưa context vào LLM.
-- Hỗ trợ lịch sử hội thoại, đổi tên, sửa/regenerate và Add to Wiki.
-- Add to Wiki bảo toàn code block, quy trình, ví dụ và giải thích kỹ thuật.
-- Hai persona Victor/Ashley; Ashley là lựa chọn mặc định và vẫn tuân thủ KB-only.
-
-### 4.4 NotebookLM
-
-- Import và kiểm tra session Google NotebookLM.
-- Tạo, liệt kê, mở và xóa notebook trong giao diện Arkon.
-- Gửi source Arkon sang notebook mà không bắt buộc chọn thủ công ở màn hình chat.
-- Chat với notebook và quản lý lịch sử theo notebook.
-- Tạo artifact: audio, video, report, quiz, flashcards, slide deck, infographic, data table.
-- Import artifact/report về Arkon wiki với namespace riêng.
-- Worker nền xử lý job dài và duy trì session.
-
-NotebookLM là enrichment layer, không thay thế MRP và không ghi đè trực tiếp contribution của MRP.
-
-### 4.5 Giao diện Arkon v2
-
-- Version backend/frontend đồng bộ `2.0.0`.
-- Theme sáng/tối, lưu preference và tránh flash theme khi tải trang.
-- Responsive header/sidebar và mobile header.
-- Login animation chỉ xoay indicator; label button không còn xoay theo spinner.
-- Chuẩn hóa màu badge theo semantic type, tránh phối màu foreground/background xung đột.
-- Thay icon/logo Arkon ở favicon, app icon, header và sidebar.
-- Chuẩn hóa card, input, table, empty state, page header và shadow.
-
-### 4.6 Knowledge Graph v2
-
-- Chuyển sang force graph 2D tương tác.
-- Node style theo page type, có label, glow/selection state và dark-mode colors.
-- Zoom, pan, fit graph, focus node, neighborhood và tooltip.
-- Bộ lọc node type, legend, thống kê và loading state.
-- Graph toàn cục và graph theo workspace dùng cùng concept UI.
-
-### 4.7 Upload và quản lý tài liệu
-
-- Upload ZIP tạo nhiều source và enqueue riêng từng ingestion job.
-- Chống ZipSlip, zip bomb, file quá lớn, metadata junk và extension không hợp lệ.
-- Wiki list tăng giới hạn để không ẩn trang cũ khi hệ thống có nhiều hơn 200 pages.
-- Sửa lỗi search bị mất khi kết hợp Knowledge Type filter.
-- Hiển thị synthesis pages trong tab và search dialog.
-
-## 5. Thay đổi dữ liệu và migration
-
-| Migration | Nội dung |
+| Question | Doc |
 |---|---|
-| `021` | NotebookLM integration |
-| `022` | Chat conversations và chat messages |
-| `023` | `wiki_page_contributions`, `provenance_complete`, backfill provenance |
-
-Schema mới quan trọng:
-
-```text
-sources
-   │ 1
-   │
-   │ N
-wiki_page_contributions
-   │ N
-   │
-   │ 1
-wiki_pages ── wiki_links / revisions / embeddings
-```
-
-## 6. API mới hoặc thay đổi
-
-| Method | Endpoint | Mục đích |
-|---|---|---|
-| GET | `/api/sources/{id}/knowledge-impact` | Xem trước ảnh hưởng khi xóa source |
-| DELETE | `/api/sources/{id}` | Xóa contribution và rebuild tri thức còn lại |
-| GET | `/api/wiki/pages/{slug}` | Trả thêm provenance và danh sách source có tên |
-| POST | `/api/sources/upload-zip` | Upload nhiều tài liệu trong ZIP |
-| POST | `/api/chat/conversations/{id}/messages` | RAG chatbot response |
-| POST | `/api/chat/conversations/{id}/to-wiki` | Chuyển hội thoại thành synthesis page |
-
-## 7. Kiểm thử và triển khai
-
-Các kiểm tra đã thực hiện cho release Source-aware Knowledge:
-
-- Python source và migration compile thành công.
-- Targeted tests cho reconciliation và lossless merge đạt.
-- Next.js production build và TypeScript check đạt.
-- Docker images backend/frontend build thành công.
-- Migration database đạt `023 (head)`.
-- API, frontend và các service phụ trợ ở trạng thái healthy.
-- Commit local và Gitea được xác minh cùng hash `1dd7c2afd3547bb6596627e795e1783d32e47198`.
-
-## 8. Tác động đạt được
-
-### 8.1 Hotfix độ tin cậy MRP cho tài liệu lớn (2026-06-21)
-
-Qua lần ingest thực tế tài liệu PDF có kế hoạch 64 trang, hệ thống phát hiện ba rủi ro: các writer chạy song song dùng chung `AsyncSession`, lỗi tạm thời từ AI gateway có thể sinh trang placeholder, và giới hạn worker 600 giây cắt job ngay khi bắt đầu COMMIT.
-
-Các thay đổi đã triển khai:
-
-- REFINE nạp trước snapshot wiki rồi mới chạy writer song song; không truy cập database đồng thời qua cùng một session.
-- Khi một writer lỗi, các task cùng nhóm được cancel và drain đầy đủ, tránh tiếp tục gọi LLM sau khi job đã thất bại.
-- Mỗi trang được retry tối đa 3 lần với backoff `15s`, `60s` và tôn trọng `retry_after` của provider; hết retry thì fail rõ ràng, không lưu placeholder.
-- Thời gian tối đa của ingestion worker tăng từ 600 lên 3600 giây; lỗi không có message như `TimeoutError`/`CancelledError` được ghi bằng tên exception.
-- COMMIT chuyển sang fail-fast và atomic: chỉ đánh dấu source `ready` sau khi toàn bộ page/contribution, index và activity log được commit thành công.
-
-Kết quả kiểm chứng end-to-end ngày 2026-06-21: REFINE và VERIFY hoàn tất `64/64`, COMMIT tạo 43 trang và cập nhật 21 lượt, lưu 63 contribution trên 63 wiki page (hai lượt plan hội tụ vào cùng page), compilation plan chuyển `done`, source chuyển `ready/commit/100%`. Tổng thời gian job retry là 1365,24 giây; không còn lỗi concurrent `AsyncSession` và không có dữ liệu commit nửa chừng.
-
-### 8.2 Domain-aware security knowledge preservation (2026-06-21)
-
-Pipeline được nâng cấp để tài liệu pentest/redteam không bị khái quát hóa mất command, payload và điều kiện khai thác:
-
-- Truyền `KnowledgeType.extraction_hints` xuyên MAP, REDUCE, PLAN và REFINE.
-- Ưu tiên entity loại `technique`, `tool`, `cve`, `payload`; security planner nhận tối đa 100 entity và 100 concept thay vì chỉ 30 mục phổ biến nhất.
-- Trích deterministic code block, command, SQL payload, CVE và MITRE ID; lưu offset cùng SHA-256 để giữ nguyên văn.
-- Định tuyến mỗi artifact vào đúng một wiki page liên quan, giới hạn số lượng/kích thước để tránh trùng lặp và prompt quá lớn.
-- Nếu LLM bỏ sót artifact đã gán, writer bổ sung nguyên văn vào `Exact commands and payloads`; output chứa agent chatter bị từ chối và retry.
-- Retry 504 giảm source context theo `100% → 60% → 35%`; riêng source overview bắt đầu ở 30.000 ký tự.
-
-Kiểm chứng với `Pentesting Wifi.md`: lỗi cũ do Cloudflare 504 lặp lại trên prompt 60.000 ký tự. Sau nâng cấp, REFINE/VERIFY hoàn tất `31/31` không có writer retry, COMMIT tạo 30 trang và cập nhật 1 trang, lưu 31 contribution; source chuyển `ready/commit/100%`. Có 3 cảnh báo coverage không chặn (`mschapv2`, `eap-ttls`, `essid`) để tiếp tục xử lý ở Plan Review thế hệ sau.
-
-| Tiêu chí | Trước v2 | Sau v2 |
-|---|---|---|
-| Truy vết tri thức | Theo page/source ID | Theo contribution của từng source |
-| Xóa tài liệu dùng chung | Có thể để lại nội dung | Rebuild từ nguồn còn lại |
-| Lỗi LLM merge | Có nguy cơ mất đầu vào cũ | Lossless fallback |
-| Review plan | Chủ yếu tạo concept mới | Reconcile CREATE/UPDATE |
-| Chat UX | Chờ response, format hạn chế | Optimistic, streaming, Markdown/copy |
-| Graph | Khó theo dõi ở tập lớn | Tương tác, filter, focus, semantic style |
-| Theme/mobile | Chưa đồng nhất | Light/dark và responsive |
-
-## 9. Hạn chế và rủi ro còn lại
-
-- Các trang multi-source tạo trước migration `023` chỉ có provenance legacy; cần re-ingest source để đạt provenance đầy đủ.
-- NotebookLM phụ thuộc session cookie Google và có thể hết hạn.
-- LLM merge có chi phí và độ trễ; fallback bảo toàn dữ liệu nhưng có thể kém mượt về văn phong.
-- Wiki list hiện tăng limit lớn; quy mô rất lớn nên chuyển sang pagination/virtualization.
-- Cần bổ sung integration test tự động với PostgreSQL, Redis, MinIO và worker thật trong CI.
-
-## 10. Đề xuất giai đoạn tiếp theo
-
-1. Re-ingest có kiểm soát các source legacy để hoàn thiện provenance.
-2. Thêm màn hình provenance diff theo từng source và từng wiki page.
-3. Chạy source rebuild bất đồng bộ cho các trang có nhiều contribution.
-4. Bổ sung citation từ đoạn wiki về source/chunk gốc trong chatbot.
-5. Thiết lập CI: migration test, backend tests, frontend lint/build và Docker smoke test.
-6. Bổ sung dashboard chất lượng: duplicate concepts, orphan pages, legacy provenance và retrieval hit rate.
-
-## 11. Mốc source code
-
-| Commit | Nội dung |
-|---|---|
-| `1dd7c2a` | Source-aware knowledge provenance |
-| `9d583d6` | Arkon v2 UI và knowledge workflows |
-| `36d409b` | Wiki limit và search/filter changelog |
-| `31fee50` | Bảo toàn nội dung khi Add to Wiki |
-| `12f1d65` | ZIP archive upload an toàn |
-## 12. Knowledge Type description-aware extraction
-
-- Bổ sung bộ hợp nhất policy dùng chung cho mọi đường ingest.
-- Ghép domain profile, mô tả category và custom extraction hints theo độ ưu tiên.
-- Cho phép mô tả category kích hoạt profile pentest/redteam/vulnerability khi slug
-  hoặc tên không mang từ khóa domain.
-- Giới hạn độ dài dữ liệu đưa vào prompt và loại trùng profile đã seed trước đây.
-- Áp dụng nhất quán cho MAP, REDUCE, REFINE và compiler tương thích cũ.
-## Chat timeout recovery và context optimization
-
-- Giữ model alias do admin cấu hình, tối ưu workload của request chat thật.
-- Giảm context RAG dư thừa và loại câu hỏi hiện tại bị lặp trong history.
-- Commit user message trước provider call để client có thể phục hồi ID thật.
-- Frontend tự đồng bộ assistant response từ DB khi request bị ngắt/HTTP 499.
-- Chặn edit message tạm, tăng timeout client phù hợp với nginx và thêm stage timing log.
+| How do I deploy? | [SETUP.md](SETUP.md) |
+| How is it built? | [ARCHITECTURE.md](ARCHITECTURE.md) |
+| What is the contract? | [DESIGN_DOCUMENT.md](DESIGN_DOCUMENT.md) |
+| What changed? | [../CHANGELOG.md](../CHANGELOG.md) |

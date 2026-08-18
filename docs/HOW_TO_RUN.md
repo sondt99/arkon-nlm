@@ -1,21 +1,27 @@
-# Arkon — How to Run (Development)
+# Local development
+
+Run the API, workers, and Next.js on your machine. Use Docker only for Postgres, Redis, and MinIO — or run those yourself.
+
+For the full production-like stack, use [SETUP.md](SETUP.md).
+
+---
 
 ## Prerequisites
 
-| Tool | Version | Purpose |
-|---|---|---|
-| Python | 3.11 — 3.14 | Backend runtime |
-| Node.js | 20+ | Frontend (Next.js) |
-| PostgreSQL | 15+ | Main database (with pgvector extension) |
-| Redis | 7+ | Background job queue |
-| MinIO | Latest | S3-compatible file storage |
+| Tool | Version |
+|---|---|
+| Python | 3.11 – 3.14 |
+| Node.js | 20+ |
+| Docker (optional) | for Postgres + Redis + MinIO |
+| PostgreSQL | 16 with [pgvector](https://github.com/pgvector/pgvector) |
+| Redis | 7 |
+| MinIO | current |
 
-## 1. Infrastructure
+---
 
-Start PostgreSQL, Redis, and MinIO. If you have Docker:
+## 1. Data services
 
 ```bash
-# PostgreSQL with pgvector
 docker run -d --name arkon-pg \
   -e POSTGRES_USER=arkon \
   -e POSTGRES_PASSWORD=arkon_secret \
@@ -23,10 +29,10 @@ docker run -d --name arkon-pg \
   -p 5432:5432 \
   pgvector/pgvector:pg16
 
-# Redis
-docker run -d --name arkon-redis -p 6379:6379 redis:7-alpine
+docker run -d --name arkon-redis \
+  -p 6379:6379 \
+  redis:7-alpine
 
-# MinIO
 docker run -d --name arkon-minio \
   -e MINIO_ROOT_USER=minioadmin \
   -e MINIO_ROOT_PASSWORD=minioadmin123 \
@@ -34,219 +40,163 @@ docker run -d --name arkon-minio \
   minio/minio server /data --console-address ":9001"
 ```
 
+These factory MinIO credentials match `.env.local.example`. The API allows them only if `ARKON_ALLOW_DEFAULT_SECRET=1`.
+
+---
+
 ## 2. Environment
 
 ```bash
 cp .env.local.example .env.local
 ```
 
-Minimum values to set in `.env.local`:
+Minimum:
 
 ```env
-SECRET_KEY=<generate with: python -c "import secrets; print(secrets.token_urlsafe(32))">
-DEFAULT_ADMIN_EMAIL=admin@yourcompany.com
-DEFAULT_ADMIN_PASSWORD=change-this-password
-MINIO_SECRET_KEY=minioadmin123   # match your MinIO password above
+ARKON_ALLOW_DEFAULT_SECRET=1
+ARKON_ALLOW_CORS_WILDCARD=1
+SECRET_KEY=dev-only-not-for-production
+DEFAULT_ADMIN_EMAIL=admin@arkon.local
+DEFAULT_ADMIN_PASSWORD=admin123
+DATABASE_URL=postgresql+asyncpg://arkon:arkon_secret@localhost:5432/arkon
+MINIO_ENDPOINT=localhost:9000
+MINIO_ACCESS_KEY=minioadmin
+MINIO_SECRET_KEY=minioadmin123
+CORS_ORIGINS=http://localhost:3000
+NEXT_PUBLIC_API_URL=http://localhost:5055
 ```
 
-## 3. Install Dependencies
+Do not use this file in production. The Docker template is `.env.docker.example`.
+
+---
+
+## 3. Backend
 
 ```bash
-# Create virtual environment
 python -m venv .venv
-
-# Activate
-# Windows:
-.venv\Scripts\activate
-# macOS/Linux:
-source .venv/bin/activate
-
-# Install
+source .venv/bin/activate          # Windows: .venv\Scripts\activate
 pip install -e ".[dev]"
-```
-
-## 4. Database Migration
-
-```bash
 alembic upgrade head
 ```
 
-> Creates: `sources`, `wiki_pages`, `wiki_links`, `knowledge_types`, `departments`,
-> `employees`, `knowledge_scopes`, `contacts`, `notes`, `app_config`, and more.
->
-> Also seeds 5 default knowledge types: General, SOP, Product, Project, Customer.
+The first API start also:
 
-## 5. Install Frontend
+- creates the MinIO bucket
+- seeds the default admin if none exists
+- seeds built-in skills
+- seeds security knowledge-type extraction hints
+
+---
+
+## 4. Frontend
 
 ```bash
 cd frontend
 npm install
 ```
 
-Create `frontend/.env.local`:
+`frontend/.env.local`:
+
 ```env
 NEXT_PUBLIC_API_URL=http://localhost:5055
 ```
 
-## 6. Start Services
+---
 
-You need **4 terminals**.
-
-### Terminal 1: API Server
+## 5. Start four processes
 
 ```bash
+# Terminal 1 — API
 uvicorn app.main:app --host 0.0.0.0 --port 5055 --reload
-```
 
-On first startup, Arkon will:
-- Create the MinIO bucket if it doesn't exist
-- **Auto-create the default admin account** from `.env.local` (if no admin exists yet)
-
-You should see:
-```
-SUCCESS  Default admin created: admin@arkon.local
-SUCCESS  Arkon MCP Server ready at /mcp
-SUCCESS  Arkon API started successfully
-```
-
-### Terminal 2: Wiki Worker
-
-```bash
+# Terminal 2 — wiki / documents / NotebookLM / re-embed
 python -m arq app.worker.WorkerSettings
+
+# Terminal 3 — skills
+python -m arq app.worker.SkillWorkerSettings
+
+# Terminal 4 — portal
+cd frontend && npm run dev
 ```
 
-Processes document ingestion: text extraction, image captioning, and LLM wiki compilation. Documents stay at `pending` until this is running.
+| URL | What |
+|---|---|
+| http://localhost:3000 | Portal |
+| http://localhost:5055 | API |
+| http://localhost:5055/docs | Swagger |
+| http://localhost:5055/health | Dependency health |
+| http://localhost:5055/mcp | MCP |
 
-### Terminal 3: Skills Worker
+---
+
+## 6. Configure AI, then upload
+
+Sign in at http://localhost:3000 with `DEFAULT_ADMIN_EMAIL` / `DEFAULT_ADMIN_PASSWORD`.
+
+**Settings →** set embedding + LLM, click Test.
+
+Without those, the worker will pick up jobs and fail during MAP/REFINE.
+
+---
+
+## 7. Tests and lint
 
 ```bash
-python -m arq app.worker.SkillWorkerSettings
+# from repo root, venv active
+ruff check app/ tests/
+pytest
+
+cd frontend
+npm run lint
+./node_modules/.bin/tsc --noEmit
 ```
 
-Handles AI skill package processing. Required if you use the Skills feature.
-
-### Terminal 4: Frontend
+Playwright (optional):
 
 ```bash
 cd frontend
-npm run dev
+npx playwright install
+npm run test:e2e
 ```
 
-Open http://localhost:3000 — log in with the admin credentials from `.env.local`.
+---
 
-## 7. Configure AI Providers
+## Worker jobs (reference)
 
-After first login, go to **Admin Portal → Settings** and configure:
+**`WorkerSettings`** (Redis default queue):
 
-- **Embedding model** — required for wiki page search (e.g. `text-embedding-004` / Google)
-- **LLM** — required for wiki compilation; choose a model with a large context window (e.g. `gemini-2.5-pro`, `gpt-4o`, `claude-sonnet-4-5`)
-- **Vision model** — optional, enables image captioning during ingestion
-
-Without embedding + LLM config, document uploads will queue but wiki compilation will fail.
-
-## 8. Verify
-
-### API Health
-
-```
-http://localhost:5055/
-```
-
-### API Docs (Swagger)
-
-```
-http://localhost:5055/docs
-```
-
-### Login
-
-```bash
-curl -X POST http://localhost:5055/api/auth/login \
-  -H "Content-Type: application/json" \
-  -d '{"email": "admin@arkon.local", "password": "admin123"}'
-```
-
-Response:
-```json
-{
-  "access_token": "eyJ...",
-  "token_type": "bearer",
-  "user": {
-    "id": "...",
-    "name": "Admin",
-    "email": "admin@arkon.local",
-    "role": "admin"
-  }
-}
-```
-
-Use the `access_token` as `Authorization: Bearer <token>` for all admin API calls.
-
-## 9. API Overview
-
-### Auth
-| Method | Path | Description |
-|---|---|---|
-| POST | `/api/auth/login` | Login (email + password) |
-| GET | `/api/auth/me` | Current user profile |
-| POST | `/api/auth/change-password` | Change password |
-
-### Admin (requires `role=admin`)
-| Method | Path | Description |
-|---|---|---|
-| GET/PUT | `/api/settings` | Provider config (AI keys, models) |
-| CRUD | `/api/departments` | Manage departments |
-| CRUD | `/api/employees` | Manage employees |
-| POST/DELETE | `/api/employees/:id/token` | Generate/revoke MCP token |
-| CRUD | `/api/knowledge-types` | Manage knowledge types |
-| CRUD | `/api/scopes` | Manage knowledge scopes |
-| CRUD | `/api/sources` | Manage documents |
-| POST | `/api/sources/upload` | Upload a file |
-| POST | `/api/sources/url` | Add a URL source |
-| POST | `/api/sources/:id/retry` | Retry ingestion for a failed source |
-| CRUD | `/api/contacts` | Manage contacts |
-
-### Wiki (requires login)
-| Method | Path | Description |
-|---|---|---|
-| GET | `/api/wiki/pages` | List wiki pages (filterable) |
-| GET | `/api/wiki/pages/:slug` | Get a wiki page with backlinks |
-| GET | `/api/wiki/index` | `_index` catalog page |
-| GET | `/api/wiki/log` | `_log` chronological log |
-| GET | `/api/wiki/graph` | Graph nodes + edges (full or neighborhood) |
-
-### MCP (Claude Desktop)
-| Path | Auth | Description |
-|---|---|---|
-| `/mcp` | `Bearer ark_xxx` (MCP token) | MCP endpoint for Claude Desktop |
-
-## 10. Connect Claude Desktop
-
-After generating an MCP token for an employee, add to Claude Desktop config (`claude_desktop_config.json`):
-
-```json
-{
-  "mcpServers": {
-    "arkon": {
-      "url": "http://localhost:5055/mcp",
-      "headers": {
-        "Authorization": "Bearer ark_xxxx..."
-      }
-    }
-  }
-}
-```
-
-## Troubleshooting
-
-| Issue | Solution |
+| Job | Purpose |
 |---|---|
-| `connection refused` on port 5432 | PostgreSQL is not running |
-| `pgvector extension not found` | Use `pgvector/pgvector` Docker image, or install pgvector manually |
-| `No admin created` on startup | Check `DEFAULT_ADMIN_EMAIL` / `DEFAULT_ADMIN_PASSWORD` in `.env.local` |
-| Documents stuck at `pending` | Wiki worker not running — start Terminal 2 |
-| Wiki pages not created after upload | Check LLM provider config in Settings; check worker logs for errors |
-| Skills not processing | Skills worker not running — start Terminal 3 |
-| Frontend shows "API Error" | Backend not running, or `NEXT_PUBLIC_API_URL` incorrect in `frontend/.env.local` |
-| CORS errors in browser | Add `http://localhost:3000` to `CORS_ORIGINS` in backend `.env.local` |
-| `requires Python 3.11` error | Use `py -3.11 -m venv .venv` to create venv with correct version |
+| `ingest_file_task` | Extract text from an uploaded file |
+| `ingest_url_task` | Fetch and extract a URL |
+| `caption_images_task` | Vision captions for page images |
+| `ingest_map_reduce_task` | MRP MAP + REDUCE + plan |
+| `ingest_refine_task` | MRP REFINE + VERIFY + COMMIT |
+| `reembed_all_pages_task` | Rebuild embeddings after a dimension change |
+| `notebooklm_generate_task` | Generate a NotebookLM artifact |
+| `notebooklm_ingest_artifact_task` | Import an artifact into the wiki |
+| cron `notebooklm_refresh_session_cron` | Every 30 minutes |
+
+**`SkillWorkerSettings`** (queue `skills_queue`):
+
+| Job | Purpose |
+|---|---|
+| `ingest_skill_task` | Unpack and store a skill ZIP |
+| `delete_skill_task` | Remove skill objects |
+| cron `cleanup_temp_uploads_cron` | Hourly |
+
+---
+
+## Common local failures
+
+| Symptom | Fix |
+|---|---|
+| `SECRET_KEY is still the default` | Set `ARKON_ALLOW_DEFAULT_SECRET=1` or change the secret |
+| `CORS_ORIGINS is '*'` | Set `ARKON_ALLOW_CORS_WILDCARD=1` or list `http://localhost:3000` |
+| `pgvector extension not found` | Use the `pgvector/pgvector` image |
+| Documents stuck at `pending` | Start worker terminal 2 |
+| Skills stuck at `pending` | Start worker terminal 3 |
+| Frontend “API Error” | API down, or `NEXT_PUBLIC_API_URL` wrong |
+| Login works but images 404 | MinIO not running, or `MINIO_ENDPOINT` not `localhost:9000` |
+
+More cases: [TROUBLESHOOTING.md](TROUBLESHOOTING.md).

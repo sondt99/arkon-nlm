@@ -1,265 +1,190 @@
-# Arkon — Quick Start (30 phút)
+# Quick start
 
-Hướng dẫn này đưa bạn từ zero đến hệ thống Arkon đầy đủ chức năng trong khoảng 30 phút.
+Get a working Arkon on your machine in about 20 minutes.
 
----
-
-## Bước 1 — Chuẩn bị (5 phút)
-
-### Yêu cầu
-
-- Docker Desktop đang chạy
-- Có ít nhất 1 trong các API key: Google AI, OpenAI, hoặc Anthropic
-- (Hoặc Ollama cài trên máy để chạy hoàn toàn offline)
-
-### Clone project
-
-```bash
-cd E:\AI-CLAUDE
-# Arkon đã có tại E:\AI-CLAUDE\arkon
-cd arkon
-```
+Need production hardening, TLS, or a public hostname? Use [SETUP.md](SETUP.md) after this.
 
 ---
 
-## Bước 2 — Cấu hình (5 phút)
+## 1. What you need
 
-Copy file cấu hình mẫu:
+- Docker Engine + Docker Compose v2
+- About 4 GB RAM free
+- An API key from **one** of: Google AI Studio, OpenAI, Anthropic — **or** a local [Ollama](https://ollama.com) install
+
+---
+
+## 2. Clone and create the Docker network
 
 ```bash
-copy .env.docker.example .env.docker
+git clone https://github.com/sondt99/arkon-nlm.git
+cd arkon-nlm
+
+# Compose joins this network as an *external* network. Create it once.
+docker network create arkon_default
 ```
 
-Mở `.env.docker` và sửa các giá trị **bắt buộc**:
+If you skip the network, `docker compose up` fails with “network arkon_default declared as external, but could not be found”.
+
+---
+
+## 3. Write your secrets
+
+```bash
+cp .env.docker.example .env.docker
+```
+
+Open `.env.docker` and set these. Do not leave the `change-me-…` values.
 
 ```env
-# Tạo SECRET_KEY bằng lệnh:
-# python -c "import secrets; print(secrets.token_hex(32))"
-SECRET_KEY=<dán kết quả vào đây>
-
-# Tài khoản admin đầu tiên
-DEFAULT_ADMIN_EMAIL=admin@company.com
-DEFAULT_ADMIN_PASSWORD=mat-khau-manh-123
-
-# Mật khẩu database (tùy chọn, mặc định là arkon_secret)
-POSTGRES_PASSWORD=arkon_secret
-REDIS_PASSWORD=arkon_secret
-MINIO_SECRET_KEY=minioadmin123
-
-# CORS — thêm IP/domain của bạn nếu truy cập từ nơi khác
-CORS_ORIGINS=http://localhost:3119
+SECRET_KEY=                    # python -c "import secrets; print(secrets.token_urlsafe(32))"
+DEFAULT_ADMIN_EMAIL=admin@yourcompany.com
+DEFAULT_ADMIN_PASSWORD=        # strong password
+POSTGRES_PASSWORD=             # strong password
+REDIS_PASSWORD=                # strong password
+MINIO_ACCESS_KEY=minioadmin
+MINIO_SECRET_KEY=              # strong password, not minioadmin123
+DATABASE_URL=postgresql+asyncpg://arkon:<POSTGRES_PASSWORD>@postgres:5432/arkon
 ```
 
-> **Lưu ý Windows**: Nếu dùng Ollama local, không cần API key của bất kỳ nhà cung cấp nào.
+Leave these as they are for a local Docker run:
+
+```env
+CORS_ORIGINS=
+NEXT_PUBLIC_API_URL=
+MINIO_PUBLIC_ENDPOINT=localhost
+MINIO_SECURE=false
+NGINX_PORT=3119
+```
+
+`CORS_ORIGINS` empty is correct: the browser talks to nginx on one origin, so the API does not need a CORS wildcard.
 
 ---
 
-## Bước 3 — Khởi động (5 phút)
+## 4. Start the stack
+
+Always pass `--env-file .env.docker`. Without it, Compose substitutes empty passwords and the containers cannot talk to each other.
 
 ```bash
-# Build và khởi động toàn bộ hệ thống
-docker compose build
-docker compose up -d
-
-# Kiểm tra trạng thái
-docker compose ps
+docker compose --env-file .env.docker up -d --build
+docker compose --env-file .env.docker ps
 ```
 
-Chờ khoảng 30-60 giây rồi kiểm tra:
+Wait until `arkon_api`, `arkon_frontend`, and `arkon_nginx` are healthy (about 30–60 seconds).
+
+Check the API through nginx:
 
 ```bash
-# Phải trả về {"status": "healthy", ...}
-curl http://localhost:5055/health
+curl http://localhost:3119/api/health
 ```
 
-Nếu thấy `healthy` → tiếp tục bước 4.
+You want `"api": "healthy"` and `"database": "healthy"`.
 
 ---
 
-## Bước 4 — Đăng nhập lần đầu (2 phút)
+## 5. Sign in
 
-Mở trình duyệt: **http://localhost:3119**
+Open **http://localhost:3119**
 
-Đăng nhập với:
-- Email: giá trị `DEFAULT_ADMIN_EMAIL` đã đặt
-- Mật khẩu: giá trị `DEFAULT_ADMIN_PASSWORD` đã đặt
+Email and password = the `DEFAULT_ADMIN_*` values you set.
+
+The default admin is created only when **no admin exists yet**. Changing the env vars later does not reset the password.
 
 ---
 
-## Bước 5 — Cấu hình AI Provider (5 phút)
+## 6. Configure AI
 
-Đây là bước **quan trọng nhất** — không có AI provider, hệ thống không xử lý được tài liệu.
+Go to **Settings**. You need at least embedding + LLM.
 
-Vào **Settings** (góc trái dưới sidebar):
+### Google (good default)
 
-### Nếu dùng Google (Gemini) — khuyến nghị cho chất lượng tốt nhất
+| Slot | Provider | Typical model |
+|---|---|---|
+| Embedding | Google | `text-embedding-004` |
+| LLM | Google | `gemini-2.5-flash` or `gemini-2.5-pro` |
+| Vision (optional) | Google | `gemini-2.0-flash` |
 
-```
-Embedding Provider: Google
-Embedding Model:    text-embedding-004
-API Key:            AIza... (lấy từ Google AI Studio)
+Paste the same Google AI Studio key into each slot you use. Click **Test** on each.
 
-LLM Provider:       Google  
-LLM Model:          gemini-2.5-flash
-API Key:            AIza... (cùng key)
+### OpenAI / Anthropic
 
-Vision Provider:    Google
-Vision Model:       gemini-2.0-flash
-```
+Same idea: pick the provider, pick a model, paste the key, test.
 
-### Nếu dùng OpenAI
+Anthropic has no embedding model — keep embedding on Google, OpenAI, Ollama, or 9Router.
 
-```
-Embedding: OpenAI → text-embedding-3-small → sk-...
-LLM:       OpenAI → gpt-4o-mini → sk-...
-Vision:    OpenAI → gpt-4o → sk-...
-```
+### Ollama (offline)
 
-### Nếu dùng Ollama (offline, không cần internet)
-
-Đảm bảo Ollama đang chạy trên máy host:
+On the host:
 
 ```bash
-ollama pull qwen2.5:14b
 ollama pull nomic-embed-text
+ollama pull qwen2.5:14b
 ```
 
-Rồi trong Settings:
-
-```
-Embedding: Ollama → nomic-embed-text
-           Base URL: http://host.docker.internal:11434/v1
-
-LLM:       Ollama → qwen2.5:14b  
-           Base URL: http://host.docker.internal:11434/v1
-
-Vision:    (không hỗ trợ với Ollama — để trống)
-```
-
-Nhấn **Save Settings** → nhấn **Test LLM** để xác nhận kết nối.
+In Settings, provider **Ollama**, base URL `http://host.docker.internal:11434/v1`, then **Fetch Models**.
 
 ---
 
-## Bước 6 — Thiết lập cơ bản (5 phút)
+## 7. Create a category and upload a file
 
-### Tạo phòng ban
+1. **Knowledge Types → New** — e.g. `SOP` / slug `sop`.
+2. **Documents → Upload** — drop a PDF or DOCX, pick that knowledge type, scope **Global**.
+3. Watch the status: `pending` → `processing` → `plan_review` or `ready`.
 
-**Admin → Departments → New Department**
+If it sits on `pending`, the worker is not running: `docker compose --env-file .env.docker logs worker`.
 
-Ví dụ: `IT`, `HR`, `Legal`, `Engineering`
-
-### Tạo Knowledge Type
-
-**Admin → Knowledge Types → New Type**
-
-Ví dụ:
-- Name: `Quy trình` · Description: `SOPs, hướng dẫn nghiệp vụ`
-- Name: `Chính sách` · Description: `Nội quy, quy định công ty`
-- Name: `Kỹ thuật` · Description: `Tài liệu kỹ thuật, API docs`
+If you see **Review Plan**, open it and **Approve**. That is the MRP plan-review step. After approval the writer runs and the wiki pages appear.
 
 ---
 
-## Bước 7 — Upload tài liệu đầu tiên (3 phút)
+## 8. Read the wiki
 
-**Knowledge Base → Upload**
-
-1. Kéo thả file PDF/DOCX hoặc dán URL
-2. Chọn **Knowledge Type** (vừa tạo ở bước 6)
-3. Chọn **Scope**: Global (mọi người) hoặc Project (workspace cụ thể)
-4. Nhấn Upload
-
-Hệ thống sẽ bắt đầu xử lý. Quan sát **progress bar** trong danh sách tài liệu.
-
-**Timeline xử lý điển hình:**
-- File PDF 50 trang: ~3-5 phút
-- URL/website: ~1-3 phút
-- Tài liệu lớn (>200 trang): ~10-15 phút
+Open **Wiki**. Search or browse the pages that were just written.
 
 ---
 
-## Bước 8 — Xem kết quả (2 phút)
+## 9. Connect Claude (optional)
 
-Khi status chuyển sang **Ready** (hoặc **Plan Review** nếu chưa bật auto-approve):
-
-### Nếu thấy "Plan Review"
-
-Nhấn **Review Plan** → xem danh sách wiki pages sẽ được tạo → nhấn **Approve**.
-
-### Xem Wiki đã được tạo
-
-**Wiki** → Tìm kiếm hoặc duyệt các trang vừa được tạo tự động.
-
----
-
-## Bước 9 — Kết nối Claude (3 phút)
-
-### Tạo MCP token
-
-**Admin → Employees → [tên nhân viên] → Generate Token**
-
-Sao chép token bắt đầu bằng `ark_...`
-
-### Cấu hình Claude Desktop
-
-Mở file `claude_desktop_config.json`:
-- Windows: `%APPDATA%\Claude\claude_desktop_config.json`
-- macOS: `~/Library/Application Support/Claude/claude_desktop_config.json`
+1. **Profile → MCP token** (or **Employees → [you] → Generate token**).
+2. Copy the `ark_…` value. It is shown once.
+3. Add this to Claude Desktop `claude_desktop_config.json`:
 
 ```json
 {
   "mcpServers": {
     "arkon": {
-      "url": "http://localhost:5055/mcp",
+      "url": "http://localhost:3119/mcp",
       "headers": {
-        "Authorization": "Bearer ark_xxxx..."
+        "Authorization": "Bearer ark_xxxxxxxx"
       }
     }
   }
 }
 ```
 
-Khởi động lại Claude Desktop.
+Restart Claude Desktop. Ask: “Search the Arkon wiki for [something in your file].”
 
-### Kiểm tra
-
-Hỏi Claude: *"Tìm trong knowledge base về [chủ đề trong tài liệu bạn vừa upload]"*
-
-Claude sẽ tự động gọi `search_wiki` và trả lời dựa trên nội dung đã biên soạn.
+Details: [MCP.md](MCP.md).
 
 ---
 
-## Checklist hoàn thành
+## Checklist
 
-- [ ] Docker stack chạy và healthy
-- [ ] Đăng nhập thành công vào Admin Portal
-- [ ] Cấu hình AI Provider và Test LLM thành công
-- [ ] Tạo ít nhất 1 phòng ban
-- [ ] Tạo ít nhất 1 Knowledge Type
-- [ ] Upload 1 tài liệu thử nghiệm
-- [ ] Wiki pages được tạo sau khi xử lý
-- [ ] Claude Desktop kết nối và trả lời được câu hỏi về tài liệu
+- [ ] `arkon_default` network exists
+- [ ] `.env.docker` has unique secrets (not the example strings)
+- [ ] `docker compose --env-file .env.docker ps` shows healthy
+- [ ] Login works at http://localhost:3119
+- [ ] Embedding + LLM tests pass
+- [ ] One document reached `ready` (or you approved its plan)
+- [ ] Wiki shows at least one page
 
 ---
 
-## Bước tiếp theo
+## Next
 
-| Muốn làm gì | Xem tài liệu |
+| Goal | Doc |
 |---|---|
-| Thêm nhân viên và phân quyền | [ADMIN-GUIDE.md](ADMIN-GUIDE.md) |
-| Tạo workspace cho nhóm | [WORKSPACES.md](WORKSPACES.md) |
-| Tùy chỉnh knowledge types | [KNOWLEDGE-TYPES.md](KNOWLEDGE-TYPES.md) |
-| Hiểu pipeline MRP chi tiết | [WIKI.md](WIKI.md) |
-| Deploy lên server | [SETUP.md](SETUP.md) |
-
----
-
-## Xử lý sự cố nhanh
-
-| Vấn đề | Giải pháp |
-|---|---|
-| Container không khởi động | `docker compose logs api` xem lỗi |
-| Health check fail | Đợi thêm 30s, Redis/MinIO cần thêm thời gian |
-| Upload xong nhưng status mãi `pending` | Worker không chạy: `docker compose logs worker` |
-| Test LLM fail | Kiểm tra API key và Base URL trong Settings |
-| Claude không thấy tools | Khởi động lại Claude Desktop sau khi sửa config |
-| Không truy cập được từ IP khác | Thêm IP vào `CORS_ORIGINS` trong `.env.docker` rồi restart |
+| Deploy on a server | [SETUP.md](SETUP.md) |
+| Add people and roles | [ADMIN-GUIDE.md](ADMIN-GUIDE.md) |
+| Understand the compiler | [WIKI.md](WIKI.md) |
+| Something failed | [TROUBLESHOOTING.md](TROUBLESHOOTING.md) |

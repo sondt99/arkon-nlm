@@ -1,123 +1,82 @@
 # AI Skills
 
-AI Skills are versioned agent packages that employees can access through Claude via MCP. Upload a skill package, assign it to departments or workspaces, and it becomes available in Claude's tool context for employees with the right permissions.
+A **skill** is a versioned ZIP package (prompt, scripts, assets) that your organization stores in Arkon. Think of it as an internal catalog of agent capabilities — the same idea as a Claude skill folder, managed centrally.
+
+Skills are **not** MCP tools. MCP searches the wiki. Skills are files people (and Claude Code) can download and load. This repo’s own `skills/arkon-query` (and friends) are examples of the format.
 
 ---
 
-## What is a Skill?
+## Life of a skill
 
-A Skill is a packaged capability — a custom agent, a specialized prompt, or a tool bundle — that your organization develops and distributes through Arkon. Think of it as an internal app store for AI capabilities.
+```text
+Upload ZIP  →  worker unpacks to MinIO  →  status = active
+                                              │
+                    new version ──────────────┤
+                    contribute branch ────────┤
+                    approve → becomes latest ─┘
+```
 
-Examples:
-- A **document generator** that fills in report templates from structured input
-- A **contract reviewer** trained on your organization's legal standards
-- A **customer profile builder** that pulls from your CRM data format
-- A **translation agent** calibrated to your industry's terminology
+**AI Skills → Upload**. Required: name, slug, ZIP. Optional: departments, workspace scope, changelog.
 
-Skills are uploaded as packages, versioned, and scoped to specific departments or workspaces. When a scoped employee connects via MCP, their permitted skills are available to Claude automatically.
+Statuses: `pending` → `processing` → `active` (or `error`). If it stays `pending`, start `worker_skills`.
 
----
-
-## Uploading a Skill
-
-**Admin Portal → Skills → Upload Skill**
-
-Required:
-- **Name** — human-readable skill name
-- **Slug** — URL-safe identifier (e.g. `document-generator`)
-- **Package file** — the skill package (format depends on your implementation)
-- **Description** — what this skill does
-
-Optional:
-- **Department scope** — restrict to specific departments (no departments = global, visible to all)
-- **Knowledge type** — associate the skill with a knowledge category
-
-The background skill worker processes the uploaded package. Status progresses: `pending` → `processing` → `active`.
+System skills (`is_system=true`) are seeded on boot and are read-only.
 
 ---
 
 ## Versioning
 
-Every skill has a version history:
-- `current_version` — active version number (integer)
-- Each upload or update creates a new `SkillVersion` record with a version hash and storage path
-- Changelog notes are optional but recommended
-
-To release a new version:
-**Admin Portal → Skills → [skill name] → Upload New Version**
-
-Old versions are preserved. Rolling back to a previous version is available from the version history panel.
+Each upload creates a `SkillVersion` (number + content hash + object prefix). **Set latest** points the live slug at a previous version. Old objects stay in MinIO until you delete the skill.
 
 ---
 
-## Access control
+## Who can see a skill
 
-Skills follow the same dual-realm permission model as documents and wiki:
+Same dual-realm rules as documents. See [ACCESS-CONTROL.md](ACCESS-CONTROL.md).
 
-**Global realm (department-based):**
-- No departments assigned → **Global skill** — visible to all employees with `skill:read:own_dept` or higher
-- Departments assigned → visible only to employees whose department matches
+- No department + global scope → anyone with `skill:read:*`
+- Departments set → those departments
+- Workspace scope → workspace members with `skill:read`
 
-**Workspace realm:**
-- Skills can be scoped to a specific workspace (`scope_type = project`)
-- Only workspace members can access workspace-scoped skills
+`skill:create` / `edit` / `delete` follow the same `own_dept` / `all` split.
 
-**Permission levels:**
-| Permission | What it grants |
+---
+
+## Contributions
+
+People who cannot edit a skill directly open a **contribution** (a sandbox copy):
+
+1. **Contribute** from the skill card
+2. Edit files in the contribution browser
+3. **Submit**
+4. A reviewer **Approves** (publishes a new version) or **Rejects**
+
+API lives under `/api/skill-contributions`. Admins also have `/api/admin/skill-contributions`.
+
+---
+
+## Built-in skills in this repo
+
+| Folder | Purpose |
 |---|---|
-| `skill:read:own_dept` | View and use skills in your department + global skills |
-| `skill:read:all` | View and use all skills across all departments |
-| `skill:create:own_dept` | Upload skills to your department |
-| `skill:create:all` | Upload skills to any department |
-| `skill:edit:own_dept` | Edit skill metadata in your department |
-| `skill:edit:all` | Edit any skill |
-| `skill:delete:own_dept` | Delete skills in your department |
-| `skill:delete:all` | Delete any skill |
+| `skills/arkon-query` | Query the wiki through MCP |
+| `skills/arkon-edit` | Propose or apply wiki edits |
+| `skills/arkon-review` | Review drafts |
+
+These talk to the MCP server. They are not stored as rows unless you upload them through the portal.
 
 ---
 
-## Skill visibility in MCP
+## API (short)
 
-When an employee connects Claude via MCP:
-1. Arkon resolves their identity and permission scope
-2. Skills accessible to this employee (based on department + workspace membership) are included in the MCP context
-3. Claude can reference and use these skills in conversation
-
-Skills that are `processing`, `deprecated`, or `archived` are not surfaced in MCP.
-
----
-
-## Skill lifecycle
-
-```
-Upload package
-    │
-    ▼
-status: pending
-    │
-    ▼ (skill worker processes)
-status: processing
-    │
-    ▼
-status: active  ──→  available in MCP for scoped employees
-    │
-    ├── Update version  ──→  new SkillVersion, current_version bumped
-    │
-    ├── Deprecate  ──→  status: deprecated (no longer surfaced in MCP)
-    │
-    └── Archive  ──→  status: archived (hidden from lists)
-```
-
----
-
-## API reference
-
-| Method | Endpoint | Description |
-|---|---|---|
-| `GET` | `/api/skills` | List skills (filtered to user's scope) |
-| `POST` | `/api/skills/upload` | Upload a new skill package |
-| `GET` | `/api/skills/{id}` | Get skill details |
-| `PATCH` | `/api/skills/{id}` | Update skill metadata |
-| `DELETE` | `/api/skills` | Delete skills (bulk) |
-| `GET` | `/api/skills/{id}/versions` | List version history |
-| `POST` | `/api/skills/bulk-visibility` | Set department/scope for multiple skills |
+| Method | Path |
+|---|---|
+| `GET` | `/api/skills` |
+| `POST` | `/api/skills/upload` |
+| `POST` | `/api/skills/inspect-zip` |
+| `GET` | `/api/skills/{slug}` |
+| `GET` | `/api/skills/{slug}/versions` |
+| `POST` | `/api/skills/{slug}/set-latest` |
+| `POST` | `/api/skills/{slug}/reupload` |
+| `PATCH` / `DELETE` | `/api/skills/{slug}` |
+| `GET` | `/api/skills/{id}/files` and `.../files/content` |

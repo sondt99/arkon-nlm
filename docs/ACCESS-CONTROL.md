@@ -1,222 +1,139 @@
-# Access Control
+# Access control
 
-Arkon has a dual-realm permission system:
-
-1. **Global realm** — department-based RBAC for organization-wide resources (documents, wiki, skills)
-2. **Workspace realm** — membership-based roles for project-scoped resources
-
-These two realms are independent. Global permissions do not grant workspace access, and workspace membership does not grant access to global resources by itself.
+Arkon has **two independent realms**. A global permission does not open a workspace. A workspace role does not open global documents.
 
 ---
 
-## Global Realm — Permissions
+## Picture
 
-### Permission format
-
+```text
+Employee
+   │
+   ├── system role = admin?  ──yes──►  bypass everything
+   │
+   ├── Global realm
+   │     custom Role  →  permissions like wiki:read:own_dept
+   │     applies to unscoped (org-wide) resources
+   │
+   └── Workspace realm
+         membership row  →  viewer | contributor | editor | admin
+         applies only inside that workspace
 ```
+
+---
+
+## Global realm
+
+### Permission strings
+
+```text
 {resource}:{action}:{scope}
-
-scope options:
-  own_dept  →  your department + global (unscoped) resources
-  all       →  all resources regardless of department
 ```
 
-### Full permission list
+`scope` is `own_dept` (your department + unscoped/global items) or `all` (every department).
 
-**Documents**
-| Permission | Description |
-|---|---|
-| `doc:read:own_dept` | View documents in your department and global documents |
-| `doc:read:all` | View all documents across all departments |
-| `doc:create:own_dept` | Upload documents to your department |
-| `doc:create:all` | Upload documents to any department |
-| `doc:edit:own_dept` | Edit document metadata in your department |
-| `doc:edit:all` | Edit any document |
-| `doc:delete:own_dept` | Delete documents in your department |
-| `doc:delete:all` | Delete any document |
+Org permissions look like `org:departments:read` (the third part is the action, not a scope).
 
-**Wiki**
-| Permission | Description |
-|---|---|
-| `wiki:read:own_dept` | Read global wiki + wiki pages scoped to your dept |
-| `wiki:read:all` | Read all wiki pages |
-| `wiki:write:own_dept` | Propose wiki drafts for global pages |
-| `wiki:write:all` | Direct edit any wiki page + approve/reject drafts on global pages |
-| `wiki:delete:own_dept` | Delete wiki pages in your dept scope |
-| `wiki:delete:all` | Delete any wiki page |
+### Documents
 
-**AI Skills**
-| Permission | Description |
+| Permission | Meaning |
 |---|---|
-| `skill:read:own_dept` | Use skills in your department + global skills |
-| `skill:read:all` | Use all skills |
-| `skill:create:own_dept` | Upload skills to your department |
-| `skill:create:all` | Upload skills anywhere |
-| `skill:edit:own_dept` | Edit skill metadata in your department |
-| `skill:edit:all` | Edit any skill |
-| `skill:delete:own_dept` | Delete skills in your department |
-| `skill:delete:all` | Delete any skill |
+| `doc:read:own_dept` | See your department’s files + global files |
+| `doc:read:all` | See every file |
+| `doc:create:own_dept` / `:all` | Upload |
+| `doc:edit:own_dept` / `:all` | Edit metadata |
+| `doc:delete:own_dept` / `:all` | Delete |
 
-**Organization (admin operations)**
-| Permission | Description |
-|---|---|
-| `org:departments:read` | View departments |
-| `org:departments:manage` | Create/edit/delete departments |
-| `org:employees:read` | View employee directory |
-| `org:employees:manage` | Create/edit/deactivate employees |
-| `org:roles:read` | View roles and their permissions |
-| `org:roles:manage` | Create/edit/delete roles |
-| `org:settings:read` | View system settings |
-| `org:settings:manage` | Modify system settings (AI providers, keys) |
-| `org:audit:read` | View audit log |
+A file with **no** department is global: anyone with the matching action can see it.
 
-**Workspaces**
-| Permission | Description |
+### Wiki
+
+| Permission | Meaning |
 |---|---|
-| `workspace:view:all` | View all workspaces without being a member |
+| `wiki:read:own_dept` / `:all` | Read pages |
+| `wiki:write:own_dept` | Propose drafts on global pages |
+| `wiki:write:all` | Direct edit + approve/reject drafts |
+| `wiki:delete:own_dept` / `:all` | Delete pages |
+
+### Skills
+
+Same shape as documents: `skill:read|create|edit|delete` × `own_dept|all`.
+
+### Organization
+
+| Permission | Meaning |
+|---|---|
+| `org:departments:read` / `manage` | Departments |
+| `org:employees:read` / `manage` | People |
+| `org:roles:read` / `manage` | Roles |
+| `org:settings:read` / `manage` | AI keys and models |
+| `org:audit:read` | Audit log |
+| `skill:contribution:review` | Approve or reject skill contributions |
+| `workspace:view:all` | Declared in the catalog. **v0.1.0 does not use it** — only system `admin` lists every workspace |
+
+### Built-in role presets
+
+These are **templates** the Roles UI can apply. They are not four extra rows seeded by the migration (the database seeds system roles named Admin and Employee). You can still create them by hand.
+
+| Preset | Includes |
+|---|---|
+| **Viewer** | read own-dept docs / wiki / skills, `org:departments:read` |
+| **Contributor** | Viewer + create docs / wiki drafts / skills in own dept |
+| **Department Admin** | Contributor + edit/delete in own dept |
+| **Knowledge Admin** | `:all` on docs, wiki, and skills |
+
+If an employee has **no** custom role, they get:
+
+```text
+doc:read:own_dept
+doc:create:own_dept
+wiki:read:own_dept
+wiki:write:own_dept
+skill:read:own_dept
+```
+
+### System admin
+
+`Employee.role = admin` is not a custom Role. It skips every permission check, is an implicit admin of every workspace, and is the only actor that can create or delete workspaces.
 
 ---
 
-### Roles
+## Workspace realm
 
-A **Role** is a named collection of permissions assigned to employees. Roles are created and managed in **Admin Portal → Roles**.
+Membership lives on `project_members`. Roles are a ladder — a higher role includes the lower ones.
 
-**Built-in role presets:**
-
-| Preset | Included permissions |
-|---|---|
-| **Viewer** | `doc:read:own_dept`, `wiki:read:own_dept`, `skill:read:own_dept`, `org:departments:read` |
-| **Contributor** | Viewer + `doc:create:own_dept`, `wiki:write:own_dept`, `skill:create:own_dept` |
-| **Department Admin** | Contributor + edit/delete for own dept (docs, wiki, skills) |
-| **Knowledge Admin** | All `:all` permissions for docs, wiki, and skills |
-
-**Default employee permissions** (when no custom role is assigned):
-`doc:read:own_dept`, `doc:create:own_dept`, `wiki:read:own_dept`, `wiki:write:own_dept`, `skill:read:own_dept`
-
----
-
-### System Admin
-
-The `admin` role (set on the Employee model) is a system-level override:
-- Bypasses all permission checks
-- Has workspace admin role in every workspace automatically
-- Can create and delete workspaces
-- Can view and manage all resources regardless of department
-
----
-
-## Workspace Realm — Membership Roles
-
-Each workspace (project) has its own member list. Membership roles are separate from global permissions.
-
-### Roles
-
-| Role | Level | What they can do |
+| Role | Level | Can |
 |---|---|---|
-| **Viewer** | 0 | Read wiki pages, sources, and member list of the workspace |
-| **Contributor** | 1 | + Propose wiki drafts for workspace pages |
-| **Editor** | 2 | + Direct edit wiki pages · Approve/reject drafts · Add/remove sources · Upload files to workspace |
-| **Admin** | 3 | + Add/remove members · Change member roles · Rename/archive the workspace |
+| Viewer | 0 | Read wiki, sources, members |
+| Contributor | 1 | + propose drafts |
+| Editor | 2 | + direct edit, review drafts, add/remove sources, upload |
+| Admin | 3 | + manage members and archive the workspace |
 
-Roles are hierarchical — Editor can do everything Contributor can, and so on.
+The last workspace admin cannot be removed or demoted. Assign another admin first.
 
-### Guards
-
-- **Last admin protection** — the last workspace admin cannot be removed or demoted. Assign another admin first.
-- **Workspace deletion** — only system admins can delete workspaces, regardless of workspace role.
-- **Workspace creation** — only system admins can create workspaces.
+System admins do not need a membership row.
 
 ---
 
-## How scope resolution works
+## MCP tokens
 
-### Global documents
+An `ark_…` token is bound to one employee. Every MCP tool re-resolves that employee and applies the same **document-read** scope they have in the portal:
 
-```
-User has doc:read:own_dept?
-  → Source has no departments (Global doc)?   → Accessible ✓
-  → Source's departments include user's dept? → Accessible ✓
-  → Otherwise                                 → Blocked ✗
+- `doc:read:all` — every source
+- `doc:read:own_dept` — their department’s sources plus unscoped/global sources
+- workspace membership — project-scoped sources they belong to
 
-User has doc:read:all?
-  → Accessible regardless of source departments ✓
-```
+Knowledge-type slugs are **not** a separate token ACL in v0.1.0 (the field exists on the identity object but is not populated). Empty results usually mean department or workspace scope, not a missing KT grant.
 
-### Workspace resources
-
-```
-User is system admin?            → Full access ✓
-User is workspace member?        → Access (filtered by workspace role)
-Otherwise                        → 403 Forbidden
-```
-
-### Wiki pages
-
-```
-Global wiki page:
-  → User has wiki:read:own_dept or wiki:read:all → Accessible ✓
-  → Otherwise → Blocked ✗
-
-Workspace-scoped wiki page:
-  → User has wiki:read:own_dept AND is workspace member → Accessible ✓
-  → User has wiki:read:all                             → Accessible ✓
-  → Otherwise → Blocked ✗
-```
-
-### Wiki write permissions (global pages)
-
-| Action | Required permission |
-|---|---|
-| Propose a draft | `wiki:write:own_dept` or `wiki:write:all` |
-| Direct edit | `wiki:write:all` |
-| Approve / reject draft | `wiki:write:all` |
-
-For **workspace-scoped** pages, global permissions are not used — workspace roles apply:
-
-| Action | Required workspace role |
-|---|---|
-| Propose a draft | Contributor+ |
-| Direct edit | Editor+ |
-| Approve / reject draft | Editor+ |
+Employees can mint or revoke their own token under **Profile**. Admins can also mint/revoke from **Employees**.
 
 ---
 
-## Setting up access control (step by step)
+## How to think about a decision
 
-### 1. Create departments
+1. Is the resource in a **workspace**? Use membership. Stop.
+2. Otherwise use the employee’s **permission list**.
+3. If the resource has departments, `own_dept` must match one of them.
+4. If the resource has no departments, treat it as global.
 
-**Admin Portal → Departments → New Department**
-
-Departments define the scope boundary for `own_dept` permissions. Every employee belongs to one department.
-
-### 2. Create roles
-
-**Admin Portal → Roles → New Role**
-
-Select the permissions this role should grant. You can start from a built-in preset and customize.
-
-### 3. Create employees
-
-**Admin Portal → Employees → New Employee**
-
-Assign each employee to a department and a role.
-
-### 4. Assign knowledge types to sources
-
-When uploading documents, assign them a knowledge type. This determines which employees can see them via MCP (based on their MCP token's `allowed_knowledge_types`).
-
-### 5. Create workspaces and add members
-
-**Admin Portal → Workspaces → New Workspace**
-
-Add employees as workspace members and assign their workspace role (Viewer, Contributor, Editor, or Admin).
-
----
-
-## MCP token scoping
-
-When an MCP token is generated for an employee, it captures their current permission scope:
-- Which knowledge types they can access
-- Their department
-
-This scope is re-evaluated on each request based on the live state of their role and department assignments. Revoking a token or changing an employee's role takes effect immediately.
+Code: `app/services/permission_engine.py`.

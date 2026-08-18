@@ -1,9 +1,13 @@
 """
-Arkon Documentation Exporter
-Xuất tài liệu Arkon sang file DOCX với hình ảnh minh họa (diagrams).
+Arkon Documentation Exporter (legacy).
 
-Chạy: python docs/export_docs.py
-Output: docs/Arkon-Documentation.docx
+The canonical docs for v0.1.0 are the Markdown files in this folder
+and the root README.md — start at docs/README.md.
+
+This script can still emit docs/Arkon-Documentation.docx. It is not
+kept in lockstep with the Markdown rewrite. Prefer the .md files.
+
+Run: python docs/export_docs.py
 """
 
 import io

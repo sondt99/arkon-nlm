@@ -1,6 +1,6 @@
 [project]
 name = "arkon"
-version = "2.0.0"
+version = "0.1.0"
 description = "Enterprise AI Control Center — Knowledge Base & Skill Management for Claude"
 authors = [
     {name = "Arkon Team"}

@@ -8,7 +8,6 @@ tools to search knowledge, retrieve documents, list categories, etc.
 Architecture:
     Claude Desktop → MCP (HTTPS) → /mcp endpoint → Arkon KB tools
                                                    → PostgreSQL (pgvector)
-                                                   → Neo4j (graph)
                                                    → MinIO (files)
 
 Connection:

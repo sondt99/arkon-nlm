@@ -1,445 +1,168 @@
-# Troubleshooting & FAQ
+# Troubleshooting
 
----
-
-## Chẩn đoán nhanh
-
-Khi có vấn đề, chạy theo thứ tự:
+Work top-down: Compose status → health → the service log that is actually failing.
 
 ```bash
-# 1. Kiểm tra containers đang chạy
-docker compose ps
+docker compose --env-file .env.docker ps
+curl -s http://localhost:3119/api/health
+docker compose --env-file .env.docker logs --tail=80 api
+docker compose --env-file .env.docker logs --tail=80 worker
+```
 
-# 2. Kiểm tra health
-curl http://localhost:5055/health
+In the default Docker setup the API is **not** on `localhost:5055`. Use nginx on **3119**, or `docker exec`.
 
-# 3. Xem logs của service bị lỗi
-docker compose logs --tail=50 api
-docker compose logs --tail=50 worker
-docker compose logs --tail=50 frontend
+```bash
+docker exec arkon_api python -c "import urllib.request; print(urllib.request.urlopen('http://localhost:5055/health').read())"
 ```
 
 ---
 
-## Vấn đề khởi động
+## Start-up
 
-### Containers không start được
+### `network arkon_default declared as external`
 
-**Triệu chứng:** `docker compose up -d` chạy nhưng container bị `Exit` hoặc không lên `healthy`
-
-**Kiểm tra:**
 ```bash
-docker compose ps          # Xem status
-docker compose logs api    # Xem lỗi cụ thể
+docker network create arkon_default
+docker compose --env-file .env.docker up -d
 ```
 
-**Nguyên nhân thường gặp:**
+### Container exits immediately
 
-| Lỗi | Giải pháp |
+```bash
+docker compose --env-file .env.docker logs api
+```
+
+| Message | Cause |
 |---|---|
-| `port is already allocated` | Port 5055/3119/9002 đang bị dùng. Tắt ứng dụng khác hoặc đổi port trong docker-compose.yml |
-| `database connection refused` | PostgreSQL chưa healthy. Đợi thêm 30s |
-| `connection to redis failed` | Redis chưa healthy. Kiểm tra REDIS_PASSWORD |
-| `SECRET_KEY not set` | Thêm SECRET_KEY vào .env.docker |
+| `SECRET_KEY is still the default value` | You copied the example and did not change it |
+| `DEFAULT_ADMIN_PASSWORD is a weak default` | Same — pick a real password |
+| `MINIO_ACCESS_KEY / MINIO_SECRET_KEY are still MinIO factory defaults` | Change both |
+| `CORS_ORIGINS is '*'` | Leave it empty behind nginx, or set explicit origins |
+| password authentication failed | `POSTGRES_PASSWORD` ≠ password in `DATABASE_URL` |
+| Redis `NOAUTH` / `invalid password` | `REDIS_PASSWORD` empty in env but Compose started Redis with `--requirepass` |
 
-### API health check fail
+Always start with `--env-file .env.docker`.
 
-**Triệu chứng:** `curl http://localhost:5055/health` trả về lỗi hoặc `degraded`
+### `port is already allocated`
 
-```bash
-# Kiểm tra từng service
-curl http://localhost:5055/api/health
-# → {"api": "healthy", "database": "error", "worker": "error"}
-```
+Something else owns `3119`. Set `NGINX_PORT=3120` in `.env.docker` and recreate nginx.
 
-Nếu `database: error`:
-```bash
-docker compose logs postgres
-# Thường do POSTGRES_PASSWORD không khớp với DATABASE_URL
-```
+### Health is `degraded`
 
-Nếu `worker: error`:
-```bash
-docker compose logs redis
-# Kiểm tra REDIS_PASSWORD trong .env.docker
-```
+`GET /api/health` reports `api`, `database`, `worker`.
 
----
-
-## Vấn đề Upload & Xử lý tài liệu
-
-### Upload bị lỗi 500
-
-**Triệu chứng:** Upload file → ngay lập tức nhận lỗi 500
-
-```bash
-docker compose logs api | grep "ERROR"
-```
-
-**Nguyên nhân thường gặp:**
-- MinIO chưa ready → `curl http://localhost:5055/health` kiểm tra minio status
-- File quá lớn qua Next.js proxy → Upload trực tiếp lên port 5055:
-  ```
-  Bình thường upload đã bypass proxy rồi — nếu vẫn lỗi kiểm tra apiUpload() trong api.ts
-  ```
-
-### Tài liệu mãi ở trạng thái `pending`
-
-**Triệu chứng:** Upload thành công nhưng status không thay đổi sau 5 phút
-
-```bash
-# Kiểm tra worker đang chạy
-docker compose ps worker
-
-# Xem worker logs
-docker compose logs -f worker
-
-# Kiểm tra Redis queue
-docker exec -it arkon_redis redis-cli -a <REDIS_PASSWORD> LLEN arq:queue:default
-```
-
-**Giải pháp:**
-```bash
-docker compose restart worker
-```
-
-### Tài liệu bị lỗi ở `processing`
-
-**Triệu chứng:** Status = `error`, có error_message trong UI
-
-```bash
-docker compose logs worker | grep -A 5 "ERROR"
-```
-
-**Lỗi thường gặp:**
-
-| Lỗi | Nguyên nhân | Giải pháp |
-|---|---|---|
-| `No llm provider configured` | Chưa cấu hình LLM trong Settings | Vào Settings → cấu hình LLM provider |
-| `CharacterNotInRepertoire` | File PDF có null bytes | Đã được fix trong kb_service.py — restart worker |
-| `UniqueViolationError source_images` | Re-ingest tạo duplicate ảnh | Đã được fix — restart worker rồi retry |
-| `Connection refused to ollama` | Ollama không chạy | Khởi động Ollama trên máy host |
-| `Invalid API key` | API key sai | Kiểm tra lại API key trong Settings |
-
-### Tài liệu mãi ở `plan_review`
-
-**Triệu chứng:** Status = `plan_review`, không tự tiến lên
-
-Đây là **hành vi bình thường** khi `MRP_AUTO_APPROVE_PLAN=false`.
-
-**Giải pháp:** Vào Knowledge Base → nhấn **Review Plan** → **Approve**
-
-Hoặc bật auto-approve:
-```bash
-# Trong .env.docker
-MRP_AUTO_APPROVE_PLAN=true
-
-# Restart api
-docker compose restart api
-```
-
----
-
-## Vấn đề AI Provider
-
-### Test LLM thất bại
-
-**Triệu chứng:** Settings → Test LLM → `success: false`
-
-**Kiểm tra theo provider:**
-
-| Provider | Kiểm tra |
+| Field | Look at |
 |---|---|
-| Google | API key bắt đầu `AIza`, dùng Google AI Studio (không phải Cloud API) |
-| OpenAI | API key bắt đầu `sk-`, kiểm tra billing/quota |
-| Anthropic | API key bắt đầu `sk-ant-`, kiểm tra quota |
-| Ollama | Ollama đang chạy? `ollama ps`, Base URL = `http://host.docker.internal:11434/v1` |
-
-### Ollama không kết nối được từ container
-
-```bash
-# Test từ trong container
-docker exec -it arkon_api curl http://host.docker.internal:11434/api/tags
-
-# Nếu fail — Ollama không listen trên 0.0.0.0
-# Sửa Ollama service để bind 0.0.0.0:
-# Windows: set OLLAMA_HOST=0.0.0.0
-```
-
-### Wiki không được tạo dù tài liệu ready
-
-```bash
-docker compose logs worker | grep "LLM\|llm\|provider"
-```
-
-Thường do LLM provider trả về lỗi silent — kiểm tra API quota.
+| `database: error` | `docker compose --env-file .env.docker logs postgres` — usually a password mismatch |
+| `worker: error` | Redis password, or Redis not healthy yet |
 
 ---
 
-## Vấn đề Hiển thị
+## Login
 
-### Ảnh wiki không hiển thị
+### “Too many login attempts”
 
-**Triệu chứng:** Wiki page có ảnh nhưng hiển thị broken image
+Nginx + Redis rate-limit the login path. Wait 5 minutes or:
 
 ```bash
-# Test trực tiếp (thay uuid và token)
-curl -v "http://localhost:5055/api/wiki/images/<uuid>?token=<jwt>"
+docker exec arkon_redis redis-cli -a "$REDIS_PASSWORD" --no-auth-warning KEYS 'arkon:login_attempts:*'
 ```
 
-**Nguyên nhân:**
+### Admin password in `.env.docker` does nothing
 
-| Lỗi | Giải pháp |
+The env password is used **only** to seed the first admin. After that, change the password in **Profile**.
+
+### Cannot reach the UI from another machine
+
+nginx binds `127.0.0.1:3119` by default. Use SSH tunnel, change the bind in `docker-compose.yml`, or put another proxy on the `arkon_default` network.
+
+---
+
+## Uploads and the wiki
+
+### Status stays `pending`
+
+The document worker is down or cannot see Redis.
+
+```bash
+docker compose --env-file .env.docker logs worker
+docker compose --env-file .env.docker ps worker
+```
+
+### Status `error`
+
+Open the source row and read the error. Typical causes:
+
+- Embedding or LLM not configured / test failed
+- Provider quota or invalid key
+- File is empty, encrypted, or a scan-only PDF with no extractable text and no vision model
+
+Retry: **Documents → ⋯ → Retry**.
+
+### Stuck on **Review Plan**
+
+That is expected when auto-approve is off. Open the plan and **Approve** or **Reject**. To skip review on a trusted pipeline, set `MRP_AUTO_APPROVE_PLAN=true` and recreate the worker.
+
+### Wiki pages missing after `ready`
+
+Check worker logs for `COMMIT`. A failed commit rolls back the whole batch. Also confirm you are looking at the same scope (global vs a workspace) and knowledge type your user can see.
+
+### Images broken in the wiki
+
+Presigned URLs use `MINIO_PUBLIC_ENDPOINT`. On Docker it must be a host the **browser** can open, and nginx must serve `/arkon-files/`. After changing it, recreate `api` (and rebuild frontend only if you also changed `NEXT_PUBLIC_API_URL`).
+
+---
+
+## Settings / AI
+
+### Test LLM fails
+
+- Key prefix: Google `AIza…`, OpenAI `sk-…`, Anthropic `sk-ant-…`
+- Ollama URL from inside Docker is `http://host.docker.internal:11434/v1`, not `localhost`
+- 9Router: click **Fetch Models** after setting the base URL
+
+### Changed embedding model, search is empty or errors
+
+Dimension must match a table (768 / 1024 / 1536 / 3072). The Settings UI starts a re-embed job. Watch **Settings → Embeddings** until it finishes.
+
+---
+
+## MCP / Claude
+
+| Symptom | Fix |
 |---|---|
-| `401 Unauthorized` | Token hết hạn → đăng nhập lại |
-| `404 Not Found` | Image chưa được extract → check SourceImage trong DB |
-| `502 Bad Gateway` | MinIO lỗi → kiểm tra `docker compose logs minio` |
-
-### Không truy cập được từ IP khác (Tailscale/LAN)
-
-**Triệu chứng:** Từ localhost OK, từ IP khác bị CORS error hoặc 503
-
-**Giải pháp:**
-```bash
-# Thêm IP vào .env.docker
-CORS_ORIGINS=http://localhost:3119,http://100.x.x.x:3119
-
-# Rebuild frontend (NEXT_PUBLIC_API_URL là build-time var)
-docker compose build frontend
-docker compose up -d frontend
-```
-
-> **Quan trọng**: Nếu `NEXT_PUBLIC_API_URL` đang set = localhost, frontend sẽ không hoạt động từ IP khác. Để trống để dùng relative URLs.
-
-### Frontend hiển thị "Failed to fetch"
-
-```bash
-# 1. Kiểm tra API chạy không
-curl http://localhost:5055/health
-
-# 2. Kiểm tra INTERNAL_API_URL trong container
-docker exec arkon_frontend env | grep INTERNAL
-
-# 3. Test proxy
-docker exec arkon_frontend wget -q -O- http://api:5055/health
-```
+| Tools do not appear | Restart Claude Desktop after editing the config |
+| Connection refused | URL must be reachable from the **client**. Docker: `http://localhost:3119/mcp` |
+| Authentication required | Header is `Authorization: Bearer ark_…` (include `Bearer `) |
+| Invalid or inactive token | Generate a new one under Profile or Employees |
+| Empty search results | Employee’s `doc:read` scope or workspace membership excludes those sources |
+| 404 on `/mcp` | Old setups without the nginx `/mcp` location — update and recreate nginx |
 
 ---
 
-## Vấn đề Database
+## NotebookLM
 
-### Migration fail khi restart
-
-```bash
-docker compose logs api | grep "alembic"
-```
-
-**Lỗi thường gặp:**
-
-| Lỗi | Giải pháp |
+| Symptom | Fix |
 |---|---|
-| `relation does not exist` | Chạy migration thủ công: `docker compose exec api alembic upgrade head` |
-| `column already exists` | Đã chạy migration rồi, bỏ qua |
-| `connection refused` | PostgreSQL chưa healthy, đợi và retry |
+| Import verifies `false` | Cookies went stale. Re-export and paste within a few minutes. See [notebooklm-auth.md](notebooklm-auth.md) |
+| Works then dies after hours | Import a **master token** (preferred) so the worker can mint fresh cookies |
+| Session lost after recreate | Volume `notebooklm_data` was wiped |
 
-### Database full
+---
+
+## Frontend
+
+### UI loads, every API call fails
+
+`NEXT_PUBLIC_API_URL` was set to `http://localhost:5055` and the API port is not published. Clear it, then:
 
 ```bash
-# Kiểm tra dung lượng
-du -sh F:\arkon-data\postgres\
-
-# Xem kích thước các bảng lớn
-docker exec -it arkon_postgres psql -U arkon arkon -c "
-SELECT relname as table, pg_size_pretty(pg_relation_size(relid)) as size
-FROM pg_catalog.pg_statio_user_tables
-ORDER BY pg_relation_size(relid) DESC
-LIMIT 10;"
+docker compose --env-file .env.docker up -d --build frontend
 ```
 
----
+### CORS error in the browser
 
-## Vấn đề MinIO
+You are hitting the API on a different origin than the UI. Either:
 
-### MinIO SignatureDoesNotMatch
-
-**Nguyên nhân:** MINIO_ACCESS_KEY hoặc MINIO_SECRET_KEY không khớp với container đang chạy.
-
-MinIO chỉ đọc credentials lần **đầu tiên** khởi tạo volume. Sau đó thay đổi trong .env không có tác dụng.
-
-**Giải pháp:**
-```bash
-# Option 1: Dùng đúng credentials cũ
-# Tìm lại credentials đã dùng khi tạo container lần đầu
-
-# Option 2: Reset MinIO (MẤT DỮ LIỆU)
-docker compose down
-rmdir /s F:\arkon-data\minio
-mkdir F:\arkon-data\minio
-docker compose up -d
-```
-
-### MinIO "Invalid Request (invalid hostname)"
-
-**Nguyên nhân:** MINIO_ENDPOINT chứa underscore (vd: `arkon_minio`)
-
-**Giải pháp:** Dùng service name không có underscore:
-```bash
-MINIO_ENDPOINT=minio:9000  # Tên service trong docker-compose.yml
-```
-
----
-
-## Vấn đề Hiệu suất
-
-### Xử lý tài liệu quá chậm
-
-**Nguyên nhân có thể:**
-
-1. **Model LLM chậm** → Dùng model nhanh hơn (gemini-flash thay gemini-pro)
-2. **Tài liệu quá lớn** → Bình thường — tài liệu 500 trang có thể mất 20-30 phút
-3. **Worker đang xử lý nhiều job** → Tối đa 3 job song song (WorkerSettings.max_jobs=3)
-
-```bash
-# Xem jobs đang chạy
-docker exec -it arkon_redis redis-cli -a <password>
-> KEYS arq:job:*
-> HGETALL arq:job:<job_id>
-```
-
-### Tìm kiếm wiki chậm
-
-```bash
-# Kiểm tra pgvector index
-docker exec -it arkon_postgres psql -U arkon arkon -c "
-SELECT indexname, indexdef
-FROM pg_indexes
-WHERE tablename LIKE 'wiki_page_embeddings%';"
-```
-
-Nếu không có index HNSW → Migration 015 chưa chạy:
-```bash
-docker compose exec api alembic upgrade head
-```
-
----
-
-## Câu hỏi thường gặp
-
-**Q: Có giới hạn kích thước file upload không?**
-
-Backend API: không giới hạn (phụ thuộc MinIO storage).  
-Nếu upload qua UI (Next.js proxy): mặc định bypass proxy, upload thẳng lên port 5055. Nếu gặp lỗi 413, kiểm tra `apiUpload()` trong `frontend/src/lib/api.ts`.
-
----
-
-**Q: Có thể backup và restore không mất dữ liệu không?**
-
-```bash
-# Backup đầy đủ
-docker exec arkon_postgres pg_dump -U arkon arkon > db_backup.sql
-xcopy F:\arkon-data\minio\ backup_minio\ /E /I
-
-# Restore
-docker exec -i arkon_postgres psql -U arkon arkon < db_backup.sql
-xcopy backup_minio\ F:\arkon-data\minio\ /E /I
-```
-
----
-
-**Q: Đổi embedding model có mất dữ liệu wiki không?**
-
-Không. Mỗi dimension có bảng riêng (768d, 1024d, 1536d, 3072d). Đổi model chỉ cần chạy **Re-embed all pages** để tạo embeddings mới trong bảng mới. Dữ liệu wiki (content_md) không bị ảnh hưởng.
-
----
-
-**Q: Claude không tìm thấy thông tin dù đã upload tài liệu?**
-
-Kiểm tra:
-1. Tài liệu status = `ready` (không phải `processing` hay `error`)
-2. Wiki pages đã được tạo: **Wiki → Browse**
-3. MCP token của Claude có `allowed_knowledge_types` phù hợp
-4. Embedding đã được tạo: tìm kiếm thử trong Wiki search
-
----
-
-**Q: Làm sao xem tài liệu nào đang được xử lý?**
-
-```bash
-# Xem jobs đang chạy
-docker compose logs -f worker | grep "ingest"
-
-# Đếm jobs trong queue
-docker exec -it arkon_redis redis-cli -a <password> LLEN arq:queue:default
-```
-
----
-
-**Q: Worker crash giữa chừng, tài liệu bị kẹt ở phase nào?**
-
-`source.pipeline_phase` lưu phase cuối hoàn thành. Worker sẽ **tự resume** từ phase đó khi restart. Không cần làm gì thêm.
-
-Nếu muốn restart thủ công từ đầu:
-```bash
-# Qua API
-curl -X POST "http://localhost:5055/api/sources/{id}/retry" \
-  -H "Authorization: Bearer <token>"
-```
-
-**Lưu ý về dữ liệu đã lưu:** log `REFINE complete` hoặc `VERIFY complete` chỉ xác nhận kết quả tạm trong bộ nhớ. Wiki và provenance chỉ được lưu khi có `MRP COMMIT complete`, source ở trạng thái `ready`, progress `100` và contribution đã xuất hiện. COMMIT là transaction atomic; nếu một page lỗi, toàn bộ thay đổi của lần commit được rollback.
-
----
-
-**Q: Log có `InvalidRequestError: This session is provisioning a new connection`?**
-
-Đây là lỗi của phiên bản cũ khi nhiều writer song song dùng chung một SQLAlchemy `AsyncSession`. Bản hotfix 2026-06-21 đã thay bằng snapshot wiki đọc trước khi fan-out. Hãy rebuild/restart `api` và `worker`, sau đó retry source lỗi:
-
-```bash
-docker compose build api
-docker compose up -d api worker worker_skills
-```
-
-Với tài liệu lớn, cấu hình `WORKER_JOB_TIMEOUT=3600` hoặc cao hơn. Khi AI gateway trả 504, writer tự retry tối đa 3 lần; nếu vẫn lỗi, job dừng và không tạo trang placeholder.
-
-Nếu 504 chỉ lặp lại ở source overview hoặc một page lớn, bản domain-aware hotfix sẽ tự giảm context ở mỗi lần retry (`100%`, `60%`, `35%`). Source page được giới hạn 30.000 ký tự ngay từ lần đầu. Log thành công phải đi qua `MRP REFINE complete`, `MRP VERIFY complete` và `MRP COMMIT complete`; không cần upload lại file, có thể retry plan hiện tại.
-
----
-
-**Q: Tại sao cần cả hai worker (worker và worker_skills)?**
-
-Worker chính xử lý document ingestion + MRP pipeline (nặng, lâu).  
-Worker skills xử lý skill packages (.zip) — được tách riêng để upload skill không block ingestion tài liệu quan trọng.
-
----
-
-**Q: Có thể chạy nhiều worker không?**
-
-Không khuyến nghị với setup hiện tại — một số operations dùng advisory locks theo slug để tránh race condition. Nhiều worker cùng COMMIT phase có thể bị deadlock.
-
-Nếu cần scale, giải pháp tốt hơn là tăng `max_jobs` trong `WorkerSettings`.
-## Chatbot báo lỗi nhưng phản hồi xuất hiện sau khi edit/reload
-
-Nếu request chat bị client/proxy ngắt, nginx ghi HTTP `499` dù backend có thể vẫn
-hoàn tất và lưu assistant message. Frontend hiện dùng timeout 285 giây, tự polling
-lịch sử để phục hồi kết quả và không cho edit message có ID tạm `temp-*`.
-
-Backend commit user message trước LLM call, loại message hiện tại khỏi history để
-không lặp câu hỏi, giới hạn RAG ở 4 trang chính + 2 trang liên kết, tối đa 1.800 ký
-tự mỗi trang và 4 history messages. `CHAT_GENERATION_TIMEOUT` mặc định là 240 giây,
-thấp hơn nginx timeout 300 giây. Log `Chat reply generated` tách riêng thời gian
-RAG và LLM để xác định provider hay retrieval là nút thắt.
-
-Các biến liên quan: `CHAT_RAG_TOP_K`, `CHAT_LINKED_PAGES_LIMIT`,
-`CHAT_CONTEXT_CHARS_PER_PAGE`, `CHAT_HISTORY_MESSAGES`,
-`CHAT_GENERATION_TIMEOUT`.
-
-Chatbot không áp dụng giới hạn số từ cố định. Persona được yêu cầu trả lời toàn
-diện theo câu hỏi và evidence hiện có, giữ reasoning, ví dụ, điều kiện, edge case
-và chi tiết kỹ thuật chính xác. Vì vậy câu hỏi rộng hoặc yêu cầu phân tích sâu có
-thể cần nhiều thời gian sinh hơn câu hỏi ngắn.
-
-Quality gate mặc định coi câu trả lời cho câu hỏi thực chất ngắn dưới 1.800 ký tự
-là chưa đủ chi tiết. Nếu còn thời gian trong `CHAT_GENERATION_TIMEOUT`, hệ thống
-yêu cầu model viết lại một lần với cấu trúc đầy đủ hơn và chỉ nhận bản mới khi nó
-dài hơn bản đầu. Yêu cầu ngắn rõ ràng như “tóm tắt ngắn”, “một câu” hoặc “3 gạch
-đầu dòng” được tôn trọng và không kích hoạt expansion. Có thể cấu hình bằng
-`CHAT_MIN_DETAILED_ANSWER_CHARS` và `CHAT_EXPAND_SHORT_ANSWERS`.
+- Use nginx (same origin), `CORS_ORIGINS=` empty, or
+- Set `CORS_ORIGINS` to the exact UI origin (scheme + host + port).

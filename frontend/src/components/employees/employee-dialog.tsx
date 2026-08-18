@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from "react";
 import { api } from "@/lib/api";
+import { useAuth } from "@/lib/auth";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -48,6 +49,8 @@ export function EmployeeDialog({
   onSaved,
 }: Props) {
   const isEdit = !!employee;
+  const { user } = useAuth();
+  const isAdmin = user?.role === "admin";
   const [name, setName] = useState("");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
@@ -154,11 +157,15 @@ export function EmployeeDialog({
       const body: Record<string, string | null> = {
         name,
         email,
-        role,
         department_id: deptId,
         custom_role_id: customRoleId || null,
       };
-      if (password) body.password = password;
+      if (isAdmin) {
+        body.role = role;
+        if (password) body.password = password;
+      } else if (!isEdit) {
+        body.role = "employee";
+      }
 
       if (isEdit) {
         await api(`/api/employees/${employee.id}`, { method: "PUT", body });
@@ -214,6 +221,7 @@ export function EmployeeDialog({
             />
           </div>
 
+          {(!isEdit || isAdmin) && (
           <div className="flex flex-col gap-2">
             <Label htmlFor="emp-password">
               Password {isEdit && "(leave blank to keep current)"}
@@ -226,18 +234,24 @@ export function EmployeeDialog({
               placeholder={isEdit ? "••••••••" : "Min 8 characters"}
               className="bg-background"
             />
+            {isEdit && isAdmin && (
+              <p className="text-xs text-muted-foreground">
+                Only a system admin can reset passwords.
+              </p>
+            )}
           </div>
+          )}
 
           <div className="grid grid-cols-2 gap-4">
             <div className="flex flex-col gap-2">
               <Label>System Role</Label>
-              <Select value={role} onValueChange={(v) => v && setRole(v)}>
+              <Select value={role} onValueChange={(v) => v && setRole(v)} disabled={!isAdmin && isEdit}>
                 <SelectTrigger className="bg-background">
                   {role === "admin" ? "Admin" : role === "employee" ? "Employee" : <SelectValue />}
                 </SelectTrigger>
                 <SelectContent>
                   <SelectItem value="employee">Employee</SelectItem>
-                  <SelectItem value="admin">Admin</SelectItem>
+                  {isAdmin && <SelectItem value="admin">Admin</SelectItem>}
                 </SelectContent>
               </Select>
             </div>

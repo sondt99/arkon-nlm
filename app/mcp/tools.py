@@ -164,11 +164,13 @@ def register_tools(mcp: FastMCP):
             embedding_provider = await registry.get_embedding(task="search_query")
             query_embedding = await embedding_provider.embed(query)
 
+            kt_slugs, source_ids = identity.wiki_visibility()
             hits = await wiki_service.search_pages_semantic(
                 session,
                 query_embedding=query_embedding,
                 top_k=top_k,
-                allowed_kt_slugs=identity.allowed_knowledge_types,
+                allowed_kt_slugs=kt_slugs,
+                allowed_source_ids=source_ids,
             )
 
         if not hits:
@@ -210,12 +212,26 @@ def register_tools(mcp: FastMCP):
         from app.database import async_session_factory
         from app.services import wiki_service
 
+        kt_slugs, source_ids = identity.wiki_visibility()
         async with async_session_factory() as session:
-            page = await wiki_service.get_page_by_slug(session, wiki_service.INDEX_SLUG)
-
-        if not page:
-            return "_(wiki index not initialized yet)_"
-        return page.content_md
+            if kt_slugs is None and source_ids is None:
+                page = await wiki_service.get_page_by_slug(session, wiki_service.INDEX_SLUG)
+                if not page:
+                    return "_(wiki index not initialized yet)_"
+                return page.content_md
+            pages = await wiki_service.list_pages(
+                session,
+                allowed_kt_slugs=kt_slugs,
+                allowed_source_ids=source_ids,
+                limit=200,
+            )
+        if not pages:
+            return "_(no wiki pages in your scope)_"
+        lines = ["**Wiki catalog (scoped to your access)**\n"]
+        for p in pages:
+            summary = f" — {p.summary}" if p.summary else ""
+            lines.append(f"- `{p.slug}` ({p.page_type}) — **{p.title}**{summary}")
+        return "\n".join(lines)
 
     @mcp.tool()
     async def read_wiki_page(slug: str) -> str:
@@ -240,8 +256,11 @@ def register_tools(mcp: FastMCP):
         from app.services import wiki_service
 
         async with async_session_factory() as session:
+            kt_slugs, source_ids = identity.wiki_visibility()
             page = await wiki_service.get_page_by_slug(
-                session, slug, allowed_kt_slugs=identity.allowed_knowledge_types,
+                session, slug,
+                allowed_kt_slugs=kt_slugs,
+                allowed_source_ids=source_ids,
             )
             if not page:
                 return f"Wiki page not found or out of scope: `{slug}`"
@@ -282,11 +301,13 @@ def register_tools(mcp: FastMCP):
         from app.services import wiki_service
 
         async with async_session_factory() as session:
+            kt_slugs, source_ids = identity.wiki_visibility()
             pages = await wiki_service.list_pages(
                 session,
                 page_type=page_type,
                 knowledge_type_slug=knowledge_type,
-                allowed_kt_slugs=identity.allowed_knowledge_types,
+                allowed_kt_slugs=kt_slugs,
+                allowed_source_ids=source_ids,
                 limit=limit,
                 offset=offset,
             )

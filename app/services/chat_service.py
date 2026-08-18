@@ -74,6 +74,8 @@ async def rag_search(
     scope_type: str = "global",
     scope_id: Optional[uuid.UUID] = None,
     top_k: Optional[int] = None,
+    allowed_kt_slugs: Optional[list[str]] = None,
+    allowed_source_ids: Optional[list] = None,
 ) -> list[WikiPage]:
     """Embed question and return relevant wiki pages (semantic + 1-hop expansion)."""
     top_k = top_k or settings.chat_rag_top_k
@@ -91,10 +93,13 @@ async def rag_search(
         scope_type=scope_type,
         scope_id=scope_id,
         spec_id=spec_id,
+        allowed_kt_slugs=allowed_kt_slugs,
+        allowed_source_ids=allowed_source_ids,
     )
     pages = [p for p, _ in pairs]
 
-    # 1-hop expansion from top-3 results via wiki_links
+    # 1-hop expansion from top-3 results via wiki_links — same visibility
+    # rules, otherwise a linked page from another workspace leaks in.
     if pages:
         top_slugs = [p.slug for p in pages[:3]]
         existing_slugs = {p.slug for p in pages}
@@ -105,6 +110,9 @@ async def rag_search(
             .where(WikiPage.slug.notin_(list(existing_slugs)))
             .limit(settings.chat_linked_pages_limit)
         )
+        visibility = wiki_service._rbac_visibility_clause(allowed_kt_slugs, allowed_source_ids)
+        if visibility is not None:
+            linked_stmt = linked_stmt.where(visibility)
         result = await session.execute(linked_stmt)
         linked = result.scalars().all()
         pages.extend(linked)
@@ -231,6 +239,8 @@ async def generate_reply(
     temperature: Optional[float] = None,
     max_tokens: Optional[int] = None,
     top_p: Optional[float] = None,
+    allowed_kt_slugs: Optional[list[str]] = None,
+    allowed_source_ids: Optional[list] = None,
 ) -> tuple[str, list[dict]]:
     """
     Run RAG search + LLM generation.
@@ -247,6 +257,8 @@ async def generate_reply(
             question=question,
             scope_type=conversation.scope_type,
             scope_id=conversation.scope_id,
+            allowed_kt_slugs=allowed_kt_slugs,
+            allowed_source_ids=allowed_source_ids,
         )
     else:
         pages = []

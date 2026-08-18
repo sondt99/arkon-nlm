@@ -178,6 +178,7 @@ async def export_chat(
 
     try:
         registry = ProviderRegistry(db)
+        kt_slugs, source_ids = identity.wiki_visibility()
         answer, sources = await chat_service.generate_reply(
             session=db,
             registry=registry,
@@ -185,6 +186,8 @@ async def export_chat(
             question=body.question.strip(),
             persona=body.persona,
             exclude_message_id=user_msg.id,
+            allowed_kt_slugs=kt_slugs,
+            allowed_source_ids=source_ids,
             **await _generation_overrides(db),
         )
     except Exception as exc:
@@ -234,11 +237,13 @@ async def export_search(
         embedding_provider = await registry.get_embedding(task="search_query")
         query_embedding = await embedding_provider.embed(q)
 
+        kt_slugs, source_ids = identity.wiki_visibility()
         hits = await wiki_service.search_pages_semantic(
             db,
             query_embedding=query_embedding,
             top_k=top_k,
-            allowed_kt_slugs=identity.allowed_knowledge_types,
+            allowed_kt_slugs=kt_slugs,
+            allowed_source_ids=source_ids,
             scope_type=scope_type,
             scope_id=scope_id,
         )

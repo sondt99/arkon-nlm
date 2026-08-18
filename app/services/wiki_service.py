@@ -17,7 +17,7 @@ from datetime import datetime, timezone
 from typing import Optional
 
 from loguru import logger
-from sqlalchemy import and_, delete, func, or_, select, text
+from sqlalchemy import and_, delete, false as sql_false, func, or_, select, text
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -43,6 +43,73 @@ _WIKILINK_RE = re.compile(r"\[\[([^\]\|]+)(?:\|[^\]]*)?]]")
 # ---------------------------------------------------------------------------
 # Scope filter helper
 # ---------------------------------------------------------------------------
+
+def _rbac_visibility_clause(
+    allowed_kt_slugs: Optional[list[str]] = None,
+    allowed_source_ids: Optional[list] = None,
+):
+    """SQL clause for MCP / export / RAG wiki visibility.
+
+    None on both arguments = unrestricted.
+    An empty list on either argument is fail-closed (matches nothing for that axis).
+    Pages compiled from an allowed source stay visible even if their KT array is empty.
+    Pages with no source_ids are visible only when their KT slugs overlap the allow-list.
+    Empty KT arrays are never treated as world-readable when a restriction is set.
+    """
+    if allowed_kt_slugs is None and allowed_source_ids is None:
+        return None
+    if allowed_source_ids is not None:
+        if not allowed_source_ids and not allowed_kt_slugs:
+            return sql_false()
+        source_uuids = [
+            s if isinstance(s, uuid.UUID) else uuid.UUID(str(s))
+            for s in allowed_source_ids
+        ]
+        source_match = WikiPage.source_ids.overlap(source_uuids) if source_uuids else sql_false()
+        if allowed_kt_slugs:
+            return or_(
+                source_match,
+                and_(
+                    func.cardinality(WikiPage.source_ids) == 0,
+                    WikiPage.knowledge_type_slugs.overlap(allowed_kt_slugs),
+                ),
+            )
+        return source_match
+    if allowed_kt_slugs is not None:
+        if not allowed_kt_slugs:
+            return sql_false()
+        return WikiPage.knowledge_type_slugs.overlap(allowed_kt_slugs)
+    return None
+
+
+def page_is_visible(
+    page: WikiPage,
+    allowed_kt_slugs: Optional[list[str]] = None,
+    allowed_source_ids: Optional[list] = None,
+) -> bool:
+    """Python-side counterpart of `_rbac_visibility_clause` for single-page reads."""
+    if allowed_kt_slugs is None and allowed_source_ids is None:
+        return True
+    source_ids = list(page.source_ids or [])
+    kts = list(page.knowledge_type_slugs or [])
+    if allowed_source_ids is not None:
+        allowed = {
+            s if isinstance(s, uuid.UUID) else uuid.UUID(str(s))
+            for s in allowed_source_ids
+        }
+        if any((sid if isinstance(sid, uuid.UUID) else uuid.UUID(str(sid))) in allowed for sid in source_ids):
+            return True
+        if source_ids:
+            return False
+        if allowed_kt_slugs:
+            return any(s in allowed_kt_slugs for s in kts)
+        return False
+    if allowed_kt_slugs is not None:
+        if not allowed_kt_slugs or not kts:
+            return False
+        return any(s in allowed_kt_slugs for s in kts)
+    return True
+
 
 def _scope_filter(scope_type: str = "global", scope_id: Optional[uuid.UUID] = None):
     """Return SQLAlchemy WHERE clauses for scope filtering."""
@@ -164,13 +231,14 @@ async def get_page_by_slug(
     session: AsyncSession,
     slug: str,
     allowed_kt_slugs: Optional[list[str]] = None,
+    allowed_source_ids: Optional[list] = None,
     scope_type: str = "global",
     scope_id: Optional[uuid.UUID] = None,
 ) -> Optional[WikiPage]:
     """
-    Fetch a page by slug within a specific scope. If `allowed_kt_slugs` is
-    given (RBAC), only return the page when it overlaps the allowed set or is
-    a reserved slug.
+    Fetch a page by slug within a specific scope. Restricted identities
+    never get a reserved slug as a back door — `_index` / `_log` are
+    filtered the same way as every other page.
     """
     stmt = select(WikiPage).where(
         WikiPage.slug == slug,
@@ -180,13 +248,9 @@ async def get_page_by_slug(
     page = result.scalars().first()
     if page is None:
         return None
-    if allowed_kt_slugs is None or slug in (INDEX_SLUG, LOG_SLUG):
-        return page
-    if not page.knowledge_type_slugs:
-        return page
-    if any(s in allowed_kt_slugs for s in page.knowledge_type_slugs):
-        return page
-    return None
+    if not page_is_visible(page, allowed_kt_slugs, allowed_source_ids):
+        return None
+    return page
 
 
 async def get_page_by_slug_any_scope(
@@ -208,6 +272,7 @@ async def list_pages(
     page_type: Optional[str] = None,
     knowledge_type_slug: Optional[str] = None,
     allowed_kt_slugs: Optional[list[str]] = None,
+    allowed_source_ids: Optional[list] = None,
     limit: int = 50,
     offset: int = 0,
     scope_type: str = "global",
@@ -228,13 +293,9 @@ async def list_pages(
         stmt = stmt.where(WikiPage.page_type == page_type)
     if knowledge_type_slug:
         stmt = stmt.where(WikiPage.knowledge_type_slugs.any(knowledge_type_slug))  # type: ignore[arg-type]
-    if allowed_kt_slugs:
-        stmt = stmt.where(
-            or_(
-                WikiPage.knowledge_type_slugs.overlap(allowed_kt_slugs),
-                func.cardinality(WikiPage.knowledge_type_slugs) == 0,
-            )
-        )
+    visibility = _rbac_visibility_clause(allowed_kt_slugs, allowed_source_ids)
+    if visibility is not None:
+        stmt = stmt.where(visibility)
     result = await session.execute(stmt)
     return list(result.scalars().all())
 
@@ -247,6 +308,7 @@ async def search_pages_semantic(
     query_embedding: list[float],
     top_k: int = 10,
     allowed_kt_slugs: Optional[list[str]] = None,
+    allowed_source_ids: Optional[list] = None,
     scope_type: str = "global",
     scope_id: Optional[uuid.UUID] = None,
     spec_id: Optional[str] = None,
@@ -302,13 +364,9 @@ async def search_pages_semantic(
         .order_by(Emb.embedding.cosine_distance(query_embedding))
         .limit(top_k)
     )
-    if allowed_kt_slugs:
-        stmt = stmt.where(
-            or_(
-                WikiPage.knowledge_type_slugs.overlap(allowed_kt_slugs),
-                func.cardinality(WikiPage.knowledge_type_slugs) == 0,
-            )
-        )
+    visibility = _rbac_visibility_clause(allowed_kt_slugs, allowed_source_ids)
+    if visibility is not None:
+        stmt = stmt.where(visibility)
     result = await session.execute(stmt)
     return [(row[0], float(row[1])) for row in result.all()]
 

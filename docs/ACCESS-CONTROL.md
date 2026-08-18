@@ -64,7 +64,7 @@ Same shape as documents: `skill:read|create|edit|delete` × `own_dept|all`.
 | Permission | Meaning |
 |---|---|
 | `org:departments:read` / `manage` | Departments |
-| `org:employees:read` / `manage` | People |
+| `org:employees:read` / `manage` | People (manage cannot assign `role=admin`, reset passwords, or toggle admin accounts — those require a system admin) |
 | `org:roles:read` / `manage` | Roles |
 | `org:settings:read` / `manage` | AI keys and models |
 | `org:audit:read` | Audit log |

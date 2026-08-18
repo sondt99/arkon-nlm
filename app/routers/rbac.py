@@ -20,9 +20,26 @@ from app.services.auth_service import (
     hash_password,
     require_permission,
 )
+from app.services.employee_policy import (
+    ensure_can_assign_role,
+    ensure_can_set_password,
+    ensure_can_toggle,
+    ensure_not_last_admin,
+    ensure_password_strength,
+)
 from app.services.mcp_auth_service import MCPAuthService
 
 router = APIRouter()
+
+
+async def _active_admin_count(db: AsyncSession) -> int:
+    return (
+        await db.execute(
+            select(func.count())
+            .select_from(Employee)
+            .where(Employee.role == "admin", Employee.is_active.is_(True))
+        )
+    ).scalar_one()
 
 
 # ---------------------------------------------------------------------------
@@ -47,9 +64,19 @@ class DepartmentOut(BaseModel):
 class EmployeeCreate(BaseModel):
     name: str
     email: str
-    password: Optional[str] = None  # Optional on update
-    role: str = "employee"  # "admin" or "employee"
+    password: Optional[str] = None
+    role: str = "employee"
     department_id: str
+    custom_role_id: Optional[str] = None
+
+
+class EmployeeUpdate(BaseModel):
+    """Partial update. Omitted fields are left unchanged."""
+    name: Optional[str] = None
+    email: Optional[str] = None
+    password: Optional[str] = None
+    role: Optional[str] = None
+    department_id: Optional[str] = None
     custom_role_id: Optional[str] = None
 
 
@@ -232,9 +259,10 @@ async def create_employee(
 
     if not body.password:
         raise HTTPException(400, "Password is required")
-    if len(body.password) < 8:
-        raise HTTPException(400, "Password must be at least 8 characters")
-    if body.role not in ("admin", "employee"):
+    ensure_password_strength(body.password)
+    if body.role == "admin":
+        ensure_can_assign_role(_user, "admin")
+    elif body.role != "employee":
         raise HTTPException(400, "Role must be 'admin' or 'employee'")
 
     emp = Employee(
@@ -255,20 +283,33 @@ async def create_employee(
 @router.put("/employees/{emp_id}")
 async def update_employee(
     emp_id: str,
-    body: EmployeeCreate,
+    body: EmployeeUpdate,
     db: AsyncSession = Depends(get_db),
     _user: Employee = require_permission("org:employees:manage"),
 ):
     emp = await db.get(Employee, uuid.UUID(emp_id))
     if not emp:
         raise HTTPException(404, "Employee not found")
-    emp.name = body.name
-    emp.email = body.email
-    emp.role = body.role
-    emp.department_id = uuid.UUID(body.department_id)
-    emp.custom_role_id = uuid.UUID(body.custom_role_id) if body.custom_role_id else None
+
+    if body.name is not None:
+        emp.name = body.name
+    if body.email is not None:
+        emp.email = body.email
+    if body.department_id is not None:
+        emp.department_id = uuid.UUID(body.department_id)
+    if "custom_role_id" in body.model_fields_set:
+        emp.custom_role_id = uuid.UUID(body.custom_role_id) if body.custom_role_id else None
+
+    if body.role is not None and body.role != emp.role:
+        ensure_can_assign_role(_user, body.role, target=emp)
+        ensure_not_last_admin(emp, body.role, await _active_admin_count(db))
+        emp.role = body.role
+
     if body.password:
+        ensure_can_set_password(_user)
+        ensure_password_strength(body.password)
         emp.password_hash = hash_password(body.password)
+
     await log_audit(db, _user, "update", "employee", str(emp.id), reason=emp.email)
     await db.flush()
     return {"id": str(emp.id), "name": emp.name}
@@ -300,6 +341,7 @@ async def toggle_employee(
     emp = await db.get(Employee, uuid.UUID(emp_id))
     if not emp:
         raise HTTPException(404, "Employee not found")
+    ensure_can_toggle(_user, emp, active_admin_count=await _active_admin_count(db))
     emp.is_active = not emp.is_active
     await log_audit(db, _user, "update", "employee", str(emp.id), reason=f"toggle active={emp.is_active}")
     await db.flush()

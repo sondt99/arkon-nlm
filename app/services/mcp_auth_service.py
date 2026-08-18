@@ -44,7 +44,22 @@ class ResolvedIdentity:
     allowed_source_ids: Optional[list[str]] = None       # None = all
     project_source_ids: list[str] = field(default_factory=list)  # always granted via projects
     is_admin: bool = False
+    wiki_readable: bool = True
     permissions: list[str] = field(default_factory=list)
+
+    def wiki_visibility(self) -> tuple[Optional[list[str]], Optional[list[str]]]:
+        """(allowed_kt_slugs, allowed_source_ids) for wiki queries.
+
+        (None, None) = unrestricted. ([], []) = no wiki access.
+        """
+        if self.is_admin or (self.wiki_readable and self.allowed_knowledge_types is None):
+            return None, None
+        if not self.wiki_readable:
+            return [], []
+        if self.allowed_source_ids is None:
+            return self.allowed_knowledge_types, None
+        combined = list(dict.fromkeys(list(self.allowed_source_ids) + list(self.project_source_ids)))
+        return self.allowed_knowledge_types, combined
 
 
 class MCPAuthService:
@@ -93,6 +108,9 @@ class MCPAuthService:
         permissions = get_effective_permissions(employee)
         project_source_ids = await self._resolve_project_sources(employee.id)
 
+        wiki_level = get_scope_level(permissions, "wiki", "read")
+        wiki_readable = employee.role == "admin" or wiki_level is not None
+
         # Admin gets unrestricted access
         if employee.role == "admin":
             return ResolvedIdentity(
@@ -100,8 +118,11 @@ class MCPAuthService:
                 employee_name=employee.name,
                 department_id=employee.department_id,
                 department_name=employee.department.name if employee.department else "",
+                allowed_knowledge_types=None,
+                allowed_source_ids=None,
                 project_source_ids=project_source_ids,
                 is_admin=True,
+                wiki_readable=True,
                 permissions=permissions,
             )
 
@@ -109,27 +130,40 @@ class MCPAuthService:
         scope = get_scope_level(permissions, "doc", "read")
 
         if scope == "all":
-            # Can read all documents
+            allowed_kts = None if wiki_level == "all" else (
+                [] if wiki_level is None
+                else await self._knowledge_types_for_sources(None)
+            )
             return ResolvedIdentity(
                 employee_id=employee.id,
                 employee_name=employee.name,
                 department_id=employee.department_id,
                 department_name=employee.department.name if employee.department else "",
+                allowed_knowledge_types=allowed_kts,
+                allowed_source_ids=None,
                 project_source_ids=project_source_ids,
+                wiki_readable=wiki_readable,
                 permissions=permissions,
             )
 
         if scope == "own_dept":
-            # Can only read: global docs + docs in own department
-            # Build list of allowed source IDs
             allowed_ids = await self._get_department_source_ids(employee.department_id)
+            visible_ids = list(dict.fromkeys(allowed_ids + project_source_ids))
+            if wiki_level is None:
+                allowed_kts: Optional[list[str]] = []
+            elif wiki_level == "all":
+                allowed_kts = None
+            else:
+                allowed_kts = await self._knowledge_types_for_sources(visible_ids)
             return ResolvedIdentity(
                 employee_id=employee.id,
                 employee_name=employee.name,
                 department_id=employee.department_id,
                 department_name=employee.department.name if employee.department else "",
+                allowed_knowledge_types=allowed_kts,
                 allowed_source_ids=allowed_ids,
                 project_source_ids=project_source_ids,
+                wiki_readable=wiki_readable,
                 permissions=permissions,
             )
 
@@ -139,10 +173,31 @@ class MCPAuthService:
             employee_name=employee.name,
             department_id=employee.department_id,
             department_name=employee.department.name if employee.department else "",
-            allowed_source_ids=[],  # empty = no access
+            allowed_knowledge_types=[] if wiki_level != "all" else None,
+            allowed_source_ids=[],
             project_source_ids=project_source_ids,
+            wiki_readable=wiki_readable,
             permissions=permissions,
         )
+
+    async def _knowledge_types_for_sources(
+        self, source_ids: Optional[list[str]]
+    ) -> list[str]:
+        """Distinct KnowledgeType slugs of the given sources (all global sources if None)."""
+        from app.database.models import KnowledgeType
+
+        stmt = (
+            select(KnowledgeType.slug)
+            .join(Source, Source.knowledge_type_id == KnowledgeType.id)
+            .where(Source.scope_type != "project")
+            .distinct()
+        )
+        if source_ids is not None:
+            if not source_ids:
+                return []
+            stmt = stmt.where(Source.id.in_([uuid.UUID(s) for s in source_ids]))
+        result = await self.db.execute(stmt)
+        return [row[0] for row in result.all() if row[0]]
 
     async def _get_department_source_ids(self, department_id: uuid.UUID) -> list[str]:
         """Get IDs of sources that are global (no departments) or in the given department."""

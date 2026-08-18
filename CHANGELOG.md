@@ -13,6 +13,11 @@ Repository: [github.com/sondt99/arkon-nlm](https://github.com/sondt99/arkon-nlm)
 
 ### Fixed
 
+- `org:employees:manage` can no longer promote anyone to admin, reset passwords, or deactivate the last admin (#6).
+- Skill-contribution approval follows the target skill's departments, not the submitter's claimed `scope_type`. Approving no longer strips department ACLs unless an admin explicitly widens scope (#9).
+- MCP and export tokens now get a real `allowed_knowledge_types` value. Wiki search, page reads, the index, RAG, and export chat all honor it; empty KT arrays fail closed (#11).
+
+
 - Anthropic Settings models now use current IDs (`claude-opus-4-8`, `claude-sonnet-5`, `claude-haiku-4-5`). Sampling params are omitted on models that reject them (#1, #2).
 - Viewers can no longer edit or delete global skills (`can_access_skill` now requires `skill:{action}:own_dept`) (#4).
 - Workspace-private sources are no longer treated as global documents (#5).

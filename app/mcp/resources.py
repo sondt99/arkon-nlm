@@ -51,9 +51,24 @@ def register_resources(mcp: FastMCP):
             return err
 
         try:
+            kt_slugs, source_ids = identity.wiki_visibility()
             async with async_session_factory() as session:
-                page = await wiki_service.get_page_by_slug(session, wiki_service.INDEX_SLUG)
-            return page.content_md if page else "_(wiki index not initialized yet)_"
+                if kt_slugs is None and source_ids is None:
+                    page = await wiki_service.get_page_by_slug(session, wiki_service.INDEX_SLUG)
+                    return page.content_md if page else "_(wiki index not initialized yet)_"
+                pages = await wiki_service.list_pages(
+                    session,
+                    allowed_kt_slugs=kt_slugs,
+                    allowed_source_ids=source_ids,
+                    limit=200,
+                )
+            if not pages:
+                return "_(no wiki pages in your scope)_"
+            lines = ["**Wiki catalog (scoped to your access)**\n"]
+            for p in pages:
+                summary = f" — {p.summary}" if p.summary else ""
+                lines.append(f"- `{p.slug}` ({p.page_type}) — **{p.title}**{summary}")
+            return "\n".join(lines)
         except Exception as e:
             logger.warning(f"Failed to load wiki index resource: {e}")
             return "Wiki index: failed to load."

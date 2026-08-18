@@ -26,6 +26,7 @@ from app.database import get_db
 from app.database.models import ChatConversation, ChatMessage, Employee
 from app.services import chat_service
 from app.services.auth_service import get_current_user
+from app.services.mcp_auth_service import MCPAuthService
 from app.services.permission_engine import (
     _get_user_permissions,
     can_access_workspace,
@@ -52,6 +53,11 @@ async def _validated_chat_scope(
             raise HTTPException(status_code=403, detail="Not a member of this workspace")
         return "project", scope_id
     return "global", None
+
+
+async def _wiki_visibility_for(db: AsyncSession, user: Employee):
+    identity = await MCPAuthService(db)._resolve_scope(user)
+    return identity.wiki_visibility()
 
 
 async def _assert_conversation_scope(db: AsyncSession, user: Employee, conv: ChatConversation) -> None:
@@ -268,6 +274,7 @@ async def send_message(
 
     try:
         registry = ProviderRegistry(db)
+        kt_slugs, source_ids = await _wiki_visibility_for(db, current_user)
         answer, sources = await chat_service.generate_reply(
             session=db,
             registry=registry,
@@ -275,6 +282,8 @@ async def send_message(
             question=body.content.strip(),
             persona=body.persona,
             exclude_message_id=user_msg.id,
+            allowed_kt_slugs=kt_slugs,
+            allowed_source_ids=source_ids,
         )
     except Exception:
         logger.exception("Chat generation failed for conversation={}", conv.id)
@@ -353,6 +362,7 @@ async def edit_message(
     # Regenerate assistant reply with updated context
     try:
         registry = ProviderRegistry(db)
+        kt_slugs, source_ids = await _wiki_visibility_for(db, current_user)
         answer, sources = await chat_service.generate_reply(
             session=db,
             registry=registry,
@@ -360,6 +370,8 @@ async def edit_message(
             question=body.content.strip(),
             persona=body.persona,
             exclude_message_id=msg.id,
+            allowed_kt_slugs=kt_slugs,
+            allowed_source_ids=source_ids,
         )
     except Exception:
         logger.exception("Chat regeneration failed for conversation={}", conv.id)

@@ -827,15 +827,16 @@ class SkillService:
                 raise HTTPException(400, "This contribution is identical to an existing version of the skill.")
 
         # 2. Determine final scope and departments
-        # Use provided final values, otherwise fallback to contribution values
+        # Existing skills keep their departments unless an admin passed an
+        # explicit final_scope_type (widening to global is admin-only).
+        skill = contribution.skill
+        creating_new = skill is None
         scope_type = final_scope_type or contribution.scope_type
         scope_ids = final_scope_ids if final_scope_ids is not None else contribution.scope_ids
+        sync_departments = creating_new or final_scope_type is not None
 
         # 3. Update or Create Skill
-        skill = contribution.skill
-        
         if not skill:
-            # Create new skill
             skill = Skill(
                 name=contribution.title,
                 slug=slugify(contribution.title),
@@ -846,32 +847,23 @@ class SkillService:
             )
             db.add(skill)
             await db.flush()
-        else:
-            # Update existing skill metadata if overridden
-            if final_scope_type:
-                skill.scope_type = final_scope_type
-        
-        # 4. Sync Departments
-        # Clear existing and add new if scope is department
-        if scope_type == "department" and scope_ids:
+        elif final_scope_type:
+            skill.scope_type = final_scope_type
+
+        # 4. Sync Departments only when creating or when an admin overrode scope
+        if sync_departments:
             from sqlalchemy import delete
 
             from app.database.models import SkillDepartment
-            # Remove old links (if updating)
-            await db.execute(delete(SkillDepartment).where(SkillDepartment.skill_id == skill.id))
-            # Add new links
-            for d_id in scope_ids:
-                db.add(SkillDepartment(skill_id=skill.id, department_id=d_id))
-            
-            # Legacy support: set primary scope_id
-            if len(scope_ids) > 0:
-                skill.scope_id = scope_ids[0]
-        elif scope_type == "global":
-            from sqlalchemy import delete
-
-            from app.database.models import SkillDepartment
-            await db.execute(delete(SkillDepartment).where(SkillDepartment.skill_id == skill.id))
-            skill.scope_id = None
+            if scope_type == "department" and scope_ids:
+                await db.execute(delete(SkillDepartment).where(SkillDepartment.skill_id == skill.id))
+                for d_id in scope_ids:
+                    db.add(SkillDepartment(skill_id=skill.id, department_id=d_id))
+                if scope_ids:
+                    skill.scope_id = scope_ids[0]
+            elif scope_type == "global":
+                await db.execute(delete(SkillDepartment).where(SkillDepartment.skill_id == skill.id))
+                skill.scope_id = None
         
         # 5. Create New Version
         new_v = skill.current_version + 1

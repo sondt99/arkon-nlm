@@ -326,6 +326,12 @@ skill:read:own_dept
 
 `can_access_skill` requires `skill:{action}:own_dept` (or `:all`) before the department comparison. A Viewer cannot PATCH or DELETE a global skill.
 
+`org:employees:manage` cannot write `Employee.role`, reset passwords, or toggle admin accounts. Those writes require `Employee.role == admin`. The last active admin cannot be demoted or deactivated.
+
+Skill-contribution approval uses the **target skill's** current departments. A contributor cannot claim `scope_type=global` to skip department review. Approval does not clear `SkillDepartment` rows unless a system admin passes an explicit `final_scope_type`.
+
+MCP / export wiki visibility: `ResolvedIdentity.allowed_knowledge_types` is populated in `_resolve_scope` (`None` = unrestricted, `[]` = no wiki access). Pages with an empty KT array are not world-readable when a restriction is set. `read_wiki_index` returns a filtered catalog for restricted tokens.
+
 Workspace-scoped sources (`scope_type=project`) are **not** treated as global just because they have no `source_departments` rows. `can_access_document` requires workspace membership first; `doc:read:all` does not open another team's files. Members may read; editor+ may edit/delete via the global source endpoints.
 
 `workspace:view:all` is in the permission catalog but **not** consulted by `GET /api/projects` — only `Employee.role == admin` sees every workspace.

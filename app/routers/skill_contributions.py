@@ -29,6 +29,11 @@ from app.services.auth_service import (
     require_permission,
 )
 from app.services.permission_engine import _get_user_permissions
+from app.services.skill_scope import (
+    ensure_reviewer_can_approve,
+    ensure_scope_change_allowed,
+    normalize_contribution_scope,
+)
 from app.services.skill_service import SkillService
 from app.services.storage_service import safe_relative_path
 
@@ -108,6 +113,7 @@ async def create_skill_contribution(
         if "skill:create:own_dept" not in perms:
             raise HTTPException(403, "Permission required: skill:create")
 
+    base_skill = None
     if req.skill_id:
         base_skill = await db.get(Skill, req.skill_id)
         if base_skill:
@@ -117,8 +123,17 @@ async def create_skill_contribution(
             if not await can_access_skill(db, user, base_skill, "read"):
                 raise HTTPException(403, "You do not have access to this skill")
 
+    scope_type, scope_ids = normalize_contribution_scope(
+        req.scope_type, req.scope_ids, skill=base_skill,
+    )
+    if scope_type == "department" and scope_ids and base_skill is None:
+        from app.database.models import Department
+        for dept_id in scope_ids:
+            if await db.get(Department, dept_id) is None:
+                raise HTTPException(400, f"Department not found: {dept_id}")
+
     contribution = await SkillService.create_contribution(
-        db, req.skill_id, req.base_version, user.id, req.title, req.scope_type, req.scope_ids
+        db, req.skill_id, req.base_version, user.id, req.title, scope_type, scope_ids
     )
     return contribution
 
@@ -522,22 +537,14 @@ async def approve_skill_contribution(
     if contribution.status in [SkillContributionStatus.APPROVED.value, SkillContributionStatus.REJECTED.value]:
         raise HTTPException(400, "Contribution already reviewed")
 
-    # Permission check: 
-    # 1. Global admins can approve anything.
-    # 2. If scope is 'global', any reviewer can approve.
-    # 3. If scope is 'department', reviewer must belong to one of the target departments.
-    if admin.role != "admin" and contribution.scope_type == "department":
-        target_dept_ids = [str(id) for id in (contribution.scope_ids or [])]
-        if str(admin.department_id) not in target_dept_ids:
-            raise HTTPException(
-                403, 
-                "You do not have permission to approve contributions for these departments. "
-                "Reviewer must belong to one of the target departments."
-            )
+    skill = contribution.skill
+    if skill is None and contribution.skill_id:
+        skill = await db.get(Skill, contribution.skill_id)
+    ensure_reviewer_can_approve(admin, skill, contribution)
 
-    # Use values from request if provided, otherwise default to None
     final_scope_type = req.final_scope_type if req else None
     final_scope_ids = req.final_scope_ids if req else None
+    ensure_scope_change_allowed(admin, final_scope_type)
 
     skill = await SkillService.approve_contribution(
         db, 

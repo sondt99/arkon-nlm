@@ -1,0 +1,106 @@
+name: 🔧 Technical debt / code health
+description: >-
+  A defect, risk, or structural problem found by reading the code rather than by
+  hitting it at runtime. Use this for code-review and audit findings.
+title: "[debt]: "
+labels: ["tech-debt"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        For findings that are exploitable, use **private vulnerability reporting**
+        instead — see `SECURITY.md`. Do not describe a live vulnerability here.
+
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem
+      description: One or two sentences stating the defect precisely.
+    validations:
+      required: true
+
+  - type: textarea
+    id: location
+    attributes:
+      label: Location
+      description: >-
+        `path/to/file.py:123` for every affected site. Permalink to the blob at a commit
+        if you can — plain line numbers drift.
+      placeholder: |
+        app/routers/sources.py:412
+        app/routers/projects.py:288
+      render: text
+    validations:
+      required: true
+
+  - type: textarea
+    id: consequence
+    attributes:
+      label: Failure scenario
+      description: >-
+        Concrete inputs or conditions → the wrong outcome. "This is bad practice" is not
+        actionable; "a second request before the first commits creates a duplicate row
+        because the uniqueness check is not backed by a constraint" is.
+    validations:
+      required: true
+
+  - type: dropdown
+    id: category
+    attributes:
+      label: Category
+      options:
+        - "Correctness — produces a wrong result"
+        - "Data integrity — corrupts, orphans, or loses data"
+        - "Reliability — crashes, hangs, or wedges a job"
+        - "Performance — N+1, unbounded query, blocked event loop"
+        - "Access control — enforcement gap (non-exploitable only)"
+        - "Migration drift — models and alembic disagree"
+        - "Maintainability — duplication, god object, tangled state"
+        - "Test coverage — untested high-risk path"
+        - "Tooling / CI"
+    validations:
+      required: true
+
+  - type: dropdown
+    id: area
+    attributes:
+      label: Affected area
+      options:
+        - "API / routers (app/routers)"
+        - "Services / business logic (app/services)"
+        - "Access control / RBAC (permissions, policy engine)"
+        - "AI pipeline / wiki compilation (app/ai, app/ai/mrp)"
+        - "Background worker / ingestion (app/worker.py, arq)"
+        - "MCP server (app/mcp)"
+        - "Database / migrations (app/database, alembic)"
+        - "Frontend (frontend/)"
+        - "Infrastructure (Docker, nginx, MinIO, Redis)"
+        - "Docs / developer tooling"
+    validations:
+      required: true
+
+  - type: dropdown
+    id: severity
+    attributes:
+      label: Severity
+      options:
+        - "Critical — data loss or security impact; fix before next release"
+        - "High — user-visible breakage or silent wrong results"
+        - "Medium — real but bounded; schedule it"
+        - "Low — cleanup, no runtime impact"
+    validations:
+      required: true
+
+  - type: textarea
+    id: fix
+    attributes:
+      label: Suggested fix
+      description: The approach, plus anything that makes it riskier than it looks.
+
+  - type: textarea
+    id: verification
+    attributes:
+      label: How to verify the fix
+      description: >-
+        The test or observation that proves it is actually fixed. A finding without a
+        verification path tends to get "fixed" without evidence.

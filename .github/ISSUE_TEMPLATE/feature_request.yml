@@ -1,0 +1,65 @@
+name: ✨ Feature request
+description: Propose new capability or an improvement to existing behaviour.
+title: "[feat]: "
+labels: ["enhancement"]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem
+      description: >-
+        The concrete situation this fails to serve today. Describe the need, not the
+        implementation — a request grounded in a real workflow gets prioritised faster.
+      placeholder: >-
+        Editors have no way to see which wiki pages a source contributed to, so removing
+        an outdated document means manually opening every page to check for stale claims.
+    validations:
+      required: true
+
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed solution
+    validations:
+      required: true
+
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered
+      description: Including what you do today as a workaround, if anything.
+
+  - type: dropdown
+    id: area
+    attributes:
+      label: Affected area
+      options:
+        - "API / routers (app/routers)"
+        - "Services / business logic (app/services)"
+        - "Access control / RBAC (permissions, policy engine)"
+        - "AI pipeline / wiki compilation (app/ai, app/ai/mrp)"
+        - "Background worker / ingestion (app/worker.py, arq)"
+        - "MCP server (app/mcp)"
+        - "Database / migrations (app/database, alembic)"
+        - "Frontend (frontend/)"
+        - "Infrastructure (Docker, nginx, MinIO, Redis)"
+        - "Cross-cutting / not sure"
+    validations:
+      required: true
+
+  - type: textarea
+    id: scope
+    attributes:
+      label: Surfaces this touches
+      description: >-
+        Anything you already know needs to change — API contract, data model and a
+        migration, RBAC rules, MCP tool surface, docs. Helps size the work.
+
+  - type: checkboxes
+    id: breaking
+    attributes:
+      label: Compatibility
+      options:
+        - label: "This would be a breaking change (API contract, data model, or config)."
+        - label: "This needs a database migration."
+        - label: "This changes what a role is permitted to do."

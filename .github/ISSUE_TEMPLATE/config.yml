@@ -1,0 +1,16 @@
+blank_issues_enabled: false
+contact_links:
+  - name: 🔒 Report a security vulnerability
+    url: https://github.com/sondt99/arkon-nlm/security/advisories/new
+    about: >-
+      Do NOT open a public issue for vulnerabilities. Use private vulnerability
+      reporting so the flaw is not disclosed before a fix ships. See SECURITY.md.
+  - name: 📚 Documentation
+    url: https://github.com/sondt99/arkon-nlm/tree/main/docs
+    about: >-
+      Setup, architecture, access control, MCP, and troubleshooting guides.
+      Check TROUBLESHOOTING.md before filing a bug.
+  - name: ❓ Question or usage help
+    url: https://github.com/sondt99/arkon-nlm/discussions
+    about: >-
+      For "how do I…" questions. Issues are for defects and tracked work.

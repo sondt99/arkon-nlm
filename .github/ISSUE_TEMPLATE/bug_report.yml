@@ -1,0 +1,116 @@
+name: 🐛 Bug report
+description: Something in Arkon behaves incorrectly.
+title: "[bug]: "
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Before filing, please check [docs/TROUBLESHOOTING.md](../blob/main/docs/TROUBLESHOOTING.md).
+
+        **Never paste real secrets.** Redact `SECRET_KEY`, provider API keys, database
+        passwords, and MCP tokens from any logs or config you attach.
+
+  - type: textarea
+    id: summary
+    attributes:
+      label: What happened
+      description: The incorrect behaviour, in one or two sentences.
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected
+    attributes:
+      label: What you expected instead
+    validations:
+      required: true
+
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      description: Numbered steps someone else can follow on a clean install.
+      placeholder: |
+        1. Upload `example.docx` under **Documents**
+        2. Wait for ingestion to report complete
+        3. Open **Wiki** — the page is empty
+    validations:
+      required: true
+
+  - type: dropdown
+    id: area
+    attributes:
+      label: Affected area
+      description: Best guess is fine.
+      options:
+        - "API / routers (app/routers)"
+        - "Services / business logic (app/services)"
+        - "Access control / RBAC (permissions, policy engine)"
+        - "AI pipeline / wiki compilation (app/ai, app/ai/mrp)"
+        - "Background worker / ingestion (app/worker.py, arq)"
+        - "MCP server (app/mcp)"
+        - "Database / migrations (app/database, alembic)"
+        - "Frontend (frontend/)"
+        - "Infrastructure (Docker, nginx, MinIO, Redis)"
+        - "Not sure"
+    validations:
+      required: true
+
+  - type: dropdown
+    id: severity
+    attributes:
+      label: Severity
+      options:
+        - "Critical — data loss, security impact, or total outage"
+        - "High — core workflow broken, no workaround"
+        - "Medium — broken but has a workaround"
+        - "Low — cosmetic or minor annoyance"
+    validations:
+      required: true
+
+  - type: dropdown
+    id: deployment
+    attributes:
+      label: How are you running Arkon?
+      options:
+        - "Docker Compose (the documented Quick start)"
+        - "Local development (uvicorn + npm run dev)"
+        - "Deployed on a server"
+    validations:
+      required: true
+
+  - type: input
+    id: version
+    attributes:
+      label: Version or commit
+      description: "Output of `git rev-parse --short HEAD`, or a release like v0.1.0."
+      placeholder: "v0.1.0 / 904d49a"
+    validations:
+      required: true
+
+  - type: textarea
+    id: logs
+    attributes:
+      label: Relevant logs
+      description: |
+        Container logs, e.g. `docker compose logs --tail=100 api` (also try `worker`,
+        `worker_skills`, `frontend`). Secrets redacted. Rendered as a code block.
+      render: shell
+
+  - type: checkboxes
+    id: preflight
+    attributes:
+      label: Ruled out the common causes
+      description: >-
+        These four account for most reports. Ticking them saves a round-trip;
+        leave any unticked if it does not apply to your setup.
+      options:
+        - label: >-
+            I started the stack with `--env-file .env.docker`. (Omitting it substitutes the
+            placeholder passwords from docker-compose.yml and crash-loops the workers.)
+        - label: >-
+            An **embedding** provider and an **LLM** provider are both configured in
+            **Settings**. (Without them, uploads queue but the wiki is never written.)
+        - label: "Migrations are current — `docker exec arkon_api alembic current` matches `head`."
+        - label: "All containers are healthy — `docker compose ps` shows no restart loop."

@@ -1,0 +1,57 @@
+name: 📖 Documentation issue
+description: Docs that are wrong, missing, stale, or contradict the code.
+title: "[docs]: "
+labels: ["documentation"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Docs that describe an environment nobody runs are worse than no docs — an agent
+        or a new contributor will follow them and burn time on commands that cannot work.
+        Inaccuracy is a real bug; please file it.
+
+  - type: input
+    id: file
+    attributes:
+      label: Which document
+      placeholder: "docs/SETUP.md, README.md, COMMANDS.md, CLAUDE.md…"
+    validations:
+      required: true
+
+  - type: input
+    id: section
+    attributes:
+      label: Section or line
+      placeholder: "## Quick start, step 3 — or COMMANDS.md:54"
+
+  - type: dropdown
+    id: kind
+    attributes:
+      label: Kind of problem
+      options:
+        - "Wrong — following it does not work"
+        - "Stale — describes a previous version, path, or platform"
+        - "Missing — an undocumented step, env var, or behaviour"
+        - "Contradicts the code — docs and implementation disagree"
+        - "Unclear — technically correct but easy to misread"
+    validations:
+      required: true
+
+  - type: textarea
+    id: problem
+    attributes:
+      label: What it says vs. what is true
+      description: >-
+        Quote the passage, then state reality. If a documented command fails, paste the
+        command and its actual error.
+      placeholder: |
+        COMMANDS.md says:
+            git -C "E:\AI-CLAUDE\arkon" status
+        There is no E: drive on Linux; the checkout is at the repo root. The command exits 128.
+    validations:
+      required: true
+
+  - type: textarea
+    id: fix
+    attributes:
+      label: Suggested correction

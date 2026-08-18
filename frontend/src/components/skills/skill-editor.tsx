@@ -208,12 +208,10 @@ export function SkillEditor({ contributionId, onSubmitted, onStatusChange, mode 
       }
     } catch (err: any) {
       console.error("Failed to load contribution files:", err);
-      // Kiểm tra lỗi 400 từ Backend
-      if (err.status === 400) {
-        window.location.reload();
-      } else {
-        setError("An error occurred while loading files.");
-      }
+      const detail = typeof err?.message === "string" && err.message
+        ? err.message
+        : "An error occurred while loading files.";
+      setError(detail);
     } finally {
       setLoading(false);
       loadDiffStatus();

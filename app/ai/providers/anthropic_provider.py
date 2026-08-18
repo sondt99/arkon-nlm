@@ -16,6 +16,34 @@ from app.ai.agent_protocol import (
 from app.ai.providers.base import LLMProvider, ProviderConfig, VisionProvider
 
 
+# Models that reject temperature / top_p / top_k (400 invalid_request_error).
+_NO_SAMPLING_MARKERS = (
+    "opus-4-8",
+    "opus-4-7",
+    "sonnet-5",
+    "fable-5",
+    "claude-4.7",
+    "claude-4.8",
+    "claude-opus-4-8",
+    "claude-opus-4-7",
+    "claude-sonnet-5",
+)
+
+
+def model_accepts_sampling(model_id: str) -> bool:
+    """Return False for current-generation Claude IDs that reject sampling params."""
+    mid = (model_id or "").lower()
+    return not any(marker in mid for marker in _NO_SAMPLING_MARKERS)
+
+
+def _apply_sampling(kwargs: dict, model_id: str, temperature: float, top_p: Optional[float]) -> None:
+    if not model_accepts_sampling(model_id):
+        return
+    kwargs["temperature"] = temperature
+    if top_p is not None:
+        kwargs["top_p"] = top_p
+
+
 class AnthropicLLM(LLMProvider):
     """Anthropic Claude LLM provider."""
 
@@ -44,13 +72,11 @@ class AnthropicLLM(LLMProvider):
         kwargs = {
             "model": self.config.model_id,
             "max_tokens": max_tokens or 16384,
-            "temperature": temperature,
             "messages": [{"role": "user", "content": prompt}],
         }
+        _apply_sampling(kwargs, self.config.model_id, temperature, top_p)
         if system:
             kwargs["system"] = system
-        if top_p is not None:
-            kwargs["top_p"] = top_p
 
         response = await self.client.messages.create(**kwargs)
         return response.content[0].text if response.content else ""
@@ -70,14 +96,12 @@ class AnthropicLLM(LLMProvider):
         kwargs: dict = {
             "model": self.config.model_id,
             "max_tokens": max_tokens or 16384,
-            "temperature": temperature,
             "messages": anthropic_messages,
             "tools": anthropic_tools,
         }
+        _apply_sampling(kwargs, self.config.model_id, temperature, top_p)
         if system:
             kwargs["system"] = system
-        if top_p is not None:
-            kwargs["top_p"] = top_p
 
         response = await self.client.messages.create(**kwargs)
 

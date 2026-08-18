@@ -44,7 +44,7 @@ Org permissions look like `org:departments:read` (the third part is the action, 
 | `doc:edit:own_dept` / `:all` | Edit metadata |
 | `doc:delete:own_dept` / `:all` | Delete |
 
-A file with **no** department is global: anyone with the matching action can see it.
+A file with **no** department **and** `scope_type != project` is global: anyone with the matching action can see it. Workspace uploads (`scope_type=project`) have no department rows on purpose — they are **not** global. Only workspace members (or a system admin) can read them.
 
 ### Wiki
 

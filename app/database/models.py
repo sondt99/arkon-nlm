@@ -558,7 +558,7 @@ class Department(Base):
 
     # Relationships
     employees: Mapped[list["Employee"]] = relationship(
-        back_populates="department", cascade="all, delete-orphan"
+        back_populates="department", cascade="save-update, merge"
     )
     source_departments: Mapped[list["SourceDepartment"]] = relationship(
         back_populates="department", cascade="all, delete-orphan"
@@ -590,7 +590,7 @@ class Employee(Base):
         comment="admin or employee — system-level role",
     )
     department_id: Mapped[uuid.UUID] = mapped_column(
-        UUID(as_uuid=True), ForeignKey("departments.id", ondelete="CASCADE")
+        UUID(as_uuid=True), ForeignKey("departments.id", ondelete="RESTRICT")
     )
     custom_role_id: Mapped[Optional[uuid.UUID]] = mapped_column(
         UUID(as_uuid=True), ForeignKey("roles.id", ondelete="SET NULL"),

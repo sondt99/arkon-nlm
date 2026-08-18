@@ -7,7 +7,7 @@ import { SaharaCard } from "@/components/ui/sahara-card";
 import { ConfirmDialog } from "@/components/ui/confirm-dialog";
 import { EmptyState } from "@/components/shared/empty-state";
 import { LoadingState } from "@/components/shared/loading-state";
-import { ScopeMembersDialog } from "@/components/shared/scope-members-dialog";
+
 
 type Department = {
   id: string;
@@ -24,7 +24,6 @@ type Props = {
 };
 
 export function DepartmentCards({ departments, loading, onEdit, onRefresh }: Props) {
-  const [scopeDept, setScopeDept] = React.useState<Department | null>(null);
   const [deleteDept, setDeleteDept] = React.useState<Department | null>(null);
 
   const handleDelete = async () => {
@@ -79,15 +78,6 @@ export function DepartmentCards({ departments, loading, onEdit, onRefresh }: Pro
             <Button
               variant="ghost"
               size="sm"
-              onClick={() => setScopeDept(dept)}
-              className="text-xs"
-            >
-              <span className="material-symbols-outlined text-sm mr-1">lock</span>
-              Access
-            </Button>
-            <Button
-              variant="ghost"
-              size="sm"
               onClick={() => onEdit(dept)}
               className="text-xs"
             >
@@ -106,16 +96,6 @@ export function DepartmentCards({ departments, loading, onEdit, onRefresh }: Pro
           </div>
         </SaharaCard>
       ))}
-
-      {scopeDept && (
-        <ScopeMembersDialog
-          open={!!scopeDept}
-          onOpenChange={(open) => { if (!open) setScopeDept(null); }}
-          label={scopeDept.name}
-          scopeType="department"
-          scopeId={scopeDept.id}
-        />
-      )}
 
       <ConfirmDialog
         open={!!deleteDept}

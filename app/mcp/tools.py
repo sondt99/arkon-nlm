@@ -436,7 +436,11 @@ def register_tools(mcp: FastMCP):
 
         from app.database import async_session_factory
         from app.database.models import Source
-        from app.services.source_outline import parse_page_range, slice_pages_by_range
+        from app.services.source_outline import (
+            PageRangeError,
+            parse_page_range,
+            slice_pages_by_range,
+        )
 
         identity, err = await _get_identity()
         if err:
@@ -447,7 +451,10 @@ def register_tools(mcp: FastMCP):
         except ValueError:
             return f"Invalid source ID: {source_id}"
 
-        page_nums = parse_page_range(pages)
+        try:
+            page_nums = parse_page_range(pages)
+        except PageRangeError as exc:
+            return str(exc)
         if not page_nums:
             return f"Invalid page range: {pages!r}. Use formats like '5-7', '3,8', '12'."
 

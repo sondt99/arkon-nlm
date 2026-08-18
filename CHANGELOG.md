@@ -9,6 +9,22 @@ Repository: [github.com/sondt99/arkon-nlm](https://github.com/sondt99/arkon-nlm)
 
 ---
 
+## [Unreleased]
+
+### Fixed
+
+- Anthropic Settings models now use current IDs (`claude-opus-4-8`, `claude-sonnet-5`, `claude-haiku-4-5`). Sampling params are omitted on models that reject them (#1, #2).
+- Viewers can no longer edit or delete global skills (`can_access_skill` now requires `skill:{action}:own_dept`) (#4).
+- Workspace-private sources are no longer treated as global documents (#5).
+- Deleting a department that still has employees returns 409; the FK is `ON DELETE RESTRICT` (#7).
+- Chat conversations cannot be scoped to a workspace the caller is not in; membership is re-checked on every message (#32).
+- Add-to-Wiki inherits the conversation scope and requires the same write rights as the wiki editor (#8).
+- NotebookLM ingest requires `doc:create` and writes an audit row (#10).
+- `get_source_pages` rejects unbounded page ranges (#12).
+- Saving provider settings no longer wipes stored API keys (#14).
+- Opening a non-editable skill contribution no longer hard-reloads the tab (#15).
+- The department Access button that called missing `/api/scopes/...` endpoints is removed (#16).
+
 ## [0.1.0] — 2026-08-18
 
 First tagged release of **arkon-nlm**. This is the product snapshot published at [github.com/sondt99/arkon-nlm](https://github.com/sondt99/arkon-nlm). It is based on [nduckmink/arkon](https://github.com/nduckmink/arkon) and adds NotebookLM, the Claude Code gateway, source-aware wiki compilation, and a hardened Docker deploy.

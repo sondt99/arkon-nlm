@@ -26,8 +26,42 @@ from app.database import get_db
 from app.database.models import ChatConversation, ChatMessage, Employee
 from app.services import chat_service
 from app.services.auth_service import get_current_user
+from app.services.permission_engine import (
+    _get_user_permissions,
+    can_access_workspace,
+    get_workspace_role,
+    workspace_role_can,
+)
 
 router = APIRouter()
+
+
+async def _validated_chat_scope(
+    db: AsyncSession,
+    user: Employee,
+    scope_type: str,
+    scope_id: Optional[uuid.UUID],
+) -> tuple[str, Optional[uuid.UUID]]:
+    """Reject unknown scopes and workspace IDs the caller cannot access."""
+    if scope_type not in ("global", "project"):
+        raise HTTPException(status_code=400, detail="scope_type must be 'global' or 'project'")
+    if scope_type == "project":
+        if not scope_id:
+            raise HTTPException(status_code=400, detail="scope_id is required for project scope")
+        if not await can_access_workspace(db, user, scope_id):
+            raise HTTPException(status_code=403, detail="Not a member of this workspace")
+        return "project", scope_id
+    return "global", None
+
+
+async def _assert_conversation_scope(db: AsyncSession, user: Employee, conv: ChatConversation) -> None:
+    """Re-check workspace membership so a departed member cannot keep querying."""
+    if conv.scope_type == "project" and conv.scope_id:
+        if not await can_access_workspace(db, user, conv.scope_id):
+            raise HTTPException(
+                status_code=403,
+                detail="You no longer have access to this workspace",
+            )
 
 
 # ---------------------------------------------------------------------------
@@ -117,11 +151,14 @@ async def create_conversation(
     db: AsyncSession = Depends(get_db),
     current_user: Employee = Depends(get_current_user),
 ) -> ConversationOut:
+    scope_type, scope_id = await _validated_chat_scope(
+        db, current_user, body.scope_type, body.scope_id
+    )
     conv = ChatConversation(
         employee_id=current_user.id,
         title=body.title,
-        scope_type=body.scope_type,
-        scope_id=body.scope_id,
+        scope_type=scope_type,
+        scope_id=scope_id,
     )
     db.add(conv)
     await db.commit()
@@ -210,6 +247,7 @@ async def send_message(
         raise HTTPException(status_code=422, detail="Message content cannot be empty")
 
     conv = await _get_owned_conversation(db, conversation_id, current_user.id)
+    await _assert_conversation_scope(db, current_user, conv)
 
     # Save user message
     user_msg = await chat_service.save_message(
@@ -283,6 +321,7 @@ async def edit_message(
         raise HTTPException(status_code=422, detail="Message content cannot be empty")
 
     conv = await _get_owned_conversation(db, conversation_id, current_user.id)
+    await _assert_conversation_scope(db, current_user, conv)
 
     # Load and validate the target message
     msg_result = await db.execute(
@@ -376,6 +415,27 @@ async def conversation_to_wiki(
         raise HTTPException(status_code=422, detail="Title is required")
 
     conv = await _get_owned_conversation(db, conversation_id, current_user.id)
+    await _assert_conversation_scope(db, current_user, conv)
+
+    # Ignore body-supplied scope — a conversation cannot write into another workspace.
+    scope_type = conv.scope_type or "global"
+    scope_id = conv.scope_id if scope_type == "project" else None
+
+    if current_user.role != "admin":
+        if scope_type == "project" and scope_id:
+            member_role = await get_workspace_role(db, current_user, scope_id)
+            if not member_role or not workspace_role_can(member_role, "editor"):
+                raise HTTPException(
+                    status_code=403,
+                    detail="Requires editor role or above in this workspace",
+                )
+        else:
+            perms = _get_user_permissions(current_user)
+            if "wiki:write:all" not in perms:
+                raise HTTPException(
+                    status_code=403,
+                    detail="Requires wiki:write:all to create a global wiki page",
+                )
 
     # Load all messages
     msg_stmt = (
@@ -460,8 +520,8 @@ async def conversation_to_wiki(
             summary=summary,
             knowledge_type_slugs=[],
             source_ids=[],
-            scope_type=body.scope_type,
-            scope_id=body.scope_id,
+            scope_type=scope_type,
+            scope_id=scope_id,
         )
     except Exception as exc:
         raise HTTPException(status_code=500, detail=f"Failed to create wiki page: {exc}")

@@ -67,8 +67,21 @@ def slice_pages_by_range(
     return out
 
 
+MAX_PAGE_SPAN = 200
+MAX_PAGE_SELECTION = 500
+
+
+class PageRangeError(ValueError):
+    """Raised when a page-range spec is too large to expand safely."""
+
+
 def parse_page_range(spec: str) -> list[int]:
-    """Parse '5-7', '3,8', '12', or combinations into a sorted unique list of 1-based ints."""
+    """Parse '5-7', '3,8', '12', or combinations into a sorted unique list of 1-based ints.
+
+    Rejects a single span larger than MAX_PAGE_SPAN and a total selection
+    larger than MAX_PAGE_SELECTION so a malicious '1-40000000' cannot OOM
+    the API process.
+    """
     result: set[int] = set()
     for part in (spec or "").split(","):
         part = part.strip()
@@ -81,12 +94,20 @@ def parse_page_range(spec: str) -> list[int]:
             except ValueError:
                 continue
             if start <= end:
+                if end - start + 1 > MAX_PAGE_SPAN:
+                    raise PageRangeError(
+                        f"Page range {start}-{end} exceeds the {MAX_PAGE_SPAN}-page cap"
+                    )
                 result.update(range(start, end + 1))
         else:
             try:
                 result.add(int(part))
             except ValueError:
                 continue
+        if len(result) > MAX_PAGE_SELECTION:
+            raise PageRangeError(
+                f"Page selection exceeds the {MAX_PAGE_SELECTION}-page cap"
+            )
     return sorted(result)
 
 

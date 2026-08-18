@@ -103,6 +103,18 @@ async def can_access_document(
     if user.role == "admin":
         return True
 
+    # Workspace-private sources: membership only. A global doc:* grant
+    # does not open another team's project files.
+    scope_type = getattr(source, "scope_type", None)
+    scope_id = getattr(source, "scope_id", None)
+    if scope_type == "project" and scope_id:
+        if not await can_access_workspace(db, user, scope_id):
+            return False
+        if action == "read":
+            return True
+        member_role = await get_workspace_role(db, user, scope_id)
+        return bool(member_role and workspace_role_can(member_role, "editor"))
+
     permissions = _get_user_permissions(user)
 
     # Has :all scope
@@ -177,6 +189,9 @@ async def can_access_skill(
 
     if f"skill:{action}:all" in permissions:
         return True
+
+    if f"skill:{action}:own_dept" not in permissions:
+        return False
 
     # Skill visible if it's Global (no depts) OR user's dept is in skill's depts
     skill_dept_ids = {sd.department_id for sd in skill.departments}

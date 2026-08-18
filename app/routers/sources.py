@@ -21,6 +21,7 @@ from sqlalchemy.orm import selectinload
 from app.database import get_db
 from app.database.models import (
     Employee,
+    ProjectMember,
     ScopeType,
     Source,
     SourceDepartment,
@@ -176,6 +177,19 @@ async def list_sources(
 
     # --- Scope filtering ---
     scope_level = "all" if user.role == "admin" else get_scope_level(list(perms), "doc", "read")
+
+    # Workspace-private sources are never listed via the global department
+    # rule. Members still see their project files; everyone else does not.
+    if user.role != "admin":
+        member_ws = select(ProjectMember.project_id).where(
+            ProjectMember.employee_id == user.id
+        )
+        not_foreign_workspace = or_(
+            Source.scope_type != "project",
+            Source.scope_id.in_(member_ws),
+        )
+        base = base.where(not_foreign_workspace)
+        count_base = count_base.where(not_foreign_workspace)
 
     if scope_level == "own_dept":
         # Only show: global docs (no departments) OR docs in user's department

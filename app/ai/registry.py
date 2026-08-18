@@ -371,8 +371,8 @@ SUPPORTED_PROVIDERS = {
             "gpt-4.1-mini", "gpt-4.1-nano", "gpt-4o", "gpt-4o-mini",
         ]},
         {"id": "anthropic", "name": "Anthropic", "models": [
-            "claude-4.7-opus", "claude-4.6-sonnet",
-            "claude-sonnet-4-20250514", "claude-haiku-4-20250514",
+            "claude-opus-4-8", "claude-sonnet-5", "claude-haiku-4-5",
+            "claude-sonnet-4-6",
         ]},
         {"id": "ollama", "name": "Ollama", "models": [
             "qwen2.5:14b", "qwen2.5:7b", "llama3.1:8b", "mistral:7b",
@@ -392,7 +392,7 @@ SUPPORTED_PROVIDERS = {
             "gpt-4o", "gpt-4o-mini",
         ]},
         {"id": "anthropic", "name": "Anthropic", "models": [
-            "claude-sonnet-4-20250514", "claude-haiku-4-20250514",
+            "claude-sonnet-5", "claude-haiku-4-5", "claude-sonnet-4-6",
         ]},
         {"id": "ollama", "name": "Ollama", "models": [
             "llava:7b", "llava:13b", "llava-llama3", "moondream",

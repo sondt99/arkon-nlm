@@ -8,7 +8,7 @@ from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
@@ -141,6 +141,16 @@ async def delete_department(
     dept = await db.get(Department, uuid.UUID(dept_id))
     if not dept:
         raise HTTPException(404, "Department not found")
+    employee_count = (
+        await db.execute(
+            select(func.count()).select_from(Employee).where(Employee.department_id == dept.id)
+        )
+    ).scalar_one()
+    if employee_count:
+        raise HTTPException(
+            409,
+            f"Reassign or remove {employee_count} employee(s) before deleting this department",
+        )
     await log_audit(db, _user, "delete", "department", str(dept.id), reason=dept.name)
     await db.delete(dept)
     return {"deleted": True}

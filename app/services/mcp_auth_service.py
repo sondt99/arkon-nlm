@@ -147,9 +147,12 @@ class MCPAuthService:
     async def _get_department_source_ids(self, department_id: uuid.UUID) -> list[str]:
         """Get IDs of sources that are global (no departments) or in the given department."""
         # Sources with no department entries (global)
+        # "Global" means no department rows AND not a workspace-private source.
+        # Project-scoped files are added separately via membership.
         global_stmt = (
             select(Source.id)
             .where(
+                Source.scope_type != "project",
                 ~exists(
                     select(SourceDepartment.source_id)
                     .where(SourceDepartment.source_id == Source.id)

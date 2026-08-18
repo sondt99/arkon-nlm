@@ -65,7 +65,7 @@ MRP writes wiki pages (with citations)
 | Item | Value |
 |---|---|
 | App version | `0.1.0` |
-| Latest migration | `026_legacy_ninerouter_spec_ids` |
+| Latest migration | `027_department_employee_restrict` |
 | Browser entry | `http://localhost:3119` |
 | MCP (Docker) | `http://localhost:3119/mcp` |
 | Health (Docker) | `http://localhost:3119/api/health` |

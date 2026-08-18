@@ -324,6 +324,10 @@ skill:read:own_dept
 
 `wiki:write:own_dept` = propose drafts. `wiki:write:all` = direct edit + review. Page rollback and page delete are system-admin operations (`wiki.py`).
 
+`can_access_skill` requires `skill:{action}:own_dept` (or `:all`) before the department comparison. A Viewer cannot PATCH or DELETE a global skill.
+
+Workspace-scoped sources (`scope_type=project`) are **not** treated as global just because they have no `source_departments` rows. `can_access_document` requires workspace membership first; `doc:read:all` does not open another team's files. Members may read; editor+ may edit/delete via the global source endpoints.
+
 `workspace:view:all` is in the permission catalog but **not** consulted by `GET /api/projects` — only `Employee.role == admin` sees every workspace.
 
 Role presets (Viewer, Contributor, Department Admin, Knowledge Admin) are **templates in code** (`ROLE_PRESETS`). Alembic seeds system roles named Admin / Employee; it does not insert those four presets as rows.

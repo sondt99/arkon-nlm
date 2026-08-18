@@ -255,6 +255,11 @@ class ConfigService:
             if value and value.startswith("••••"):
                 results[key] = True
                 continue
+            # Empty string must not wipe a stored secret. Clearing a key
+            # requires an explicit sentinel, not a blanked input field.
+            if _is_sensitive(key) and value == "":
+                results[key] = True
+                continue
             await self.set(key, value)
             results[key] = True
         return results

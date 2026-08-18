@@ -42,7 +42,7 @@ const LLM_PROVIDERS: ProviderDef[] = [
     value: "anthropic",
     label: "Anthropic",
     icon: "psychology",
-    staticModels: ["claude-sonnet-4-20250514", "claude-haiku-4-20250514", "claude-opus-4-5"],
+    staticModels: ["claude-opus-4-8", "claude-sonnet-5", "claude-haiku-4-5", "claude-sonnet-4-6"],
     needsKey: true,
     canFetch: false,
     keyPlaceholder: "sk-ant-...",
@@ -93,7 +93,7 @@ const VISION_PROVIDERS: ProviderDef[] = [
     value: "anthropic",
     label: "Anthropic",
     icon: "psychology",
-    staticModels: ["claude-sonnet-4-20250514", "claude-haiku-4-20250514"],
+    staticModels: ["claude-sonnet-5", "claude-haiku-4-5", "claude-sonnet-4-6"],
     needsKey: true,
     canFetch: false,
     keyPlaceholder: "sk-ant-...",
@@ -220,7 +220,6 @@ export function ProviderConfigCard({ capability, testEndpoint }: Props) {
       for (const p of PROVIDER_NAMES) {
         const v = apiKeys[p] ?? "";
         if (v && !v.startsWith("••••")) settings[`${capability}_api_key__${p}`] = v;
-        else if (!v) settings[`${capability}_api_key__${p}`] = "";
       }
       await api("/api/settings", { method: "PUT", body: { settings } });
       setSaved(true);

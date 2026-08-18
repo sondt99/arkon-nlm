@@ -200,11 +200,11 @@ _MODEL_CONTEXT_TOKENS: dict[str, int] = {
     "gpt-4.1-nano": 1_000_000,
     "gpt-4o": 128_000,
     "gpt-4o-mini": 128_000,
-    # Anthropic Claude 4.x — all 1M context
-    "claude-4.7-opus": 1_000_000,
-    "claude-4.6-sonnet": 1_000_000,
-    "claude-sonnet-4-20250514": 1_000_000,
-    "claude-haiku-4-20250514": 200_000,
+    # Anthropic Claude — current IDs (never date-suffixed)
+    "claude-opus-4-8": 1_000_000,
+    "claude-sonnet-5": 1_000_000,
+    "claude-haiku-4-5": 200_000,
+    "claude-sonnet-4-6": 1_000_000,
 }
 
 # Source text gets 60% of the context budget; the rest is for system prompt,

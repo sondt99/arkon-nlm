@@ -28,7 +28,8 @@ from sqlalchemy.orm import selectinload
 
 from app.database import get_db
 from app.database.models import NotebookLMArtifact, NotebookLMNotebook, Source
-from app.services.auth_service import get_current_user, require_admin
+from app.services.audit_service import log_audit
+from app.services.auth_service import get_current_user, require_admin, require_permission
 from app.worker import get_arq_pool
 
 router = APIRouter()
@@ -700,7 +701,7 @@ async def get_artifact(
 async def ingest_artifact(
     artifact_db_id: uuid.UUID,
     db: AsyncSession = Depends(get_db),
-    current_user=Depends(get_current_user),
+    current_user=Depends(require_permission("doc:create")),
 ):
     """Add a completed artifact to the Arkon wiki (trigger ingest pipeline)."""
     art = await db.get(NotebookLMArtifact, artifact_db_id)
@@ -718,6 +719,7 @@ async def ingest_artifact(
     if not art.artifact_id:
         raise HTTPException(status_code=400, detail="Artifact has no NLM ID — generation may still be in progress")
 
+    await log_audit(db, current_user, "create", "source", str(artifact_db_id), reason="notebooklm artifact ingest queued")
     pool = await get_arq_pool()
     await pool.enqueue_job("notebooklm_ingest_artifact_task", str(artifact_db_id))
 
@@ -1062,7 +1064,7 @@ async def nlm_ingest_artifact(
     nlm_id: str,
     artifact_id: str,
     db: AsyncSession = Depends(get_db),
-    current_user=Depends(get_current_user),
+    current_user=Depends(require_permission("doc:create")),
 ):
     """Fetch artifact from NLM and create an Arkon Source + enqueue ingestion pipeline.
 
@@ -1130,6 +1132,7 @@ async def nlm_ingest_artifact(
         )
         db.add(source)
         await db.flush()
+        await log_audit(db, current_user, "create", "source", str(source.id), reason="notebooklm artifact ingest")
         await db.commit()
         await db.refresh(source)
 
@@ -1157,6 +1160,7 @@ async def nlm_ingest_artifact(
         )
         db.add(source)
         await db.flush()
+        await log_audit(db, current_user, "create", "source", str(source.id), reason="notebooklm artifact ingest")
         await db.commit()
         await db.refresh(source)
 
@@ -1243,7 +1247,7 @@ async def nlm_ingest_chat(
     nlm_id: str,
     body: ChatIngestRequest,
     db: AsyncSession = Depends(get_db),
-    current_user=Depends(get_current_user),
+    current_user=Depends(require_permission("doc:create")),
 ):
     """Save a NotebookLM chat conversation as a wiki source."""
     from app.worker import get_arq_pool
@@ -1263,6 +1267,7 @@ async def nlm_ingest_chat(
     )
     db.add(source)
     await db.flush()
+    await log_audit(db, current_user, "create", "source", str(source.id), reason="notebooklm chat ingest")
     await db.commit()
     await db.refresh(source)
 

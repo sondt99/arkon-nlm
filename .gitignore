@@ -68,3 +68,8 @@ uv.lock
 
 # Reference
 .rtk/
+
+# Claude Code — local agent state, personal permission allowlists, worktrees.
+# Machine-specific; must never be committed. To share team-wide settings later,
+# add an exception below: !.claude/settings.json
+.claude/

@@ -16,8 +16,9 @@ Not "it should work" — what you actually ran and observed. Paste the commands.
 A PR whose only verification is "typechecks" has not been verified.
 -->
 
-- [ ] `uv run ruff check app/ tests/` (or `.venv/bin/python -m ruff check app/ tests/`)
-- [ ] `uv run pytest tests/ -q`
+- [ ] `uv run --extra dev ruff check app/ tests/`
+- [ ] `uv run --extra dev pytest tests/ -q`  <!-- --extra dev is required: pytest is an optional dep -->
+
 - [ ] `cd frontend && ./node_modules/.bin/tsc --noEmit`
 - [ ] `cd frontend && npm run lint`
 - [ ] Exercised the affected flow in a running stack, not just tests

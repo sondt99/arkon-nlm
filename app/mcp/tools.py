@@ -17,6 +17,8 @@ from typing import Optional
 from fastmcp import FastMCP
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.services.audit_service import log_audit
+
 # ---------------------------------------------------------------------------
 # Auth helpers
 # ---------------------------------------------------------------------------
@@ -50,6 +52,25 @@ async def _get_identity():
         await session.commit()
 
     return identity, None
+
+
+def _require_wiki_read(identity) -> Optional[str]:
+    """Return an error string if this identity may not read the wiki.
+
+    The four wiki tools authenticated the token and then performed no permission check at
+    all — every HTTP equivalent is gated by require_permission("wiki:read"). So an admin
+    could build a role with document access but deliberately no wiki:read, that user would
+    get 403 on every /api/wiki/* route, and then read the entire global wiki by
+    self-issuing an MCP token from their own profile.
+    """
+    if getattr(identity, "is_admin", False):
+        return None
+    if not getattr(identity, "wiki_readable", False):
+        return (
+            "Access denied: your token's role does not include wiki:read. "
+            "Contact an Arkon administrator."
+        )
+    return None
 
 
 async def _get_allowed_source_ids(identity, session: Optional[AsyncSession] = None) -> Optional[set[str]]:
@@ -153,6 +174,10 @@ def register_tools(mcp: FastMCP):
             return err
         assert identity is not None
 
+        wiki_err = _require_wiki_read(identity)
+        if wiki_err:
+            return wiki_err
+
         top_k = min(max(1, top_k), 50)
 
         from app.ai.registry import ProviderRegistry
@@ -209,6 +234,10 @@ def register_tools(mcp: FastMCP):
             return err
         assert identity is not None
 
+        wiki_err = _require_wiki_read(identity)
+        if wiki_err:
+            return wiki_err
+
         from app.database import async_session_factory
         from app.services import wiki_service
 
@@ -251,6 +280,10 @@ def register_tools(mcp: FastMCP):
         if err:
             return err
         assert identity is not None
+
+        wiki_err = _require_wiki_read(identity)
+        if wiki_err:
+            return wiki_err
 
         from app.database import async_session_factory
         from app.services import wiki_service
@@ -296,6 +329,10 @@ def register_tools(mcp: FastMCP):
         if err:
             return err
         assert identity is not None
+
+        wiki_err = _require_wiki_read(identity)
+        if wiki_err:
+            return wiki_err
 
         from app.database import async_session_factory
         from app.services import wiki_service
@@ -725,6 +762,13 @@ def register_tools(mcp: FastMCP):
                 note=note,
                 source="mcp_claude_desktop",
             )
+            # MCP writes were entirely unaudited: this module had zero log_audit
+            # calls while every REST equivalent has one. That made the path most
+            # likely to be driven unattended by an agent the only unattributable one.
+            await log_audit(
+                session, employee, "propose", "wiki_draft", str(slug),
+                reason="via MCP",
+            )
             await session.commit()
 
         return (
@@ -782,6 +826,13 @@ def register_tools(mcp: FastMCP):
                 return "Error: requires wiki:write:all permission to directly edit global wiki pages. Use propose_wiki_edit() instead."
 
             await wiki_service.direct_edit_page(session, page, employee.id, content_md.strip(), change_note)
+            # MCP writes were entirely unaudited: this module had zero log_audit
+            # calls while every REST equivalent has one. That made the path most
+            # likely to be driven unattended by an agent the only unattributable one.
+            await log_audit(
+                session, employee, "direct edit", "wiki_page", str(slug),
+                reason="via MCP",
+            )
             await session.commit()
             await session.refresh(page)
 
@@ -994,6 +1045,13 @@ def register_tools(mcp: FastMCP):
                 reviewer_note=reviewer_note,
                 edited_content_md=edited_content_md,
             )
+            # MCP writes were entirely unaudited: this module had zero log_audit
+            # calls while every REST equivalent has one. That made the path most
+            # likely to be driven unattended by an agent the only unattributable one.
+            await log_audit(
+                session, employee, "approve", "wiki_draft", str(draft_id),
+                reason="via MCP",
+            )
             await session.commit()
 
         return f"Draft `{draft_id}` approved. Page `{page.slug}` updated to v{page.version}."
@@ -1053,6 +1111,13 @@ def register_tools(mcp: FastMCP):
                 return "Error: insufficient permission to reject drafts for this page."
 
             await wiki_service.reject_draft(session, draft, employee.id, reviewer_note.strip())
+            # MCP writes were entirely unaudited: this module had zero log_audit
+            # calls while every REST equivalent has one. That made the path most
+            # likely to be driven unattended by an agent the only unattributable one.
+            await log_audit(
+                session, employee, "reject", "wiki_draft", str(draft_id),
+                reason="via MCP",
+            )
             await session.commit()
 
         return f"Draft `{draft_id}` rejected. Note to author: {reviewer_note}"

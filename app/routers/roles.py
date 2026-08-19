@@ -162,12 +162,40 @@ async def update_role(
     if body.permissions is not None:
         migrated = _migrate_permissions(body.permissions)
         _validate_permissions(migrated)
+
+        # System roles are auto-attached by get_current_user to every employee lacking a
+        # custom role, so editing the "Employee" role's permissions grants them to the
+        # whole company in one request. Locking only the *name* left that open — and
+        # delete_role already refuses is_system, so the protection was inconsistent
+        # within this same file.
+        if role.is_system:
+            raise HTTPException(
+                400,
+                "Cannot change permissions on a system role. Create a custom role instead.",
+            )
+
+        # No privilege escalation: only grant what the caller already holds. Otherwise
+        # org:roles:manage is a path to full admin — grant yourself
+        # org:employees:manage, then use it to set your own role to admin.
+        if _user.role != "admin":
+            from app.services.permission_engine import _get_user_permissions
+
+            held = _get_user_permissions(_user)
+            granting = set(migrated) - set(role.permissions or [])
+            escalating = sorted(granting - set(held))
+            if escalating:
+                raise HTTPException(
+                    403,
+                    "You cannot grant permissions you do not hold yourself: "
+                    + ", ".join(escalating),
+                )
+
         role.permissions = migrated
 
     if body.description is not None:
         role.description = body.description
 
-    # System roles: permissions can be changed but name is locked
+    # System roles: name is locked
     if body.name is not None and not role.is_system:
         role.name = body.name.strip()
 

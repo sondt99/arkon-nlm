@@ -320,8 +320,16 @@ async def rename_skill_contribution_file(
     if user.role != "admin" and str(contribution.contributor_id) != str(user.id):
         raise HTTPException(403, "Access denied")
     
-    if contribution.status == SkillContributionStatus.APPROVED.value:
-        raise HTTPException(400, f"Cannot edit contribution in status: {contribution.status}")
+    # Only a DRAFT is editable. Guarding on APPROVED alone left PENDING writable, so a
+    # contributor could swap file content in the window between a reviewer reading the
+    # diff and clicking approve — shipping unreviewed content attributed to the reviewer,
+    # with the recorded version_hash covering the swapped bytes.
+    if contribution.status != SkillContributionStatus.DRAFT.value:
+        raise HTTPException(
+            400,
+            f"Cannot edit contribution in status: {contribution.status}. "
+            "Only draft contributions are editable.",
+        )
 
     # Guards run on the NORMALIZED paths — checking the raw input would let
     # shapes like "root/SKILL.md/." slip past endswith after normalization.
@@ -361,8 +369,16 @@ async def delete_skill_contribution_file(
     if user.role != "admin" and str(contribution.contributor_id) != str(user.id):
         raise HTTPException(403, "Access denied")
     
-    if contribution.status == SkillContributionStatus.APPROVED.value:
-        raise HTTPException(400, f"Cannot edit contribution in status: {contribution.status}")
+    # Only a DRAFT is editable. Guarding on APPROVED alone left PENDING writable, so a
+    # contributor could swap file content in the window between a reviewer reading the
+    # diff and clicking approve — shipping unreviewed content attributed to the reviewer,
+    # with the recorded version_hash covering the swapped bytes.
+    if contribution.status != SkillContributionStatus.DRAFT.value:
+        raise HTTPException(
+            400,
+            f"Cannot edit contribution in status: {contribution.status}. "
+            "Only draft contributions are editable.",
+        )
 
     full_path = f"{contribution.storage_path}{_safe_path(path)}"
 
@@ -390,8 +406,16 @@ async def upload_skill_contribution_file(
     if current_user.role != "admin" and str(contribution.contributor_id) != str(current_user.id):
         raise HTTPException(403, "Access denied")
     
-    if contribution.status == SkillContributionStatus.APPROVED.value:
-        raise HTTPException(400, f"Cannot edit contribution in status: {contribution.status}")
+    # Only a DRAFT is editable. Guarding on APPROVED alone left PENDING writable, so a
+    # contributor could swap file content in the window between a reviewer reading the
+    # diff and clicking approve — shipping unreviewed content attributed to the reviewer,
+    # with the recorded version_hash covering the swapped bytes.
+    if contribution.status != SkillContributionStatus.DRAFT.value:
+        raise HTTPException(
+            400,
+            f"Cannot edit contribution in status: {contribution.status}. "
+            "Only draft contributions are editable.",
+        )
 
     file_path = _safe_path(path if path else file.filename)
 
@@ -455,8 +479,16 @@ async def put_skill_contribution_file(
     if current_user.role != "admin" and str(contribution.contributor_id) != str(current_user.id):
         raise HTTPException(403, "Access denied")
 
-    if contribution.status == SkillContributionStatus.APPROVED.value:
-        raise HTTPException(400, f"Cannot edit contribution in status: {contribution.status}")
+    # Only a DRAFT is editable. Guarding on APPROVED alone left PENDING writable, so a
+    # contributor could swap file content in the window between a reviewer reading the
+    # diff and clicking approve — shipping unreviewed content attributed to the reviewer,
+    # with the recorded version_hash covering the swapped bytes.
+    if contribution.status != SkillContributionStatus.DRAFT.value:
+        raise HTTPException(
+            400,
+            f"Cannot edit contribution in status: {contribution.status}. "
+            "Only draft contributions are editable.",
+        )
     
     file_path = _safe_path(request.path)
     content = request.content

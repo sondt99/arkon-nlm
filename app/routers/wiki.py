@@ -117,6 +117,52 @@ def _detail(
     )
 
 
+async def _can_read_page_scope(db: AsyncSession, user: Employee, page) -> bool:
+    """Same scope rule get_wiki_page enforces, reusable by the graph endpoints."""
+    if page.scope_type != "project" or not page.scope_id:
+        return True
+    if user.role == "admin":
+        return True
+    if "wiki:read:all" in _get_user_permissions(user):
+        return True
+    member = (await db.execute(
+        select(ProjectMember.role).where(
+            ProjectMember.project_id == page.scope_id,
+            ProjectMember.employee_id == user.id,
+        )
+    )).scalar_one_or_none()
+    return member is not None
+
+
+async def _restrict_graph_to_visible(db: AsyncSession, user: Employee, graph: dict) -> dict:
+    """Drop nodes and edges the caller may not see.
+
+    get_neighborhood's recursive CTE has no scope predicate, and wiki_links edges are
+    keyed on slugs that are only unique per (slug, scope_type, scope_id). Filtering the
+    walk's output keeps the CTE unchanged while making the response scope-correct.
+    """
+    scope_filter = _build_wiki_scope_filter(user)
+    if scope_filter is None:
+        return graph  # admin or wiki:read:all — nothing to hide
+
+    slugs = [n["slug"] for n in graph.get("nodes", []) if n.get("slug")]
+    if not slugs:
+        return graph
+
+    visible = set((await db.execute(
+        select(WikiPage.slug).where(WikiPage.slug.in_(slugs), scope_filter)
+    )).scalars().all())
+
+    return {
+        **graph,
+        "nodes": [n for n in graph.get("nodes", []) if n.get("slug") in visible],
+        "edges": [
+            e for e in graph.get("edges", [])
+            if e.get("from") in visible and e.get("to") in visible
+        ],
+    }
+
+
 def _build_wiki_scope_filter(user: Employee):
     """Build SQLAlchemy filter for wiki pages based on user permissions.
 
@@ -558,8 +604,20 @@ async def get_wiki_graph(
 ):
     """Return nodes/edges for visualization with scope filtering."""
     if slug:
-        # Neighborhood view — check access to center page first
-        return await wiki_service.get_neighborhood(db, slug, depth=depth)
+        # The comment that used to sit here claimed a check the code did not perform.
+        # get_neighborhood walks wiki_links through a recursive CTE with no scope
+        # predicate at all, so a non-member received slugs and titles of pages in
+        # workspaces they cannot open — the exact case get_wiki_page blocks with a 403.
+        centre = await wiki_service.get_page_by_slug_any_scope(db, slug)
+        if not centre:
+            raise HTTPException(404, f"Wiki page not found: {slug}")
+        if not await _can_read_page_scope(db, user, centre):
+            raise HTTPException(
+                403, "Access denied — you are not a member of this workspace"
+            )
+
+        neighborhood = await wiki_service.get_neighborhood(db, slug, depth=depth)
+        return await _restrict_graph_to_visible(db, user, neighborhood)
 
     # Full graph — paginated, with scope filtering
     from sqlalchemy import func as sqlfunc
@@ -601,11 +659,23 @@ async def get_wiki_graph(
 
     pages = (await db.execute(stmt)).all()
 
-    # Edges — return ALL on first batch (offset=0)
+    # Edges — restricted to the slugs actually returned in this response.
+    #
+    # This previously selected every row in wiki_links with no WHERE and no LIMIT, while
+    # the *nodes* beside it were correctly scope-filtered. That leaked the complete
+    # org-wide link graph (slug pairs from workspaces the caller cannot read) and made the
+    # query a full-table transfer on every first-page request.
     if offset == 0:
-        edges = (await db.execute(
-            select(WikiLink.from_slug, WikiLink.to_slug)
-        )).all()
+        visible_slugs = [r.slug for r in pages]
+        if visible_slugs:
+            edges = (await db.execute(
+                select(WikiLink.from_slug, WikiLink.to_slug).where(
+                    WikiLink.from_slug.in_(visible_slugs),
+                    WikiLink.to_slug.in_(visible_slugs),
+                )
+            )).all()
+        else:
+            edges = []
     else:
         edges = []
 

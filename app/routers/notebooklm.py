@@ -43,6 +43,29 @@ from app.worker import get_arq_pool
 
 router = APIRouter()
 
+def _content_disposition(title: str, ext: str) -> str:
+    """Build a Content-Disposition header that survives non-Latin-1 titles.
+
+    Starlette encodes response headers as latin-1, so interpolating a title raw raised
+    UnicodeEncodeError — *after* the artifact bytes had already been fetched from Google.
+    Any Vietnamese title triggered it, and Vietnamese is this product's default language,
+    so the download path 500'd on ordinary content.
+
+    RFC 5987: send an ASCII-safe `filename` for old clients plus a percent-encoded
+    `filename*` carrying the real name. Quotes and control characters are stripped rather
+    than escaped, since a `"` in the title could otherwise close the quoted string.
+    """
+    from urllib.parse import quote
+
+    cleaned = "".join(
+        c for c in (title or "download") if c.isprintable() and c not in '"\\/\r\n'
+    ).strip() or "download"
+
+    ascii_fallback = cleaned.encode("ascii", "replace").decode("ascii").replace("?", "_")
+    quoted = quote(f"{cleaned}.{ext}", safe="")
+    return f'attachment; filename="{ascii_fallback}.{ext}"; filename*=UTF-8\'\'{quoted}'
+
+
 VALID_ARTIFACT_TYPES = {
     "audio", "video", "report", "quiz", "flashcards",
     "slide_deck", "infographic", "data_table",
@@ -775,13 +798,14 @@ async def download_artifact(
 
     ext = ARTIFACT_EXT.get(art.artifact_type, "bin")
     mime = ARTIFACT_MIME.get(art.artifact_type, "application/octet-stream")
-    safe_title = (art.title or art.artifact_type).replace("/", "-")
-    filename = f"{safe_title}.{ext}"
-
     return Response(
         content=data,
         media_type=mime,
-        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+        headers={
+            "Content-Disposition": _content_disposition(
+                art.title or art.artifact_type, ext
+            )
+        },
     )
 
 
@@ -1217,11 +1241,14 @@ async def nlm_download_artifact(
 
     ext = ARTIFACT_EXT.get(kind, "bin")
     mime = ARTIFACT_MIME.get(kind, "application/octet-stream")
-    safe_title = (artifact.get("title") or kind).replace("/", "-")
     return Response(
         content=data,
         media_type=mime,
-        headers={"Content-Disposition": f'attachment; filename="{safe_title}.{ext}"'},
+        headers={
+            "Content-Disposition": _content_disposition(
+                artifact.get("title") or kind, ext
+            )
+        },
     )
 
 

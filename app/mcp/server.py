@@ -36,6 +36,12 @@ def create_mcp_server() -> FastMCP:
     """
     mcp = FastMCP(
         "Arkon",
+        # Without this, fastmcp delivers raw exception messages to the caller. An
+        # unguarded provider call in search_wiki would return the upstream request URL and
+        # error body straight into an employee's Claude Desktop session, and a malformed
+        # argument surfaced the asyncpg error with statement context. The REST equivalent
+        # in export_api already returns a fixed generic message for the same failure.
+        mask_error_details=True,
         instructions=(
             "You are connected to Arkon — an enterprise LLM Wiki. "
             "Knowledge is organized as interlinked markdown wiki pages compiled from "

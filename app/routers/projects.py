@@ -538,8 +538,22 @@ async def remove_project_source(
     # 2. Check owned source (scope_type=project, scope_id=project_id)
     source = await db.get(Source, sid)
     if source and source.scope_type == "project" and source.scope_id == pid:
-        await db.delete(source)
-        return {"removed": True}
+        # This used to be a bare db.delete(source), which skipped the MinIO purge, the
+        # wiki detachment, and the embedding rebuild that DELETE /api/sources/{id}
+        # performs — orphaning blobs forever and leaving deleted material surfacing in
+        # RAG answers and semantic search. Both paths now share one implementation.
+        #
+        # doc:delete is required in addition to workspace editor: removing a document is
+        # a destructive knowledge-base operation, not merely a workspace membership one.
+        from app.services.permission_engine import can_access_document
+
+        if not await can_access_document(db, _user, source, "delete"):
+            raise HTTPException(403, "Not allowed to delete this source")
+
+        from app.services.source_deletion import delete_source_completely
+
+        impact = await delete_source_completely(db, source, actor=_user)
+        return {"removed": True, "knowledge_impact": impact}
 
     raise HTTPException(404, "Source not in project")
 
@@ -754,13 +768,20 @@ async def get_workspace_wiki_graph(
 
     slug_set = {r.slug for r in pages}
 
-    edges = (await db.execute(select(WikiLink.from_slug, WikiLink.to_slug))).all()
+    # Filter in SQL rather than fetching every row in wiki_links and discarding most of
+    # them in Python. The old form made the cost O(all links org-wide) for a 5-page
+    # workspace graph, and transferred slug pairs from workspaces the caller cannot read.
+    if slug_set:
+        edges = (await db.execute(
+            select(WikiLink.from_slug, WikiLink.to_slug).where(
+                WikiLink.from_slug.in_(slug_set),
+                WikiLink.to_slug.in_(slug_set),
+            )
+        )).all()
+    else:
+        edges = []
 
     return {
         "nodes": [{"slug": r.slug, "title": r.title, "page_type": r.page_type} for r in pages],
-        "edges": [
-            {"from": r.from_slug, "to": r.to_slug}
-            for r in edges
-            if r.from_slug in slug_set and r.to_slug in slug_set
-        ],
+        "edges": [{"from": r.from_slug, "to": r.to_slug} for r in edges],
     }

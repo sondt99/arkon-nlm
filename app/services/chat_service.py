@@ -108,6 +108,13 @@ async def rag_search(
             .join(WikiLink, WikiLink.to_slug == WikiPage.slug)
             .where(WikiLink.from_slug.in_(top_slugs))
             .where(WikiPage.slug.notin_(list(existing_slugs)))
+            # Constrain the expansion to the SAME scope as the semantic query above.
+            # wiki_links edges are keyed on slugs that are only unique per
+            # (slug, scope_type, scope_id), so without this a `[[budget]]` link in this
+            # workspace also matches a `budget` page in another one — whose content_md is
+            # then spliced into the system prompt. Because link targets are
+            # contributor-authored, the omission was an injection vector, not just a leak.
+            .where(wiki_service._scope_filter(scope_type, scope_id))
             .limit(settings.chat_linked_pages_limit)
         )
         visibility = wiki_service._rbac_visibility_clause(allowed_kt_slugs, allowed_source_ids)

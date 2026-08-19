@@ -16,6 +16,7 @@ os.environ.setdefault("ARKON_ALLOW_DEFAULT_SECRET", "1")
 import uuid as _uuid  # noqa: E402
 
 import pytest  # noqa: E402
+import pytest_asyncio  # noqa: E402
 from sqlalchemy import UniqueConstraint  # noqa: E402
 from sqlalchemy.exc import IntegrityError  # noqa: E402
 from sqlalchemy.sql import Delete, Select, Update, operators  # noqa: E402
@@ -410,3 +411,132 @@ def fake_db(monkeypatch):
     db = FakeDB()
     monkeypatch.setattr(app.database, "async_session_factory", db.factory)
     return db
+
+# ---------------------------------------------------------------------------
+# An opt-in, real-Postgres test tier.
+#
+# WHY THIS EXISTS
+#
+# The main suite runs ~920 tests in about six seconds because it has no database: the
+# `FakeDB` in conftest.py understands `col == v` and `col.in_([...])`, and its own docstring
+# admits `notin_` "filters nothing". That trade is worth keeping — most tests do not need
+# Postgres, and a six-second suite gets run.
+#
+# But it means a whole class of defect is *structurally* invisible, no matter how many tests
+# are added. An independent review built a real database from these migrations and immediately
+# found four bugs the green suite could not see:
+#
+#   - MissingGreenlet on six MCP tools — lazy relationships resolve eagerly against a fake
+#     session, so the failure cannot occur (#121)
+#   - a lost update on the wiki `_log` page — no real concurrency, no transaction isolation
+#     (#123)
+#   - `LIMIT -1` aborting a transaction — no real SQL execution (#88)
+#   - row-visibility filters — `notin_` silently matches everything
+#
+# WHAT BELONGS HERE
+#
+# Only tests the fake cannot express: greenlet/lazy-load behaviour, concurrent
+# read-modify-write, CHECK-constraint rejection, `notin_`/scope filters, real LIMIT/OFFSET
+# bounds. Anything that can be tested against the fake should stay in the fast suite.
+#
+# HOW IT SKIPS
+#
+# `pytest.mark.postgres` plus a session fixture that skips cleanly when no database is
+# reachable, so `pytest -q` still runs anywhere with no setup. Point it at a database with:
+#
+#     ARKON_TEST_DATABASE_URL=postgresql+asyncpg://user:pw@localhost:5432/arkon_test
+#
+# or let it use the compose Postgres. The fixture runs `alembic upgrade head` itself, so the
+# schema under test is the one the migrations actually produce — not a `create_all()`
+# approximation, which would not have caught #85's constraints or #41's backfills.
+# ---------------------------------------------------------------------------
+
+TEST_DB_ENV = "ARKON_TEST_DATABASE_URL"
+
+# Deliberately NOT the app's own DATABASE_URL. Pointing this tier at a real deployment
+# would run `alembic upgrade head` and DELETE rows in the fixtures below.
+_DEFAULT = "postgresql+asyncpg://postgres:postgres@localhost:5432/arkon_test"
+
+
+def _url() -> str:
+    return os.environ.get(TEST_DB_ENV, _DEFAULT)
+
+
+async def _reachable(url: str) -> bool:
+    try:
+        from sqlalchemy import text
+        from sqlalchemy.ext.asyncio import create_async_engine
+    except Exception:
+        return False
+    engine = create_async_engine(url, pool_pre_ping=True)
+    try:
+        async with engine.connect() as conn:
+            await conn.execute(text("SELECT 1"))
+        return True
+    except Exception:
+        return False
+    finally:
+        await engine.dispose()
+
+
+@pytest.fixture(scope="session")
+def postgres_url() -> str:
+    """The URL for this tier, or skip the whole tier if nothing is listening.
+
+    Skipping rather than failing is the point: the fast suite must keep running on a laptop
+    with no Docker, or nobody will run it.
+    """
+    import asyncio
+
+    url = _url()
+    if not asyncio.run(_reachable(url)):
+        pytest.skip(
+            f"no Postgres at {url.rsplit('@', 1)[-1]} — set {TEST_DB_ENV} or start the "
+            "compose database to run the real-database tier"
+        )
+    return url
+
+
+@pytest.fixture(scope="session")
+def migrated_postgres(postgres_url: str) -> str:
+    """Apply the real migrations once per session.
+
+    `alembic upgrade head`, not `Base.metadata.create_all()`. The difference matters: the
+    CHECK constraints from migration 034 and the backfills from 014/018 exist only in the
+    migrations, so a `create_all()` schema would silently skip exactly the things worth
+    testing.
+    """
+    import subprocess
+    import sys
+
+    env = {**os.environ, "DATABASE_URL": postgres_url, "ARKON_ALLOW_DEFAULT_SECRET": "1"}
+    proc = subprocess.run(
+        [sys.executable, "-m", "alembic", "upgrade", "head"],
+        capture_output=True,
+        text=True,
+        env=env,
+    )
+    if proc.returncode != 0:
+        pytest.fail(
+            "alembic upgrade head failed against the test database:\n"
+            f"{proc.stdout[-2000:]}\n{proc.stderr[-2000:]}"
+        )
+    return postgres_url
+
+
+@pytest_asyncio.fixture
+async def pg_sessionmaker(migrated_postgres: str):
+    """A real async sessionmaker, configured like the app's.
+
+    `expire_on_commit=False` matches `app/database`, because that setting changes what a
+    post-commit attribute read returns — a fixture that differed here would test a database
+    the app does not use.
+    """
+    from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
+
+    engine = create_async_engine(migrated_postgres)
+    maker = async_sessionmaker(engine, expire_on_commit=False)
+    try:
+        yield maker
+    finally:
+        await engine.dispose()

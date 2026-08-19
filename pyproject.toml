@@ -73,6 +73,9 @@ include = ["app*"]
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 asyncio_mode = "strict"
+markers = [
+    "postgres: needs a real Postgres; skipped unless ARKON_TEST_DATABASE_URL or the compose database is reachable",
+]
 
 [tool.ruff]
 line-length = 88

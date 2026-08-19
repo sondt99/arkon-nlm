@@ -388,3 +388,17 @@ jobs:
             exit 1
           fi
           echo "Guard refused as expected (exit $STATUS)."
+
+      # The real-database tier (#125). Reuses THIS job's Postgres service — a fifth job would
+      # need its own container for no extra signal.
+      #
+      # These tests cannot run in the backend job: `FakeDB` there understands `col == v` and
+      # `col.in_([...])` and its own docstring admits `notin_` "filters nothing", so a CHECK
+      # violation, a lost update, a MissingGreenlet and a real `LIMIT -1` are all invisible
+      # to it. Four shipped bugs proved that. Both mutations were verified to fail here:
+      # removing the append_log advisory lock loses an entry, and un-wiring the MCP page
+      # guard is caught.
+      - name: Real-database tests
+        env:
+          ARKON_TEST_DATABASE_URL: ${{ env.DATABASE_URL }}
+        run: pytest tests/test_real_postgres.py -q

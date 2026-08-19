@@ -10,6 +10,11 @@ Run with a database reachable:
       uv run --extra dev python -m pytest tests/test_real_postgres.py -q
 
 Without one, every test here skips and the fast suite is unaffected.
+
+CI NOTE: this file is listed in the `changes` gate's `migrations` filter
+(.github/workflows/ci.yml), because the tier runs as a step on the migrations job. If you
+move the tier to its own job, move that filter entry with it — otherwise a PR editing only
+these tests skips the only job that can run them, which is what happened on #137.
 """
 
 from __future__ import annotations

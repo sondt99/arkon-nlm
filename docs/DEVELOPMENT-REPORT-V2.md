@@ -25,7 +25,7 @@ It is **not** a hosted SaaS and **not** a drop-in public demo. You bring Docker 
 | Area | State |
 |---|---|
 | App / frontend version | `0.1.0` |
-| Schema | Alembic through `026` |
+| Schema | Alembic through `033` |
 | Ingress | nginx on `:3119`; API/DB/Redis/MinIO unpublished |
 | Tests | `tests/` (chat, gateway, MRP, wiki, paths, export, embeddings) + frontend Playwright |
 | Secrets | Default `SECRET_KEY` / admin / MinIO factory pair refused at boot |

@@ -122,7 +122,7 @@ Embedding vectors go to one of `wiki_page_embeddings_{768,1024,1536,3072}`. Swit
 
 ## 3. Data model (Mô hình dữ liệu)
 
-Latest revision: `026_legacy_ninerouter_spec_ids`. Source of truth: `app/database/models.py`.
+Latest revision: `033_nlm_passthrough_ownership` (`uv run --extra dev alembic heads` → `033`). Source of truth: `app/database/models.py`.
 
 ### 3.1 Identity
 
@@ -148,6 +148,23 @@ Source `status`: `pending` · `processing` · `plan_ready` · `ready` · `error`
 Source `pipeline_phase` (a **separate** column tracking MRP progress, not a status): `map` · `reduce` · `plan_review` · `refine` · `verify` · `commit`.
 
 > The awaiting-review **status** is `plan_ready` (`app/worker.py`). `plan_review` is a `pipeline_phase` value (`app/ai/mrp/reducer.py`). Filtering `status == "plan_review"` matches zero rows silently — no error, just an empty result that reads as "nothing pending review".
+
+Since migration `034` these vocabularies are enforced by `CHECK` constraints rather than being
+a convention. Six columns carry one — `sources.status`, `sources.scope_type`,
+`source_compilation_plans.status`, `wiki_page_drafts.status`, `embedding_jobs.status`,
+`notebooklm_artifacts.status` — and the allowed values are defined once in
+`app/database/models.py` (`SOURCE_STATUSES` and friends).
+
+This matters because a *write* of an unknown value used to be silent: the row was created and
+then skipped by every listing filter, so the source vanished from the UI with nothing logged.
+It is now an `IntegrityError` at the boundary. Adding a value therefore means editing the tuple
+in `models.py` **and** shipping a migration that replaces the constraint; a CI test fails if
+code writes a status no vocabulary permits.
+
+Two columns are deliberately left unconstrained and are worth knowing about:
+`Skill.scope_type` legitimately holds `department` (the others do not), and
+`wiki_pages.scope_type` / `chat_conversations.scope_type` are written only through normalising
+helpers.
 
 ### 3.3 Wiki
 
@@ -187,12 +204,39 @@ Special slugs: `_index`, `_log` (regenerated on COMMIT).
 |---|---|
 | `chat_conversations` / `chat_messages` | Portal chatbot |
 | `notebooklm_notebooks` / `notebooklm_artifacts` | Portal NLM state |
+| `notebooklm_passthrough_owners` | Who created which live NotebookLM notebook (`033`) |
 | `app_config` | Encrypted provider settings |
 | `embedding_jobs` | Re-embed progress |
-| `audit_logs` | Who / action / resource / metadata |
+| `audit_log` | Who / action / resource / metadata |
 | `notes` | Small personal notes |
 
-Contacts were dropped in migration `009`.
+> The audit table is **`audit_log`**, singular — `models.py` (`AuditLog.__tablename__`) and
+> `alembic/versions/007_scope_rbac.py`. A query written against `audit_logs` fails with
+> `relation "audit_logs" does not exist`, and this is the table compliance work reads.
+
+`notebooklm_passthrough_owners` records nothing but a claim of ownership over an opaque
+Google notebook id, so it is deliberately separate from `notebooklm_notebooks`:
+
+| Column | Type | Notes |
+|---|---|---|
+| `id` | uuid | PK |
+| `nlm_id` | varchar(200) | NOT NULL, unique (`uq_notebooklm_passthrough_owners_nlm_id`) |
+| `owner_employee_id` | uuid | NOT NULL, FK `employees.id` `ON DELETE CASCADE`, indexed |
+| `created_at` | timestamptz | `now()` |
+
+One owner per notebook, enforced by the unique constraint — a second row would silently
+grant a second employee full access. `ON DELETE CASCADE` (not `SET NULL`) is deliberate: a
+row whose owner is gone answers no question this table exists to answer, and dropping it
+returns the notebook to the admin-only bucket. Migration `033` also adds
+`ix_notebooklm_notebooks_notebook_id`, because the ownership guard queries that column on
+every passthrough request. See §7.4.
+
+### 3.7 Legacy tables with no model
+
+`knowledge_scopes` (`002_rbac.py`) and `scope_memberships` (`007_scope_rbac.py`) still exist
+in every migrated database. Nothing in `app/` maps or reads them — the scope realm they
+belonged to was replaced by `projects` / `project_members`. They are inert, not cleaned up.
+Contacts, by contrast, really were dropped, in migration `009`.
 
 ---
 
@@ -228,7 +272,7 @@ Every mutating route and every scoped GET goes through `permission_engine` (glob
 | `/api/settings`, `/api/dashboard` | `admin_settings.py` |
 | `/api/settings/embeddings` | `admin_embeddings.py` |
 | `/api/skills` | `skills.py` |
-| `/api/skill-contributions` | `skill_contributions.py` |
+| `/api/skill-contributions`, `/api/admin/skill-contributions` | `skill_contributions.py` |
 | `/api/chat` | `chat.py` |
 | `/api/notebooklm` | `notebooklm.py` |
 | `/api/export` | `export_api.py` |
@@ -241,6 +285,66 @@ Every mutating route and every scoped GET goes through `permission_engine` (glob
 
 Most routes: `{ "detail": "…" }` (FastAPI default).  
 Gateway: `{ "type": "error", "error": { "type", "message" } }`.
+
+### 4.5 Request size limits
+
+Three layers, outermost first. All of them answer **413** in the `{ "detail": … }` shape.
+
+| Layer | Where | Cap | Setting |
+|---|---|---|---|
+| Edge | `nginx.conf` `location /api/` | 260 MB | `client_max_body_size` |
+| Every request | `BodySizeLimitMiddleware` (`app/services/upload_guard.py`) | 256 MB | `MAX_REQUEST_BODY_MB` |
+| Per route | the upload guards below | 100 / 200 MB | `MAX_UPLOAD_MB`, `MAX_ZIP_UPLOAD_MB` |
+
+`BodySizeLimitMiddleware` is registered in `main.py` **before** CORS, so CORS ends up
+outermost and the 413 carries `Access-Control-Allow-Origin` instead of surfacing in the
+browser as an opaque network error. It applies to **every** route, including `/mcp`, the
+health endpoints, and routes that take no upload at all. It checks the `Content-Length`
+header *and* keeps a running total over the delivered body, so a chunked or lying client is
+still cut off, and it closes the connection rather than draining the remainder. Route-level
+guards cannot replace it: they only run once the ASGI server has already received the whole
+body. `MAX_REQUEST_BODY_MB` must stay above the largest per-route cap, or `Settings()`
+refuses to construct (`app/config.py`).
+
+Per-route caps, all 413:
+
+| Route | Cap |
+|---|---|
+| `POST /api/sources/upload` | `MAX_UPLOAD_MB` (100) |
+| `POST /api/projects/{id}/sources/upload` | `MAX_UPLOAD_MB` (100) |
+| `POST /api/skill-contributions/{id}/upload` | `MAX_UPLOAD_MB` (100) |
+| `POST /api/notebooklm/nlm/notebooks/{nlm_id}/sources/upload` | `MAX_UPLOAD_MB` (100) |
+| `POST /api/sources/upload-zip` | `MAX_ZIP_UPLOAD_MB` (200) |
+| `POST /api/skills/upload`, `/{slug}/reupload`, `/inspect-zip` | `MAX_ZIP_UPLOAD_MB` (200), per file |
+| `PUT /api/skill-contributions/{id}/files` | `MAX_CONTRIBUTION_TEXT_KB` (1024 KB of UTF-8) |
+
+The text cap exists because `PutFileRequest.content` arrives as a JSON string, so no
+multipart guard applies to it.
+
+**Cumulative per-contribution budget.** Per-file caps bound one request, not the workspace,
+so `POST /api/skill-contributions/{id}/upload` and `PUT …/files` also check the whole
+contribution prefix in MinIO before writing: `MAX_CONTRIBUTION_TOTAL_MB` (25) → **413**, and
+`MAX_CONTRIBUTION_FILES` (200) → **400**. Overwriting an existing path credits back the old
+object's bytes and does not count against the file total.
+
+**ZIP extraction** caps the *decompressed* archive, since the upload cap bounds compressed
+bytes only. On `POST /api/sources/upload-zip` every failure is **422** (`ZipExtractionError`
+→ `HTTPException(422)`): a corrupt or non-ZIP payload (`"Invalid or corrupted zip file."`), a
+corrupt member, `MAX_ZIP_ENTRIES` (50), or `MAX_ZIP_TOTAL_MB` (500). `MAX_ZIP_MEMBER_MB` (50)
+skips the entry rather than failing the request, and is enforced on bytes actually inflated
+rather than the archive's self-declared sizes; if nothing survives, the response is 422
+`"No supported files found in the archive."` A filename not ending in `.zip` is 400.
+
+> The skill ZIP paths do **not** go through `zip_service`. `SkillService` uses raw `zipfile`
+> with its own hardcoded caps (10 MB uncompressed, 100 files, both 400), and a corrupt
+> archive on the non-admin contribution branch of `POST /api/skills/upload` still reaches the
+> generic handler as **500 `"ZIP extraction failed."`** The 4xx-for-a-corrupt-archive
+> guarantee holds for `/api/sources/upload-zip` only.
+
+Other request-shape caps worth knowing: `POST /api/wiki/images/resolve` accepts 100 ids
+(400 over that), and a proposed draft's `content_md` is capped at 50,000 **characters** by a
+Pydantic validator, so it fails as 422 with the validation envelope rather than a bare
+`detail` string.
 
 ---
 
@@ -276,7 +380,7 @@ Admin picks a model with a new dimension. API enqueues `reembed_all_pages_task`.
 
 ### UC-8 NotebookLM enrich
 
-Admin connects a master token. User sends a source, generates a report, **Add to Wiki**. Worker runs `notebooklm_ingest_artifact_task`.
+Admin connects a master token. User sends a source, generates a report, **Add to Wiki**. Worker runs `notebooklm_ingest_artifact_task`. The Google session is shared, but a user sees and acts on only the notebooks they created — see §7.4. Notebooks that predate that boundary are visible to admins only.
 
 ### UC-9 Skill contribution
 
@@ -306,6 +410,68 @@ COMMIT is atomic. Resume rules: [WIKI.md](WIKI.md).
 
 Narrative job timeout default: 3600 s. `job_completion_wait` 300 s; Compose `stop_grace_period` is 330 s so in-flight jobs can finish.
 
+### 6.1 Prompt assembly and the untrusted-content envelope
+
+Uploaded documents, wiki pages, category hints, and chat transcripts are all attacker-reachable
+text. Every prompt that carries them states where that text begins and ends, using a delimiter
+the content cannot forge. Primitives live in `app/ai/providers/base.py`:
+
+| Name | What it is |
+|---|---|
+| `UNTRUSTED_DOCUMENT_TAG` | `untrusted_document` — uploaded text, chunks, excerpts, evidence, security artifacts |
+| `UNTRUSTED_KB_CONTEXT_TAG` | `untrusted_kb_context` — existing wiki pages read back into a prompt |
+| `UNTRUSTED_HINTS_TAG` | `untrusted_category_hints` — `knowledge_types.extraction_hints` |
+| `UNTRUSTED_CONVERSATION_TAG` | `untrusted_conversation` — chat transcript in conversation → wiki synthesis |
+| `UNTRUSTED_TAGS` | all four, so one strip call clears every marker the codebase uses |
+| `new_envelope_nonce()` | `secrets.token_hex(4)` — a fresh 8-hex suffix per call |
+| `strip_envelope_markers()` | removes opener/closer forms from the content before it is embedded |
+| `flatten_untrusted_metadata()` | for labels that must render *outside* an envelope: strip, collapse whitespace, cap at 200 chars |
+
+A rendered block is `<{tag}_{nonce}> … </{tag}_{nonce}>`, always preceded by a trusted boundary
+statement telling the model the span is data. The nonce is what makes it hold — with a fixed tag
+name a document could simply write the closing form and have everything after it read as
+operator instructions. Document-derived labels (titles, slugs, section paths, category names)
+are rendered outside the envelopes, so they go through `flatten_untrusted_metadata` instead.
+
+Envelopes are in use in MAP (`mapper.py`), REDUCE and planning (`reducer.py`), REFINE
+(`writer.py`, including agent-loop tool results, which share the loop's nonce), the single-shot
+compiler (`wiki_compiler.py`), the chatbot (`chat_service.py`), and conversation → wiki
+synthesis (`app/routers/chat.py`). Extraction hints are wrapped at all four points that inject
+them, and are framed as advisory: they may steer attention, they cannot change the output
+format or lift a restriction.
+
+**Not fenced, deliberately recorded here rather than implied otherwise:**
+
+- `merger.py` and `verifier.py` interpolate page bodies raw.
+- Chat conversation history is neither wrapped nor stripped. It sits after the KB envelope has
+  closed, so it cannot terminate that block, but it can contain a forged opener.
+- The Claude Code gateway is a passthrough proxy — the messages are the client's own.
+- Model-emitted `[[wikilinks]]` are not checked against the plan's slug allow-list. The
+  allow-list exists only as prompt text; `wiki_service.refresh_links` inserts whatever matched
+  the wikilink regex, and those edges drive the chatbot's 1-hop retrieval expansion.
+
+Model output is de-fenced and JSON-parsed tolerantly rather than schema-enforced. The
+structural defenses that do exist are separate from the envelope: slug format validation,
+deterministic reconciliation overriding the planner, writer-output rejection of placeholder and
+agent-chatter text, truncation detection on merges, and re-appending security artifacts the
+model dropped.
+
+### 6.2 Chatbot prompt
+
+The chatbot builds one system prompt and one user turn (`app/services/chat_service.py`).
+
+| Position | Content |
+|---|---|
+| System | Persona and instructions **only** — including how to treat the fenced block |
+| User turn, 1 | Retrieved KB pages, inside `untrusted_kb_context` |
+| User turn, 2 | Conversation history (last `CHAT_HISTORY_MESSAGES` messages) |
+| User turn, 3 | The actual question, last, outside every fence |
+
+Retrieved pages used to be appended to the **system** prompt, which made a poisoned page read
+as operator instruction. They now travel in the user turn, page bodies *and titles* are
+stripped, and the question is placed after the fence closes. The optional second
+"expand a short answer" call re-uses the same already-fenced context block.
+
 ---
 
 ## 7. RBAC (Hệ thống quyền hạn)
@@ -316,7 +482,8 @@ Two realms. Implementation: `app/services/permission_engine.py`, `permissions.py
 
 Format `resource:action:own_dept|all`. Resources: `doc`, `wiki`, `skill`, plus `org:*` and `workspace:view:all`.
 
-Default employee set (no custom role):
+Default employee set (no custom role) — `EMPLOYEE_DEFAULT_PERMISSIONS` in
+`app/services/permissions.py`:
 
 ```text
 doc:read:own_dept
@@ -324,13 +491,40 @@ doc:create:own_dept
 wiki:read:own_dept
 wiki:write:own_dept
 skill:read:own_dept
+org:departments:read
 ```
+
+`org:departments:read` is part of the default set, so an employee with no custom role can
+enumerate the org chart via `GET /api/departments`. Intended, and listed here because omitting
+it made the default reach look narrower than it is.
 
 `wiki:write:own_dept` = propose drafts. `wiki:write:all` = direct edit + review. Page rollback and page delete are system-admin operations (`wiki.py`).
 
 `can_access_skill` requires `skill:{action}:own_dept` (or `:all`) before the department comparison. A Viewer cannot PATCH or DELETE a global skill.
 
 `org:employees:manage` cannot write `Employee.role`, reset passwords, or toggle admin accounts. Those writes require `Employee.role == admin`. The last active admin cannot be demoted or deactivated.
+
+**No permission may be granted by someone who does not hold it.** `ensure_no_escalation`
+(`app/services/employee_policy.py`) compares the permissions being granted against the actor's
+own effective set and answers **403 “You cannot grant permissions you do not hold yourself: …”**.
+It guards three writes, all of which also require `org:roles:manage` / `org:employees:manage`
+first:
+
+| Write | Rule |
+|---|---|
+| `POST /api/roles` | Every permission on the new role must be one the caller holds |
+| `PUT /api/roles/{id}` | Same, minus the permissions the role already carried |
+| `POST /api/employees`, `PUT /api/employees/{id}` — `custom_role_id` | The assigned role's permission set must be a subset of the caller's |
+
+System `admin` short-circuits all three. Clearing `custom_role_id` is always allowed — removing
+authority is not escalation. Assigning a `custom_role_id` that does not exist is 404, not a
+silent write. Separately, an actor cannot change **their own** `custom_role_id` to a different
+role (403 “You cannot change your own custom role”), mirroring the existing rule for their own
+system role; that one has no admin exemption.
+
+Both were live escalations before: a holder of `org:roles:manage` could mint a role carrying
+`:all` permissions and attach it to themselves, and `Employee.custom_role_id` was written
+straight from the request body with no authorization at all.
 
 Skill-contribution approval uses the **target skill's** current departments. A contributor cannot claim `scope_type=global` to skip department review. Approval does not clear `SkillDepartment` rows unless a system admin passes an explicit `final_scope_type`.
 
@@ -351,6 +545,44 @@ Last-admin protection on demote/remove.
 ### 7.3 MCP
 
 Token → employee → `ResolvedIdentity` (allowed KTs, allowed source ids, admin flag, memberships). Tools call `apply_scope_filter`.
+
+The four wiki tools additionally check `identity.wiki_readable` — set in `_resolve_scope` iff the
+employee holds `wiki:read:own_dept` or `wiki:read:all` — and return
+`"Access denied: your token's role does not include wiki:read."` when it is false. MCP tools
+return text, so a denial is an error string, not an HTTP status. The source-reading tools are not
+`wiki_readable`-gated; they scope per source through `apply_scope_filter`.
+
+### 7.4 NotebookLM passthrough
+
+The `/api/notebooklm/nlm/*` routes proxy a **single shared Google session**, so the identity of
+the notebook's creator is Arkon's only ownership signal. Every route that takes an `{nlm_id}`
+resolves it through `_resolve_nlm_notebook` (`app/routers/notebooklm.py`), which accepts the id
+only if one of these holds:
+
+1. the caller is a system `admin`; or
+2. `notebooklm_passthrough_owners` has a row for `(nlm_id, caller)`; or
+3. `notebooklm_notebooks` has a row for that id created by the caller.
+
+Anything else is **404 “Notebook not found”** — not 403, because 403 would confirm that the id
+names a real notebook in the shared account and let a caller enumerate other employees'
+notebooks one id at a time.
+
+**Unowned notebooks are admin-only.** Everything predating this boundary, plus anything created
+directly in the Google account, matches none of the three cases; there is no backfill that could
+invent a creator. Treating unowned as public would restore the company-wide read this exists to
+stop, and hiding them from lists while still honouring a guessed id in `DELETE` would leave them
+invisible-but-deletable. Admin-only keeps them reachable for cleanup.
+
+An ownership row is written at exactly one place: a successful `POST /api/notebooklm/nlm/notebooks`.
+Opening, listing, or chatting with a notebook never creates one. The Arkon-side
+`POST /api/notebooklm/notebooks` does not write one either — it records
+`created_by_employee_id`, which is what case 3 reads. Rows are deleted on a confirmed delete, and
+cascade when the owning employee is deleted.
+
+The two `/nlm/*` routes with no `{nlm_id}` are handled separately: the list endpoint filters the
+upstream list to the caller's owned ids (admins see all), and create has no caller-supplied id to
+authorize. Ingest routes additionally require `doc:create`, and attaching an existing Arkon source
+to a notebook re-checks `can_access_document` on that source.
 
 ---
 
@@ -378,7 +610,9 @@ Authorization: Bearer ark_<token>
 
 Wiki-first: search pages, then sources for citations. Repo skills `skills/arkon-query|edit|review` encode that contract for Claude Code.
 
-`ResolvedIdentity.allowed_knowledge_types` is unused in v0.1.0. Scope is `doc:read` (`all` / `own_dept` + global sources) plus workspace membership.
+Scope is `doc:read` (`all` / `own_dept` + global sources) plus workspace membership, and — for the
+wiki tools — `wiki:read` plus the knowledge-type restriction on the resolved identity. See §7.1
+and §7.3.
 
 ---
 
@@ -386,8 +620,44 @@ Wiki-first: search pages, then sources for citations. Repo skills `skills/arkon-
 
 Infrastructure settings are env-only (`app/config.py`). AI keys are not env — they are in `app_config`.
 
-Must-set in production: `SECRET_KEY`, `DEFAULT_ADMIN_PASSWORD`, `POSTGRES_PASSWORD` + matching `DATABASE_URL`, `REDIS_PASSWORD`, `MINIO_SECRET_KEY`, `MINIO_PUBLIC_ENDPOINT`.
+Must-set in production: `SECRET_KEY`, `DEFAULT_ADMIN_PASSWORD`, `POSTGRES_PASSWORD` + matching `DATABASE_URL`, `REDIS_PASSWORD`, `MINIO_ACCESS_KEY`, `MINIO_SECRET_KEY`, `MINIO_PUBLIC_ENDPOINT`.
+
+`Settings` rejects known-weak values at construction time, so the app refuses to start rather
+than running with them. Each credential is checked independently: `SECRET_KEY` at its default,
+`DEFAULT_ADMIN_PASSWORD` in `{change-me-admin-password, admin123, admin, password}`,
+`MINIO_ACCESS_KEY` == `minioadmin`, `MINIO_SECRET_KEY` in
+`{minioadmin123, change-me-minio-secret-key}`, an empty or `change-me-redis-password`
+`REDIS_PASSWORD`, and a `DATABASE_URL` still embedding `arkon_secret` or
+`change-me-postgres-password`. `ARKON_ALLOW_DEFAULT_SECRET=1` skips **all** of these — local
+development only.
 
 CORS default is empty (same-origin). `CORS_ORIGINS=*` raises unless `ARKON_ALLOW_CORS_WILDCARD=1`.
+
+Both escape hatches are declared as real `Settings` fields, so they work from `.env` / `.env.local`
+as well as from the process environment.
+
+### Settings groups
+
+| Group | Vars |
+|---|---|
+| Core | `DATABASE_URL`, `SECRET_KEY`, `DEFAULT_ADMIN_EMAIL`, `DEFAULT_ADMIN_PASSWORD`, `CORS_ORIGINS` |
+| MinIO | `MINIO_ENDPOINT`, `MINIO_PUBLIC_ENDPOINT`, `MINIO_ACCESS_KEY`, `MINIO_SECRET_KEY`, `MINIO_BUCKET`, `MINIO_SECURE`, `MINIO_PRESIGN_EXPIRY_MINUTES` |
+| Redis / worker | `REDIS_HOST`, `REDIS_PORT`, `REDIS_PASSWORD`, `REDIS_DB`, `WORKER_MAX_JOBS`, `WORKER_JOB_TIMEOUT` |
+| Uploads | `MAX_UPLOAD_MB`, `MAX_ZIP_UPLOAD_MB`, `MAX_REQUEST_BODY_MB` |
+| ZIP extraction | `MAX_ZIP_ENTRIES`, `MAX_ZIP_MEMBER_MB`, `MAX_ZIP_TOTAL_MB` |
+| Contribution workspaces | `MAX_CONTRIBUTION_TEXT_KB`, `MAX_CONTRIBUTION_TOTAL_MB`, `MAX_CONTRIBUTION_FILES` |
+| MCP | `MCP_TOKEN_EXPIRY_DAYS` |
+| MRP | `MRP_AUTO_APPROVE_PLAN`, `MRP_INGESTION_MODEL_ID`, and the chunk / concurrency / threshold / timeout knobs |
+| Chatbot | `CHAT_RAG_TOP_K`, `CHAT_LINKED_PAGES_LIMIT`, `CHAT_CONTEXT_CHARS_PER_PAGE`, `CHAT_HISTORY_MESSAGES`, `CHAT_GENERATION_TIMEOUT`, `CHAT_MIN_DETAILED_ANSWER_CHARS`, `CHAT_EXPAND_SHORT_ANSWERS` |
+| NotebookLM | `NOTEBOOKLM_STORAGE_PATH` |
+| Dev escape hatches | `ARKON_ALLOW_DEFAULT_SECRET`, `ARKON_ALLOW_CORS_WILDCARD` |
+
+`MINIO_PRESIGN_EXPIRY_MINUTES` defaults to **30**. Presigned URLs were previously good for 24
+hours and re-minted on every source-detail fetch; after issuance the URL is an unauthenticated
+bearer capability that survives permission revocation and account deletion.
+
+Relationships are validated as well as values: `MAX_REQUEST_BODY_MB` must be at least the largest
+per-route upload cap, `MAX_ZIP_MEMBER_MB` at most `MAX_ZIP_TOTAL_MB`, MRP chunk overlap below the
+chunk target, and each MRP lower threshold below its upper one.
 
 Templates: `.env.docker.example`, `.env.local.example`.

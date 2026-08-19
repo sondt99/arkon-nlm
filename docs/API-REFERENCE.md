@@ -27,7 +27,7 @@ MCP is **not** under `/api`. It is `POST /mcp` with an `ark_` token. See [MCP.md
 | Method | Path | Auth | Notes |
 |---|---|---|---|
 | `GET` | `/health` | no | DB + Redis + MinIO. Only on the API container |
-| `GET` | `/api/health` | no | `api` / `database` / `worker` |
+| `GET` | `/api/health` | no | `api` / `database` / `worker`. **200** when all three are reachable, **503** when any is not — so an orchestrator can use the status code alone. Does not create the MinIO bucket as a side effect. |
 | `GET` | `/` | no | Name, version, MCP path |
 
 ---
@@ -64,7 +64,12 @@ Admin (`org:settings:*` or system admin).
 | `GET` | `/api/settings/embeddings/catalog` |
 | `GET` | `/api/settings/embeddings/status` |
 | `POST` | `/api/settings/embeddings/switch` |
-| `GET` / `POST` | `/api/settings/embeddings/jobs` (and job-detail routes) |
+| `GET` | `/api/settings/embeddings/jobs/{job_id}` |
+| `POST` | `/api/settings/embeddings/jobs/{job_id}/cancel` |
+
+There is **no** route that lists embedding jobs. `{job_id}` is typed `uuid.UUID`, so the bare
+`/api/settings/embeddings/jobs` path 404s. Get the current job from
+`/api/settings/embeddings/status`, which is what the portal uses.
 
 ---
 
@@ -116,7 +121,7 @@ Admin (`org:settings:*` or system admin).
 | `POST` | `/api/sources/{id}/plan/reject` |
 | `DELETE` | `/api/sources/{id}` |
 
-Uploads are `multipart/form-data`.
+Uploads are `multipart/form-data`. See [Request size limits](#request-size-limits).
 
 ---
 
@@ -210,8 +215,10 @@ Uploads are `multipart/form-data`.
 | `GET` | `/api/skill-contributions` |
 | `GET` | `/api/admin/skill-contributions` |
 | `GET/DELETE` | `/api/skill-contributions/{id}` |
-| `GET` | `/api/skill-contributions/{id}/files` |
-| `GET/PUT` | `/api/skill-contributions/{id}/files/content` (and file write/upload/rename/delete) |
+| `GET/PUT/DELETE` | `/api/skill-contributions/{id}/files` |
+| `GET` | `/api/skill-contributions/{id}/files/content` |
+| `POST` | `/api/skill-contributions/{id}/upload` |
+| `POST` | `/api/skill-contributions/{id}/rename` |
 | `POST` | `/api/skill-contributions/{id}/submit` |
 | `POST` | `/api/skill-contributions/{id}/approve` |
 | `POST` | `/api/skill-contributions/{id}/reject` |
@@ -243,6 +250,15 @@ Arkon rows:
 | `GET` | `/api/notebooklm/artifacts/{id}/download` |
 
 Live NotebookLM (`/api/notebooklm/nlm/...`): list/create/delete notebooks, sources, upload, generate, preview, download, chat, ingest. See `app/routers/notebooklm.py`.
+
+These proxy one shared Google session, so they are **owner-scoped**. Every route taking an
+`{nlm_id}` accepts it only from a system admin, the employee who created it through
+`POST /api/notebooklm/nlm/notebooks`, or the employee who created the matching Arkon notebook row.
+Anything else is **404 `"Notebook not found"`** — deliberately not 403, which would confirm the id
+names a real notebook and allow enumeration. `GET /api/notebooklm/nlm/notebooks` returns only the
+caller's own notebooks (admins see all). Notebooks with no recorded creator — anything predating
+this boundary, or created directly in the Google account — are reachable by admins only. The two
+ingest routes also require `doc:create`.
 
 ---
 
@@ -284,6 +300,38 @@ v0.1.0 is passthrough (no RAG injection). Streaming is synthesized from one comp
 
 ---
 
+## Request size limits
+
+Every response below is `{ "detail": "…" }`.
+
+| Limit | Value | Applies to | Code |
+|---|---|---|---|
+| `client_max_body_size` (nginx) | 260 MB | `/api/` at the edge | 413 (nginx HTML) |
+| `MAX_REQUEST_BODY_MB` | 256 MB | **every** request, including `/mcp` and non-upload routes | 413 |
+| `MAX_UPLOAD_MB` | 100 MB | `POST /api/sources/upload`, `/api/projects/{id}/sources/upload`, `/api/skill-contributions/{id}/upload`, `/api/notebooklm/nlm/notebooks/{nlm_id}/sources/upload` | 413 |
+| `MAX_ZIP_UPLOAD_MB` | 200 MB | `POST /api/sources/upload-zip`; `/api/skills/upload`, `/{slug}/reupload`, `/inspect-zip` (per file) | 413 |
+| `MAX_CONTRIBUTION_TEXT_KB` | 1024 KB | `PUT /api/skill-contributions/{id}/files` — UTF-8 bytes of `content` | 413 |
+| `MAX_CONTRIBUTION_TOTAL_MB` | 25 MB | cumulative bytes under one contribution | 413 |
+| `MAX_CONTRIBUTION_FILES` | 200 | cumulative file count under one contribution | 400 |
+
+`MAX_REQUEST_BODY_MB` is enforced by middleware ahead of every route, so a body over it is
+refused before the handler runs — including on endpoints that accept no upload. It checks the
+`Content-Length` header *and* the bytes actually delivered, and closes the connection.
+
+The cumulative contribution budget counts what is already stored, so an under-cap write can still
+be refused. Overwriting an existing path credits back the old object's bytes.
+
+`POST /api/sources/upload-zip` caps the **decompressed** archive: `MAX_ZIP_ENTRIES` (50) and
+`MAX_ZIP_TOTAL_MB` (500) are 422, and `MAX_ZIP_MEMBER_MB` (50) skips the oversized entry and
+reports it in `skipped` rather than failing the request. A corrupt or non-ZIP payload is 422
+(`"Invalid or corrupted zip file."`); a filename not ending in `.zip` is 400. The skill ZIP
+endpoints use a different implementation with its own caps (10 MB uncompressed, 100 files, 400).
+
+Other input caps: `POST /api/wiki/images/resolve` takes at most 100 ids (400), and a draft's
+`content_md` is capped at 50,000 characters (422).
+
+---
+
 ## Status codes (typical)
 
 | Code | Meaning |
@@ -292,5 +340,7 @@ v0.1.0 is passthrough (no RAG injection). Streaming is synthesized from one comp
 | 403 | Authenticated but permission or workspace role denied |
 | 404 | Unknown id / slug (or hidden by scope) |
 | 409 | Conflict (e.g. last workspace admin) |
-| 422 | Validation |
+| 413 | Request body or upload over a size cap — see above |
+| 422 | Validation, and every ZIP-extraction failure |
 | 429 | Login or token rate limit |
+| 502 | Upstream (NotebookLM / AI provider) did not confirm the operation |

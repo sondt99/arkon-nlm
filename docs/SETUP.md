@@ -80,7 +80,7 @@ MINIO_ACCESS_KEY=something-other-than-minioadmin
 MINIO_SECRET_KEY=
 ```
 
-`POSTGRES_*` and `DATABASE_URL` must match. Changing MinIO keys after the first start requires wiping the MinIO volume (`docker compose down -v` — this deletes files).
+`POSTGRES_*` and `DATABASE_URL` must match. Changing MinIO keys after the first start requires wiping the MinIO volume (`docker compose --env-file .env.docker down -v` — this deletes files).
 
 ### Public URL (required on a real server)
 

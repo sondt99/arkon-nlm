@@ -149,7 +149,16 @@ The token maps to a `ResolvedIdentity`:
 - `is_admin`
 - `allowed_source_ids` derived from `doc:read` (`all` / `own_dept` + global) and workspace memberships
 
-Knowledge-type filtering on the token is **not** active in v0.1.0. Revoke from Profile or Employees. A revoked token fails on the next call.
+- `wiki_readable` — whether the employee holds `wiki:read:own_dept` or `wiki:read:all`
+- `allowed_knowledge_types` — the knowledge types this token may read wiki pages from
+
+Knowledge-type filtering **is** active: the identity carries the KT slugs of the sources that
+employee can see (unrestricted for `wiki:read:all` and for admins, empty — i.e. no wiki access —
+when they hold no `wiki:read`), and wiki search, page reads, the index, chat RAG, and export chat
+all apply it. The four wiki tools also refuse outright without `wiki:read`, returning
+`Access denied: your token's role does not include wiki:read.`
+
+Revoke from Profile or Employees. A revoked token fails on the next call.
 
 The same `ark_` token authenticates the [Export API](API-REFERENCE.md) and the [Claude Code gateway](API-REFERENCE.md) (`Authorization` or `x-api-key`).
 

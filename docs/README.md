@@ -65,7 +65,7 @@ MRP writes wiki pages (with citations)
 | Item | Value |
 |---|---|
 | App version | `0.1.0` |
-| Latest migration | `027_department_employee_restrict` |
+| Latest migration | `033_nlm_passthrough_ownership` (`alembic heads` → `033`) |
 | Browser entry | `http://localhost:3119` |
 | MCP (Docker) | `http://localhost:3119/mcp` |
 | Health (Docker) | `http://localhost:3119/api/health` |

@@ -14,8 +14,8 @@ Steps:
 
 import asyncio
 import json
-import re
 import string
+from dataclasses import dataclass
 from difflib import SequenceMatcher
 from typing import TYPE_CHECKING, Optional
 
@@ -32,6 +32,7 @@ from app.ai.providers.base import (
     LLMProvider,
     flatten_untrusted_metadata,
     new_envelope_nonce,
+    parse_json_response,
     strip_envelope_markers,
 )
 from app.config import settings
@@ -218,23 +219,41 @@ def exact_dedup_concepts(raw_concepts: list[dict]) -> list[dict]:
 # Step 2.3 — Embedding-based deduplication
 # ---------------------------------------------------------------------------
 
+@dataclass
+class EntityDedupResult:
+    """Outcome of step 2.3, in one shape whether or not the embed call worked.
+
+    This used to be a 4-tuple on success and a plain `list[dict]` on failure, with the sole
+    caller telling them apart by `isinstance(result, tuple)`. The failure branch happened to
+    return the input list unchanged, so skipping it was accidentally harmless — the trap is
+    that the contract permitted it not to be, and no caller could tell a merged list from an
+    unmerged one. `embedded` replaces the isinstance check and makes "resolution did not
+    run" a fact the log can state instead of one the reader has to infer.
+    """
+
+    merged_into: dict[int, int]
+    ambiguous_pairs: list[tuple[int, int]]
+    entities: list[dict]
+    embedded: bool
+
+
 async def embedding_dedup_entities(
     entities: list[dict],
     embedding_provider: EmbeddingProvider,
-) -> list[dict]:
+) -> EntityDedupResult:
     """
     Merge entities whose name embeddings are very similar (> MERGE_THRESHOLD)
-    and have the same type. Returns a reduced list of canonical entities.
+    and have the same type. Returns the merge map plus the pairs still in doubt.
     """
     if len(entities) <= 1:
-        return entities
+        return EntityDedupResult({}, [], entities, embedded=False)
 
     names = [e["name"] for e in entities]
     try:
         vectors = await embedding_provider.embed_batch(names)
     except Exception as exc:
         logger.warning(f"MRP REDUCE embedding dedup failed: {exc}. Skipping.")
-        return entities
+        return EntityDedupResult({}, [], entities, embedded=False)
 
     n = len(entities)
     merged_into: dict[int, int] = {}  # index → canonical index
@@ -272,7 +291,7 @@ async def embedding_dedup_entities(
         (i, j) for i, j in ambiguous_pairs if _root(i) != _root(j)
     ]
 
-    return merged_into, still_ambiguous, vectors, entities
+    return EntityDedupResult(merged_into, still_ambiguous, entities, embedded=True)
 
 
 async def resolve_ambiguous_entities(
@@ -323,8 +342,7 @@ async def resolve_ambiguous_entities(
             llm.generate(prompt, system="You are a named-entity resolution assistant. Return only JSON.", temperature=0.0),
             timeout=60,
         )
-        cleaned = raw.strip().strip("```json").strip("```").strip()
-        decisions: list[bool] = json.loads(cleaned)
+        decisions: list[bool] = parse_json_response(raw)
         for k, (i, j) in enumerate(ambiguous_pairs):
             if k < len(decisions) and decisions[k]:
                 ri, rj = _root(i), _root(j)
@@ -565,9 +583,7 @@ async def _resolve_maybe_items(
             llm.generate(prompt, system="You are a conservative knowledge-base entity resolver. Return JSON only.", temperature=0.0),
             timeout=90,
         )
-        cleaned = re.sub(r"^```(?:json)?\s*", "", raw.strip(), flags=re.IGNORECASE)
-        cleaned = re.sub(r"\s*```$", "", cleaned)
-        parsed = json.loads(cleaned)
+        parsed = parse_json_response(raw)
         if isinstance(parsed, list):
             decisions = {str(d.get("name")): d for d in parsed if isinstance(d, dict)}
     except Exception as exc:
@@ -786,18 +802,7 @@ async def run_planning_call(
         timeout=120,
     )
 
-    cleaned = re.sub(r"^```(?:json)?\s*", "", raw.strip(), flags=re.IGNORECASE)
-    cleaned = re.sub(r"\s*```$", "", cleaned)
-    try:
-        plan = json.loads(cleaned)
-    except json.JSONDecodeError:
-        last_brace = cleaned.rfind("}")
-        if last_brace != -1:
-            plan = json.loads(cleaned[: last_brace + 1])
-        else:
-            raise
-
-    return plan
+    return parse_json_response(raw)
 
 
 def enforce_reconciliation(plan: dict, reconciliation: dict[str, dict]) -> dict:
@@ -959,13 +964,17 @@ async def run_reduce_phase(
     # 2.3 Embedding dedup for entities
     if len(canonical_entities) > 1 and embedding_provider is not None:
         try:
-            result = await embedding_dedup_entities(canonical_entities, embedding_provider)
-            if isinstance(result, tuple):
-                merged_into, ambiguous_pairs, vectors, canonical_entities = result
-                # 2.4 LLM resolution for ambiguous pairs
-                merged_into = await resolve_ambiguous_entities(llm, canonical_entities, ambiguous_pairs, merged_into)
-                canonical_entities = _apply_merges(canonical_entities, merged_into)
-                logger.info(f"MRP REDUCE after embedding-dedup: {len(canonical_entities)} entities")
+            dedup = await embedding_dedup_entities(canonical_entities, embedding_provider)
+            canonical_entities = dedup.entities
+            # 2.4 LLM resolution for ambiguous pairs
+            merged_into = await resolve_ambiguous_entities(
+                llm, canonical_entities, dedup.ambiguous_pairs, dedup.merged_into,
+            )
+            canonical_entities = _apply_merges(canonical_entities, merged_into)
+            logger.info(
+                f"MRP REDUCE after embedding-dedup: {len(canonical_entities)} entities "
+                f"(embedded={dedup.embedded})"
+            )
         except Exception as exc:
             logger.warning(f"MRP REDUCE embedding dedup error: {exc}. Continuing with exact-dedup result.")
 

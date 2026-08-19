@@ -74,8 +74,23 @@ def tool_results_message(results: list[tuple[str, str, Any]]) -> dict:
 # Neutral → provider-specific message converters (used inside providers)
 # ---------------------------------------------------------------------------
 
+def _user_text(msg: dict) -> str:
+    """Flatten a user message for a provider with no cache-breakpoint concept.
+
+    "cache_prefix" is an optimisation hint, never content the model may go without — a
+    converter that ignored the key would silently drop the source document.
+    """
+    return (msg.get("cache_prefix") or "") + (msg.get("content") or "")
+
+
 def neutral_to_anthropic_messages(messages: list[dict]) -> list[dict]:
-    """Convert neutral messages to Anthropic API format."""
+    """Convert neutral messages to Anthropic API format.
+
+    A user message may carry "cache_prefix": the invariant head of its content, which this
+    converter emits as a separate leading text block with a cache breakpoint on it. In an
+    agent loop the opening turn is re-sent on every step, so without a breakpoint the whole
+    source document is re-read at full price once per step and once per page.
+    """
     result = []
     for msg in messages:
         role = msg["role"]
@@ -90,6 +105,18 @@ def neutral_to_anthropic_messages(messages: list[dict]) -> list[dict]:
                             "content": r["content"],
                         }
                         for r in msg["tool_results"]
+                    ],
+                })
+            elif msg.get("cache_prefix"):
+                result.append({
+                    "role": "user",
+                    "content": [
+                        {
+                            "type": "text",
+                            "text": msg["cache_prefix"],
+                            "cache_control": {"type": "ephemeral"},
+                        },
+                        {"type": "text", "text": msg.get("content") or ""},
                     ],
                 })
             else:
@@ -123,7 +150,7 @@ def neutral_to_openai_messages(messages: list[dict]) -> list[dict]:
                         "content": r["content"],
                     })
             else:
-                result.append({"role": "user", "content": msg.get("content") or ""})
+                result.append({"role": "user", "content": _user_text(msg)})
         elif role == "assistant":
             m: dict = {"role": "assistant", "content": msg.get("content")}
             if msg.get("tool_calls"):
@@ -169,7 +196,7 @@ def neutral_to_gemini_contents(messages: list[dict]):
             else:
                 result.append(gtypes.Content(
                     role="user",
-                    parts=[gtypes.Part(text=msg.get("content") or "")]
+                    parts=[gtypes.Part(text=_user_text(msg))]
                 ))
         elif role == "assistant":
             # Use the raw Gemini Content if available — preserves thought_signature

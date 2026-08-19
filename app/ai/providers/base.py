@@ -5,12 +5,14 @@ Every provider (Google, OpenAI, Anthropic, Ollama…) implements these
 interfaces so the rest of the codebase never imports a specific SDK.
 """
 
+import json
+import re
 import secrets
 from abc import ABC, abstractmethod
 from collections.abc import Iterable
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import TYPE_CHECKING, Optional, Union
+from typing import TYPE_CHECKING, Any, Optional, Union
 
 if TYPE_CHECKING:
     from app.ai.agent_protocol import AssistantTurn
@@ -81,6 +83,70 @@ def flatten_untrusted_metadata(
     if len(flattened) > limit:
         flattened = flattened[:limit] + "…"
     return flattened or "(unknown)"
+
+
+# ---------------------------------------------------------------------------
+# LLM JSON output
+# ---------------------------------------------------------------------------
+#
+# Shared here for the same reason as the envelope helpers above: MAP, REDUCE and VERIFY all
+# ask a model for JSON and all have to survive the same provider habits — a ``` fence, a
+# leading "Sure, here it is:", a trailing remark, or a reply cut off mid-object.
+#
+# Two call sites used `raw.strip("```json").strip("```")` for this. str.strip takes a *set of
+# characters*, not a substring, so that expression removes any leading or trailing backtick,
+# `j`, `s`, `o` or `n` in any order; it only appears to work on the common fenced form
+# because the newline after the fence stops the scan before it reaches the payload. Neither
+# site had any fallback, so a reply with prose around the JSON went to `except Exception` and
+# was reported as "no conflict" / "nothing to merge" — the failure this helper exists to end.
+
+_JSON_FENCE_OPEN = re.compile(r"\A```[ \t]*[A-Za-z0-9_+-]*[ \t]*\r?\n?")
+_JSON_FENCE_CLOSE = re.compile(r"\r?\n?[ \t]*```[ \t]*\Z")
+
+
+def strip_json_fence(raw: str) -> str:
+    """Remove one leading and one trailing markdown code fence, anchored to the ends."""
+    text = (raw or "").strip()
+    text = _JSON_FENCE_OPEN.sub("", text)
+    return _JSON_FENCE_CLOSE.sub("", text).strip()
+
+
+def parse_json_response(raw: str) -> Any:
+    """Parse a model's JSON reply. Raises ValueError when no JSON value is recoverable.
+
+    json.JSONDecodeError is a ValueError, so a caller that only wants "did this parse"
+    can catch ValueError for both outcomes.
+
+    A reply truncated part-way through a nested value is *not* recoverable and raises. That
+    is deliberate: the alternative is handing back a partial object that looks complete.
+    """
+    text = strip_json_fence(raw)
+    try:
+        return json.loads(text)
+    except json.JSONDecodeError:
+        pass
+
+    # Fall back to the outermost container, which recovers the failure that actually fires:
+    # a model that wrapped valid JSON in "Sure, here it is:" or a closing remark.
+    #
+    # Only the container the reply *opens with* is considered. Trying `{...}` and then
+    # `[...]` would, on a truncated object, return an inner array as though it were the
+    # top-level value — and reducer's MAYBE resolution branches on exactly that
+    # (`isinstance(parsed, list)`), so a wrong type is worse than no value.
+    candidates = [(pos, pair) for pos, pair in (
+        (text.find("{"), ("{", "}")),
+        (text.find("["), ("[", "]")),
+    ) if pos >= 0]
+    if candidates:
+        start, (_opener, closer) = min(candidates)
+        end = text.rfind(closer)
+        if end > start:
+            try:
+                return json.loads(text[start:end + 1])
+            except json.JSONDecodeError:
+                pass
+
+    raise ValueError(f"No JSON value in model reply: {text[:200]!r}")
 
 
 # ---------------------------------------------------------------------------
@@ -228,6 +294,41 @@ class LLMProvider(ABC):
         )
         return LLMGeneration(text=text, stop_reason=None)
 
+    def cacheable_prefix_min_tokens(self) -> Optional[int]:
+        """Smallest prompt prefix this provider will cache, or None if it caches nothing.
+
+        A cache breakpoint on a shorter prefix is silently ignored — no error, no cache
+        entry, and the caller has still paid the cache-write premium on the tokens that
+        *were* eligible. Callers therefore gate on this number instead of marking every
+        prompt and hoping. Returning None here is what keeps the non-Anthropic providers
+        on exactly their old code path.
+        """
+        return None
+
+    async def generate_cached(
+        self,
+        cacheable_prefix: str,
+        prompt: str,
+        system: Optional[str] = None,
+        max_tokens: Optional[int] = None,
+        temperature: float = 0.7,
+        top_p: Optional[float] = None,
+    ) -> str:
+        """generate() on `cacheable_prefix + prompt`, with the prefix offered for caching.
+
+        `cacheable_prefix` must be the invariant head of the prompt — byte-identical across
+        every call meant to share one cache entry — and the caller must have checked it
+        against cacheable_prefix_min_tokens(). No separator is inserted: the caller owns the
+        exact bytes on both sides of the boundary.
+
+        The default is deliberately price-neutral and concatenates, so a provider without
+        prompt caching receives precisely what generate() would have received.
+        """
+        return await self.generate(
+            cacheable_prefix + prompt, system=system, max_tokens=max_tokens,
+            temperature=temperature, top_p=top_p,
+        )
+
     async def generate_with_tools(
         self,
         messages: list[dict],
@@ -241,6 +342,10 @@ class LLMProvider(ABC):
         Multi-turn tool-calling. Messages use neutral format from agent_protocol.
         Returns AssistantTurn with tool_calls (if any) and finish_reason.
         Override in providers that support tool calling.
+
+        A neutral user message may carry a "cache_prefix" key; see
+        agent_protocol.neutral_to_anthropic_messages. Converters that cannot cache
+        concatenate it, so the flag is inert rather than lossy on those providers.
         """
         raise NotImplementedError(
             f"{type(self).__name__} does not support tool calling. "

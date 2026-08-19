@@ -7,6 +7,8 @@ Supports: Claude Sonnet, Claude Haiku, Claude Opus, etc.
 import base64
 from typing import Optional
 
+from loguru import logger
+
 from app.ai.agent_protocol import (
     AssistantTurn,
     ToolCall,
@@ -47,6 +49,77 @@ def _apply_sampling(kwargs: dict, model_id: str, temperature: float, top_p: Opti
     kwargs["temperature"] = temperature
     if top_p is not None:
         kwargs["top_p"] = top_p
+
+
+# Smallest prefix Anthropic will actually cache, per model. A cache_control breakpoint on a
+# shorter prefix is accepted by the API and then silently ignored, so a caller that does not
+# check these numbers gets no cache entry and no error to tell it so.
+_CACHE_MIN_PREFIX_TOKENS: dict[str, int] = {
+    "claude-opus-4-8": 4096,
+    "claude-opus-4-7": 4096,
+    "claude-opus-4-6": 4096,
+    "claude-sonnet-5": 4096,
+    "claude-fable-5": 2048,
+    "claude-sonnet-4-6": 2048,
+    "claude-haiku-4-5": 2048,
+}
+# Used for an unrecognised claude-* id: the largest minimum in the table, so a new model with
+# a higher bar cannot be handed a breakpoint that will be dropped.
+_CACHE_MIN_PREFIX_TOKENS_DEFAULT = 4096
+
+CACHE_CONTROL_EPHEMERAL = {"type": "ephemeral"}
+
+
+def min_cacheable_prefix_tokens(model_id: str) -> int:
+    """Tokens a prefix must exceed before a cache breakpoint on it does anything."""
+    mid = (model_id or "").lower()
+    exact = _CACHE_MIN_PREFIX_TOKENS.get(mid)
+    if exact is not None:
+        return exact
+    for key, value in _CACHE_MIN_PREFIX_TOKENS.items():
+        if mid.startswith(key):
+            return value
+    return _CACHE_MIN_PREFIX_TOKENS_DEFAULT
+
+
+def _usage_dict(response) -> Optional[dict]:
+    """Token counts from a response, including the two prompt-cache buckets.
+
+    cache_read_input_tokens is the only evidence a breakpoint took effect, so it travels
+    with the rest of the usage rather than being dropped at the provider boundary.
+    """
+    usage = getattr(response, "usage", None)
+    if usage is None:
+        return None
+    result = {
+        "input_tokens": getattr(usage, "input_tokens", None),
+        "output_tokens": getattr(usage, "output_tokens", None),
+    }
+    for field_name in ("cache_read_input_tokens", "cache_creation_input_tokens"):
+        value = getattr(usage, field_name, None)
+        if value is not None:
+            result[field_name] = value
+    return result
+
+
+def _log_cache_usage(label: str, model_id: str, response) -> None:
+    """Report cache_read / cache_creation so a claimed saving can be checked against the bill.
+
+    Without this the only way to tell a working breakpoint from an ignored one is the
+    invoice, because an ignored breakpoint is not an error.
+    """
+    usage = getattr(response, "usage", None)
+    if usage is None:
+        return
+    read = getattr(usage, "cache_read_input_tokens", None)
+    created = getattr(usage, "cache_creation_input_tokens", None)
+    if read is None and created is None:
+        return
+    logger.info(
+        f"Anthropic prompt cache [{label}] model={model_id} "
+        f"read={read or 0} created={created or 0} "
+        f"uncached_input={getattr(usage, 'input_tokens', None)}"
+    )
 
 
 # The SDK's own defaults are 2 retries and a 10-minute request timeout. Every caller wraps
@@ -118,6 +191,47 @@ class AnthropicLLM(LLMProvider):
         response = await self.client.messages.create(**kwargs)
         return _collect_text(response)
 
+    def cacheable_prefix_min_tokens(self) -> Optional[int]:
+        return min_cacheable_prefix_tokens(self.config.model_id)
+
+    async def generate_cached(
+        self,
+        cacheable_prefix: str,
+        prompt: str,
+        system: Optional[str] = None,
+        max_tokens: Optional[int] = None,
+        temperature: float = 0.7,
+        top_p: Optional[float] = None,
+    ) -> str:
+        """Split the user turn into a cached block and a volatile block.
+
+        The breakpoint goes on the *first* block, so the cache entry covers system prompt +
+        prefix. Everything after it is re-read at full price, which is why the caller has to
+        put the per-call fields there and nothing else.
+        """
+        kwargs = {
+            "model": self.config.model_id,
+            "max_tokens": max_tokens or 16384,
+            "messages": [{
+                "role": "user",
+                "content": [
+                    {
+                        "type": "text",
+                        "text": cacheable_prefix,
+                        "cache_control": CACHE_CONTROL_EPHEMERAL,
+                    },
+                    {"type": "text", "text": prompt},
+                ],
+            }],
+        }
+        _apply_sampling(kwargs, self.config.model_id, temperature, top_p)
+        if system:
+            kwargs["system"] = system
+
+        response = await self.client.messages.create(**kwargs)
+        _log_cache_usage("generate_cached", self.config.model_id, response)
+        return _collect_text(response)
+
     async def generate_detailed(
         self,
         prompt: str,
@@ -148,14 +262,8 @@ class AnthropicLLM(LLMProvider):
                 "Content was not generated."
             )
 
-        usage = None
-        if getattr(response, "usage", None):
-            usage = {
-                "input_tokens": response.usage.input_tokens,
-                "output_tokens": response.usage.output_tokens,
-            }
         return LLMGeneration(
-            text=_collect_text(response), stop_reason=reason, usage=usage
+            text=_collect_text(response), stop_reason=reason, usage=_usage_dict(response)
         )
 
     async def generate_with_tools(
@@ -181,6 +289,7 @@ class AnthropicLLM(LLMProvider):
             kwargs["system"] = system
 
         response = await self.client.messages.create(**kwargs)
+        _log_cache_usage("generate_with_tools", self.config.model_id, response)
 
         text_parts: list[str] = []
         tool_calls: list[ToolCall] = []
@@ -194,18 +303,11 @@ class AnthropicLLM(LLMProvider):
         reason_map = {"end_turn": "end_turn", "tool_use": "tool_use", "max_tokens": "max_tokens"}
         finish_reason = reason_map.get(response.stop_reason or "end_turn", "end_turn")
 
-        usage = None
-        if response.usage:
-            usage = {
-                "input_tokens": response.usage.input_tokens,
-                "output_tokens": response.usage.output_tokens,
-            }
-
         return AssistantTurn(
             text="\n".join(text_parts) or None,
             tool_calls=tool_calls,
             finish_reason=finish_reason,
-            usage=usage,
+            usage=_usage_dict(response),
         )
 
     async def test_connection(self) -> tuple[bool, str]:

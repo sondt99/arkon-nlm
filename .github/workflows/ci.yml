@@ -5,13 +5,63 @@ on:
     branches: [main]
   pull_request:
   workflow_dispatch:
+  # Nightly, for the image build only — see the `images` job. Building three images costs
+  # ~6.5 minutes, more than every other job combined, and on a busy branch the concurrency
+  # rule cancelled it mid-build anyway: a full runner burned for 7 minutes and thrown away.
+  schedule:
+    - cron: "17 3 * * *"
 
 concurrency:
   group: ci-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
+  # What changed? Everything below is gated on this, so a docs-only PR runs no suite at all.
+  #
+  # Job-level `if:` rather than a workflow-level `paths:` filter, deliberately. A job skipped
+  # by `paths:` never reports, so a REQUIRED check stays pending and the PR blocks forever. A
+  # job skipped by `if:` reports "skipped", which satisfies the requirement.
+  changes:
+    name: Detect changed areas
+    runs-on: ubuntu-latest
+    outputs:
+      backend: ${{ steps.f.outputs.backend }}
+      frontend: ${{ steps.f.outputs.frontend }}
+      migrations: ${{ steps.f.outputs.migrations }}
+      images: ${{ steps.f.outputs.images }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - id: f
+        env:
+          BASE: ${{ github.event_name == 'pull_request' && github.event.pull_request.base.sha || github.event.before }}
+        run: |
+          set -euo pipefail
+          # A first push to a branch, or a force-push, gives no usable base: run everything
+          # rather than guess. Cheaper to over-run once than to skip a real regression.
+          if [ -z "${BASE:-}" ] || [ "$BASE" = "0000000000000000000000000000000000000000" ] \
+             || ! git cat-file -e "$BASE^{commit}" 2>/dev/null; then
+            echo "no usable base ($BASE) — running every suite"
+            for k in backend frontend migrations images; do echo "$k=true" >> "$GITHUB_OUTPUT"; done
+            exit 0
+          fi
+          FILES=$(git diff --name-only "$BASE" HEAD)
+          echo "changed files:"; echo "$FILES" | sed 's/^/  /'
+          m() { echo "$FILES" | grep -qE "$1"; }
+          # The workflow itself and the lockfile affect every suite.
+          COMMON='^(\.github/workflows/|pyproject\.toml|uv\.lock)'
+          m "$COMMON" && { for k in backend frontend migrations images; do echo "$k=true" >> "$GITHUB_OUTPUT"; done; exit 0; }
+          m '^(app/|tests/|alembic/)'            && echo "backend=true"    >> "$GITHUB_OUTPUT" || true
+          m '^frontend/'                          && echo "frontend=true"   >> "$GITHUB_OUTPUT" || true
+          m '^(alembic/|app/database/|app/config)' && echo "migrations=true" >> "$GITHUB_OUTPUT" || true
+          m '^(Dockerfile|frontend/Dockerfile|nginx/|docker-compose|entrypoint|migrate\.sh)' \
+                                                  && echo "images=true"     >> "$GITHUB_OUTPUT" || true
+
   backend:
+    needs: changes
+    if: needs.changes.outputs.backend == 'true'
     name: Backend — lint + tests
     runs-on: ubuntu-latest
     steps:
@@ -25,6 +75,9 @@ jobs:
       - uses: astral-sh/setup-uv@v5
         with:
           version: "0.9.21"
+          # Without this every run re-downloads the entire locked graph.
+          enable-cache: true
+          cache-dependency-glob: uv.lock
 
       # `pip install -e ".[dev]"` resolved FRESH and ignored uv.lock, so CI tested a
       # different dependency graph than the image ships — Dockerfile installs from the
@@ -57,6 +110,8 @@ jobs:
         run: pytest
 
   frontend:
+    needs: changes
+    if: needs.changes.outputs.frontend == 'true'
     name: Frontend — lint + typecheck + test + build
     runs-on: ubuntu-latest
     defaults:
@@ -71,6 +126,17 @@ jobs:
           node-version: "22"
           cache: npm
           cache-dependency-path: frontend/package-lock.json
+
+      # `next build` reported "No build cache found" on every run and rebuilt from scratch.
+      # Keyed on the lockfile plus the commit so a rebuild starts from the nearest ancestor
+      # rather than nothing.
+      - uses: actions/cache@v4
+        with:
+          path: frontend/.next/cache
+          key: next-${{ hashFiles('frontend/package-lock.json') }}-${{ github.sha }}
+          restore-keys: |
+            next-${{ hashFiles('frontend/package-lock.json') }}-
+            next-
 
       - name: Install
         run: npm ci
@@ -131,21 +197,19 @@ jobs:
         run: npm run build
 
   images:
+    needs: changes
+    # Runs when it can actually tell you something: nightly, on demand, or when a file that
+    # feeds an image changed. It stays OFF the pull-request path and off unrelated pushes.
+    #
+    # Not deleted — it is the only job that builds an image, and it caught the Dockerfile
+    # installing the exported lockfile without `--no-deps`, where pip re-resolved and
+    # silently discarded the pinned graph. Nothing else in CI can see that.
+    if: >-
+      github.event_name == 'schedule' ||
+      github.event_name == 'workflow_dispatch' ||
+      (github.event_name == 'push' && needs.changes.outputs.images == 'true')
     name: Docker images build
     runs-on: ubuntu-latest
-    # OFF THE PULL-REQUEST PATH ON PURPOSE. Building three images took ~4 minutes and was
-    # the single largest cost in every PR cycle — and because branch protection required
-    # it, every merge invalidated the next PR and paid it again.
-    #
-    # It is NOT deleted, because it earns its keep: it is the only job that caught the
-    # Dockerfile installing the exported lockfile without `--no-deps`, where pip
-    # re-resolved and silently discarded the pinned graph. Nothing else in CI builds an
-    # image, so deleting this would mean a broken image is discovered on deploy.
-    #
-    # Post-merge is the right trade: `main` is still verified within minutes, and it is no
-    # longer a required check, so it cannot block or serialise a PR. Run it on a branch on
-    # demand with `workflow_dispatch` before touching the Dockerfile or dependencies.
-    if: github.event_name != 'pull_request'
     steps:
       - uses: actions/checkout@v7
 
@@ -183,6 +247,8 @@ jobs:
           cache-to: type=gha,mode=max
 
   migrations:
+    needs: changes
+    if: needs.changes.outputs.migrations == 'true'
     name: Migrations apply and reverse
     runs-on: ubuntu-latest
     services:
@@ -211,6 +277,9 @@ jobs:
       - uses: astral-sh/setup-uv@v5
         with:
           version: "0.9.21"
+          # Without this every run re-downloads the entire locked graph.
+          enable-cache: true
+          cache-dependency-glob: uv.lock
 
       # `pip install -e ".[dev]"` resolved FRESH and ignored uv.lock, so CI tested a
       # different dependency graph than the image ships — Dockerfile installs from the

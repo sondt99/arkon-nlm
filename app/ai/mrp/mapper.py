@@ -12,8 +12,6 @@ Phase 1: build_chunks() — splits document into ~12k-char chunks along section
 """
 
 import asyncio
-import json
-import re
 import uuid
 from dataclasses import dataclass, field
 from typing import Optional
@@ -29,6 +27,7 @@ from app.ai.providers.base import (
     LLMProvider,
     flatten_untrusted_metadata,
     new_envelope_nonce,
+    parse_json_response,
     strip_envelope_markers,
 )
 from app.config import settings
@@ -412,32 +411,37 @@ def _strip_envelope_markers(text: str, nonce: str) -> str:
 
 def _parse_extract_json(raw: str) -> dict:
     """Parse LLM response to extraction dict. Raises ValueError on failure."""
-    cleaned = re.sub(r"^```(?:json)?\s*", "", raw.strip(), flags=re.IGNORECASE)
-    cleaned = re.sub(r"\s*```$", "", cleaned)
+    return parse_json_response(raw)
+
+
+def _absolute_offset(local_offset, chunk: DocumentChunk) -> int:
+    """Map one model-reported local offset into full_text, clamped to the chunk.
+
+    The floor at 0 was already here; the ceiling was not. `local_offset` is a number the
+    model invented and nothing downstream range-checks it, so an offset past the end of the
+    document landed inside no section, and _score_sections — which ranks sections by how
+    many evidence offsets fall inside them — silently dropped that claim's vote. One
+    fabricated number therefore changed which part of a long source the writer was shown.
+
+    Clamping to the chunk that produced the claim puts the offset back in the only region it
+    could have come from. It does not reconstruct a usable excerpt: an offset at the chunk
+    boundary still slices almost nothing, and guessing a location would show the writer
+    unrelated text labelled as that claim's evidence.
+    """
     try:
-        return json.loads(cleaned)
-    except json.JSONDecodeError:
-        last_brace = cleaned.rfind("}")
-        if last_brace != -1:
-            return json.loads(cleaned[: last_brace + 1])
-        raise
+        value = int(local_offset or 0)
+    except (TypeError, ValueError):
+        value = 0
+    span = max(0, chunk.end_char - chunk.start_char)
+    return chunk.start_char + min(max(0, value), span)
 
 
 def _convert_offsets(extract: dict, chunk: DocumentChunk) -> dict:
     """Convert local_offset fields to absolute offsets in full_text."""
-    base = chunk.start_char
-
-    for item in extract.get("entities", []):
-        item["absolute_offset"] = base + max(0, item.get("local_offset", 0))
-        item.pop("local_offset", None)
-
-    for item in extract.get("concepts", []):
-        item["absolute_offset"] = base + max(0, item.get("local_offset", 0))
-        item.pop("local_offset", None)
-
-    for item in extract.get("claims", []):
-        item["absolute_offset"] = base + max(0, item.get("local_offset", 0))
-        item.pop("local_offset", None)
+    for key in ("entities", "concepts", "claims"):
+        for item in extract.get(key, []):
+            item["absolute_offset"] = _absolute_offset(item.get("local_offset"), chunk)
+            item.pop("local_offset", None)
 
     return extract
 

@@ -10,7 +10,7 @@ from app.ai.providers.anthropic_provider import (
     _stop_reason,
     model_accepts_sampling,
 )
-from app.ai.providers.base import LLMGeneration, ProviderConfig
+from app.ai.providers.base import LLMGeneration, ProviderConfig, ProviderType
 
 
 def _block(kind, **kw):
@@ -135,6 +135,144 @@ def test_sampling_gate_covers_current_model_ids():
     # Still accepted on these.
     for mid in ("claude-haiku-4-5", "claude-sonnet-4-6", "claude-opus-4-6"):
         assert model_accepts_sampling(mid) is True, mid
+
+
+# --------------------------------------------------------------------------- #
+# Vision captions (#90 item 5)
+# --------------------------------------------------------------------------- #
+
+def _vision(response):
+    from app.ai.providers.anthropic_provider import AnthropicVision
+
+    vision = AnthropicVision(ProviderConfig(
+        provider=ProviderType.ANTHROPIC, model_id="claude-opus-4-8",
+    ))
+
+    class _Messages:
+        def __init__(self):
+            self.kwargs = {}
+
+        async def create(self, **kwargs):
+            self.kwargs.update(kwargs)
+            return response
+
+    messages = _Messages()
+    vision._client = SimpleNamespace(messages=messages)
+    return vision, messages
+
+
+@pytest.mark.asyncio
+async def test_a_caption_cut_off_at_the_cap_is_raised_not_stored():
+    """analyze_image is the only path a diagram's content ever takes into the wiki.
+
+    The caption becomes the image's searchable text and is embedded, so a description that
+    stops mid-step is stored as if it were the whole diagram. The cap was 1024 tokens
+    against a prompt that asks the model to "explain the meaning and steps".
+    """
+    from app.ai.providers.base import LLMOutputTruncated
+
+    response = SimpleNamespace(
+        content=[_block("text", text="Step 1 do X. Step 2 do")],
+        stop_reason="max_tokens",
+    )
+    vision, messages = _vision(response)
+
+    with pytest.raises(LLMOutputTruncated) as raised:
+        await vision.analyze_image(b"\x89PNG", "image/png")
+
+    assert raised.value.partial == "Step 1 do X. Step 2 do"
+    assert messages.kwargs["max_tokens"] >= 4096
+
+
+@pytest.mark.asyncio
+async def test_a_complete_caption_is_returned():
+    response = SimpleNamespace(
+        content=[_block("text", text="A flowchart with three steps.")],
+        stop_reason="end_turn",
+    )
+    vision, _ = _vision(response)
+
+    assert await vision.analyze_image(b"\x89PNG", "image/png") == (
+        "A flowchart with three steps."
+    )
+
+
+@pytest.mark.asyncio
+async def test_a_caption_split_across_blocks_keeps_every_block():
+    """content[0].text lost everything after the first block on the vision path too."""
+    response = SimpleNamespace(
+        content=[
+            _block("thinking", thinking="reading the diagram"),
+            _block("text", text="Step 1. "),
+            _block("text", text="Step 2."),
+        ],
+        stop_reason="end_turn",
+    )
+    vision, _ = _vision(response)
+
+    assert await vision.analyze_image(b"\x89PNG", "image/png") == "Step 1. Step 2."
+
+
+# --------------------------------------------------------------------------- #
+# Usage reporting
+# --------------------------------------------------------------------------- #
+
+@pytest.mark.asyncio
+async def test_cache_token_counts_travel_with_the_rest_of_the_usage(monkeypatch):
+    """cache_read_input_tokens is the only evidence a breakpoint took effect."""
+    response = SimpleNamespace(
+        content=[_block("text", text="ok")],
+        stop_reason="end_turn",
+        usage=SimpleNamespace(
+            input_tokens=12, output_tokens=3,
+            cache_read_input_tokens=8192, cache_creation_input_tokens=0,
+        ),
+    )
+
+    class _Messages:
+        async def create(self, **_kwargs):
+            return response
+
+    llm = AnthropicLLM(ProviderConfig(
+        provider=ProviderType.ANTHROPIC, model_id="claude-opus-4-8",
+    ))
+    monkeypatch.setattr(
+        AnthropicLLM, "client",
+        property(lambda self: SimpleNamespace(messages=_Messages())),
+    )
+
+    result = await llm.generate_detailed("hello")
+
+    assert result.usage == {
+        "input_tokens": 12, "output_tokens": 3,
+        "cache_read_input_tokens": 8192, "cache_creation_input_tokens": 0,
+    }
+
+
+@pytest.mark.asyncio
+async def test_usage_without_cache_fields_omits_them(monkeypatch):
+    """A provider proxy that does not report caching must not gain zeroed keys."""
+    response = SimpleNamespace(
+        content=[_block("text", text="ok")],
+        stop_reason="end_turn",
+        usage=SimpleNamespace(input_tokens=12, output_tokens=3),
+    )
+
+    class _Messages:
+        async def create(self, **_kwargs):
+            return response
+
+    llm = AnthropicLLM(ProviderConfig(
+        provider=ProviderType.ANTHROPIC, model_id="claude-opus-4-8",
+    ))
+    monkeypatch.setattr(
+        AnthropicLLM, "client",
+        property(lambda self: SimpleNamespace(messages=_Messages())),
+    )
+
+    result = await llm.generate_detailed("hello")
+
+    assert result.usage == {"input_tokens": 12, "output_tokens": 3}
 
 
 # --------------------------------------------------------------------------- #

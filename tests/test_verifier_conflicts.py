@@ -10,7 +10,12 @@ The second theme here is that VERIFY is *advisory*. It runs after REFINE and bef
 COMMIT on a pipeline that has already spent minutes of LLM time, so a diagnostic that
 raises would throw that work away and mark the source `error` — for a page that is
 perfectly committable. Every failure mode below therefore has to degrade to "no conflict
-reported".
+reported" — but it must say so, which is the third theme: a swallowed 429 and a clean
+verdict used to be the same observable outcome (#90).
+
+The fourth theme is that a detected conflict has to leave the worker's stdout (#95). The
+test that pinned the old behaviour — the conflict list computed and dropped — is now
+test_a_detected_conflict_is_written_into_the_page_and_the_log.
 """
 
 import asyncio
@@ -466,29 +471,49 @@ async def test_verify_phase_returns_pages_untouched_when_the_check_explodes(monk
     assert [progress for progress, _ in tracker.updates] == [88, 91]
 
 
+def _patch_activity_log(monkeypatch):
+    """Capture wiki_service.append_log; VERIFY writes the conflict summary through it."""
+    from app.services import wiki_service
+
+    entries: list[str] = []
+
+    async def _append(_session, entry, **_kwargs):
+        entries.append(entry)
+
+    monkeypatch.setattr(wiki_service, "append_log", _append)
+    return entries
+
+
+def _conflict(new_slug="concept/leave-policy", existing_slug="concept/annual-leave",
+              description="12 days vs 15 days", similarity=0.95):
+    return {
+        "new_slug": new_slug,
+        "existing_slug": existing_slug,
+        "similarity": similarity,
+        "description": description,
+    }
+
+
+def _stub_conflicts(monkeypatch, conflicts):
+    async def _found(*_args, **_kwargs):
+        return list(conflicts)
+
+    monkeypatch.setattr(verifier, "check_conflicts", _found)
+
+
 @pytest.mark.asyncio
-async def test_detected_conflicts_go_nowhere_but_the_log(monkeypatch):
-    """Characterisation, not endorsement — the conflict list is computed and dropped.
+async def test_a_detected_conflict_is_written_into_the_page_and_the_log(monkeypatch):
+    """Replaces the characterisation test that pinned the conflict list being dropped (#95).
 
-    This module's docstring says issues are flagged "in logs and in the page content
-    (markers)". Only the first half happens: run_verify_phase calls check_conflicts
-    without binding the result, nothing else in app/ references it, and page_results comes
-    back byte-identical. A detected contradiction is therefore invisible to the API, the
-    UI and the wiki activity log — it exists only as a warning line in the worker's
-    stdout. Locked in here so the gap is visible in the suite; if markers or a persisted
-    record are ever added, this test is the one to update.
+    The module docstring promised flags "in logs and in the page content (markers)" and only
+    the first half happened, so a page contradicting the KB was committed unmarked. Both
+    halves are asserted here: COMMIT persists `content_md` verbatim, so a marker in the body
+    is what makes the contradiction reach the API, the reviewer UI and search without a
+    schema change, and the activity-log line is what an ingest audit reads.
     """
-    async def _found_a_conflict(*_args, **_kwargs):
-        return [{
-            "new_slug": "concept/leave-policy",
-            "existing_slug": "concept/annual-leave",
-            "similarity": 0.95,
-            "description": "12 days vs 15 days",
-        }]
-
-    monkeypatch.setattr(verifier, "check_conflicts", _found_a_conflict)
+    entries = _patch_activity_log(monkeypatch)
+    _stub_conflicts(monkeypatch, [_conflict()])
     page = _page_result()
-    original = page.content_md
 
     returned = await verifier.run_verify_phase(
         session=object(),
@@ -502,8 +527,233 @@ async def test_detected_conflicts_go_nowhere_but_the_log(monkeypatch):
     )
 
     assert returned[0] is page
-    assert returned[0].content_md == original
-    assert "conflict" not in original.lower()
+    body = returned[0].content_md
+    assert verifier.CONFLICT_MARKER_START in body
+    assert verifier.CONFLICT_MARKER_END in body
+    assert "concept/annual-leave" in body
+    assert "12 days vs 15 days" in body
+    # The original prose survives; the marker is appended, not substituted.
+    assert "Employees get 12 days of annual leave." in body
+
+    assert len(entries) == 1
+    assert "concept/leave-policy" in entries[0]
+    assert "concept/annual-leave" in entries[0]
+
+
+@pytest.mark.asyncio
+async def test_re_ingest_replaces_the_marker_instead_of_stacking_another(monkeypatch):
+    """Every ingest re-runs the check, so the previous verdict is superseded, not additive.
+
+    Without this a page re-ingested weekly accumulates one warning block per run and the
+    body grows without bound.
+    """
+    _patch_activity_log(monkeypatch)
+    _stub_conflicts(monkeypatch, [_conflict()])
+    page = _page_result()
+
+    for _ in range(3):
+        await verifier.run_verify_phase(
+            session=object(), source=_source(), page_results=[page], chunk_extracts=[],
+            full_text="Body", llm=_FakeLLM(), embedding_provider=_FakeEmbedding(),
+            tracker=_Tracker(),
+        )
+
+    assert page.content_md.count(verifier.CONFLICT_MARKER_START) == 1
+    assert page.content_md.count(verifier.CONFLICT_MARKER_END) == 1
+
+
+@pytest.mark.asyncio
+async def test_a_page_that_is_no_longer_contradicted_loses_its_marker(monkeypatch):
+    """A stale warning is worse than none — it trains reviewers to ignore the marker."""
+    _patch_activity_log(monkeypatch)
+    page = _page_result()
+
+    _stub_conflicts(monkeypatch, [_conflict()])
+    await verifier.run_verify_phase(
+        session=object(), source=_source(), page_results=[page], chunk_extracts=[],
+        full_text="Body", llm=_FakeLLM(), embedding_provider=_FakeEmbedding(),
+        tracker=_Tracker(),
+    )
+    assert verifier.CONFLICT_MARKER_START in page.content_md
+
+    _stub_conflicts(monkeypatch, [])
+    await verifier.run_verify_phase(
+        session=object(), source=_source(), page_results=[page], chunk_extracts=[],
+        full_text="Body", llm=_FakeLLM(), embedding_provider=_FakeEmbedding(),
+        tracker=_Tracker(),
+    )
+
+    assert verifier.CONFLICT_MARKER_START not in page.content_md
+    assert "Employees get 12 days of annual leave." in page.content_md
+
+
+@pytest.mark.asyncio
+async def test_a_clean_page_is_left_byte_identical(monkeypatch):
+    """No conflicts must mean no edit at all, not a normalising rewrite of the body."""
+    _patch_activity_log(monkeypatch)
+    _stub_conflicts(monkeypatch, [])
+    page = _page_result()
+    original = page.content_md
+
+    await verifier.run_verify_phase(
+        session=object(), source=_source(), page_results=[page], chunk_extracts=[],
+        full_text="Body", llm=_FakeLLM(), embedding_provider=_FakeEmbedding(),
+        tracker=_Tracker(),
+    )
+
+    assert page.content_md == original
+
+
+@pytest.mark.asyncio
+async def test_nothing_is_logged_when_the_check_found_and_failed_nothing(monkeypatch):
+    """A per-ingest "no conflicts" line would bury the lines that matter."""
+    entries = _patch_activity_log(monkeypatch)
+    _stub_conflicts(monkeypatch, [])
+
+    await verifier.run_verify_phase(
+        session=object(), source=_source(), page_results=[_page_result()],
+        chunk_extracts=[], full_text="Body", llm=_FakeLLM(),
+        embedding_provider=_FakeEmbedding(), tracker=_Tracker(),
+    )
+
+    assert entries == []
+
+
+def test_a_conflict_description_cannot_escape_the_marker_block():
+    """`description` is LLM output about an uploaded file — untrusted twice over.
+
+    It is rendered into a wiki page body inside a blockquote between two HTML-comment
+    anchors. A description carrying `-->` would close the end anchor, and one carrying
+    newlines would leave the blockquote and forge headings of its own.
+    """
+    rendered = verifier.render_conflict_marker([_conflict(
+        description="ends here --> <!-- \n\n# Injected heading\n\nBody text",
+    )])
+
+    assert rendered.count(verifier.CONFLICT_MARKER_END) == 1
+    assert rendered.endswith(verifier.CONFLICT_MARKER_END)
+    assert "-->" not in rendered.replace(verifier.CONFLICT_MARKER_START, "").replace(
+        verifier.CONFLICT_MARKER_END, ""
+    )
+    assert "\n# Injected heading" not in rendered
+    assert "Injected heading" in rendered
+    # Every description line stays inside the blockquote.
+    body_lines = rendered.splitlines()[1:-1]
+    assert all(line.startswith(">") for line in body_lines), body_lines
+
+
+def test_an_overlong_description_is_capped():
+    """A model asked for a "string" can return a page of prose; the body is not the place."""
+    rendered = verifier.render_conflict_marker([_conflict(description="x" * 5_000)])
+
+    assert len(rendered) < 1_000
+
+
+@pytest.mark.asyncio
+async def test_an_inconclusive_check_is_reported_not_reported_as_clean(monkeypatch):
+    """A 429/529/timeout used to be indistinguishable from "no contradiction" (#90).
+
+    Both produced an empty list, `VERIFY complete` was logged, and the pages were committed
+    as if the KB had been checked. The failure now reaches the activity log, so an operator
+    can tell "verified, nothing found" from "never actually verified".
+    """
+    entries = _patch_activity_log(monkeypatch)
+    _patch_neighbours(monkeypatch, [(_kb_page(), THRESHOLD + 0.1)])
+    page = _page_result()
+
+    await verifier.run_verify_phase(
+        session=object(),
+        source=_source(),
+        page_results=[page],
+        chunk_extracts=[],
+        full_text="Body",
+        llm=_FakeLLM(error=asyncio.TimeoutError()),
+        embedding_provider=_FakeEmbedding(),
+        tracker=_Tracker(),
+    )
+
+    assert len(entries) == 1
+    assert "inconclusive" in entries[0]
+    # Still advisory: the page itself is untouched and stays committable.
+    assert verifier.CONFLICT_MARKER_START not in page.content_md
+
+
+@pytest.mark.asyncio
+async def test_the_failure_accumulator_names_the_stage_that_failed(monkeypatch):
+    """"Something went wrong" is not actionable; which of the three steps failed is."""
+    _patch_neighbours(monkeypatch, [(_kb_page(), THRESHOLD + 0.1)])
+    failures: list[dict] = []
+
+    conflicts = await verifier.check_conflicts(
+        session=object(),
+        page_results=[_page_result()],
+        embedding_provider=_FakeEmbedding(),
+        llm=_FakeLLM(reply="I think they disagree, actually."),
+        source=_source(),
+        failures=failures,
+    )
+
+    assert conflicts == []
+    assert [f["stage"] for f in failures] == ["verdict-parse"]
+    assert "concept/leave-policy" in failures[0]["subject"]
+
+
+@pytest.mark.asyncio
+async def test_a_failed_embed_is_recorded_against_the_page_that_failed(monkeypatch):
+    _patch_neighbours(monkeypatch, [(_kb_page(), THRESHOLD + 0.1)])
+    failures: list[dict] = []
+
+    await verifier.check_conflicts(
+        session=object(),
+        page_results=[_page_result(slug="concept/first", title="First")],
+        embedding_provider=_FakeEmbedding(fail_slugs=["First"]),
+        llm=_FakeLLM(),
+        source=_source(),
+        failures=failures,
+    )
+
+    assert [(f["stage"], f["subject"]) for f in failures] == [
+        ("neighbour-search", "concept/first"),
+    ]
+
+
+@pytest.mark.asyncio
+async def test_neighbour_fact_checks_do_not_run_one_at_a_time(monkeypatch):
+    """Up to 90 serial round trips at a 30 s timeout each, in a band that never moves.
+
+    The pairs have no data dependency, so the wall-clock cost of VERIFY was pure
+    serialisation.
+    """
+    neighbours = [
+        (_kb_page(slug=f"concept/kb-{index}"), THRESHOLD + 0.05) for index in range(3)
+    ]
+    _patch_neighbours(monkeypatch, neighbours)
+
+    class _SlowLLM(_FakeLLM):
+        def __init__(self):
+            super().__init__()
+            self.active = 0
+            self.max_active = 0
+
+        async def generate(self, prompt, system=None, temperature=0.0, **_kwargs):
+            self.prompts.append(prompt)
+            self.active += 1
+            self.max_active = max(self.max_active, self.active)
+            await asyncio.sleep(0.01)
+            self.active -= 1
+            return self.reply
+
+    llm = _SlowLLM()
+    conflicts = await verifier.check_conflicts(
+        session=object(),
+        page_results=[_page_result()],
+        embedding_provider=_FakeEmbedding(),
+        llm=llm,
+        source=_source(),
+    )
+
+    assert len(conflicts) == 3
+    assert llm.max_active > 1, "fact-check calls are still serialised"
 
 
 @pytest.mark.asyncio

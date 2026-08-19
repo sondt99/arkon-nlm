@@ -16,6 +16,14 @@ class FakeLLM:
         self.fail_first = False
         self.prompt_lengths = []
 
+    def cacheable_prefix_min_tokens(self):
+        """No prompt caching — same answer LLMProvider's default gives.
+
+        Keeps every scenario below on the single-block generate() path, so prompt lengths
+        stay comparable and these tests keep measuring concurrency and retry only.
+        """
+        return None
+
     async def generate(self, prompt, **_kwargs):
         self.calls += 1
         self.prompt_lengths.append(len(prompt))

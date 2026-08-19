@@ -40,7 +40,7 @@ jobs:
         run: pytest
 
   frontend:
-    name: Frontend — lint + typecheck + build
+    name: Frontend — lint + typecheck + test + build
     runs-on: ubuntu-latest
     defaults:
       run:
@@ -58,7 +58,7 @@ jobs:
       - name: Install
         run: npm ci
 
-      # eslint currently reports 86 errors, dominated by react-hooks/set-state-in-effect
+      # eslint currently reports 84 errors, dominated by react-hooks/set-state-in-effect
       # (51) — which is not style debt but the actual state-race class behind the filed
       # frontend bugs. A plain `npm run lint` would fail on arrival; marking it
       # continue-on-error would mean nobody ever looks at it.
@@ -103,6 +103,12 @@ jobs:
       # so it is a hard gate.
       - name: Typecheck
         run: npm run typecheck
+
+      # Unit tests are a hard gate from the start — unlike lint, there is no backlog to
+      # ratchet down. Added with the suite in #63; before that the frontend had no unit
+      # test framework at all, which is how the 401 blindness (#68) shipped.
+      - name: Unit tests
+        run: npm run test
 
       - name: Build
         run: npm run build

@@ -65,7 +65,7 @@ Same shape as documents: `skill:read|create|edit|delete` × `own_dept|all`.
 |---|---|
 | `org:departments:read` / `manage` | Departments |
 | `org:employees:read` / `manage` | People (manage cannot assign `role=admin`, reset passwords, or toggle admin accounts — those require a system admin) |
-| `org:roles:read` / `manage` | Roles |
+| `org:roles:read` / `manage` | Roles (manage cannot grant a permission the caller does not hold) |
 | `org:settings:read` / `manage` | AI keys and models |
 | `org:audit:read` | Audit log |
 | `skill:contribution:review` | Approve or reject skill contributions |
@@ -130,7 +130,15 @@ An `ark_…` token is bound to one employee. Every MCP tool re-resolves that emp
 - `doc:read:own_dept` — their department’s sources plus unscoped/global sources
 - workspace membership — project-scoped sources they belong to
 
-Knowledge-type slugs are **not** a separate token ACL in v0.1.0 (the field exists on the identity object but is not populated). Empty results usually mean department or workspace scope, not a missing KT grant.
+Wiki reads are gated twice more. The token's employee must hold `wiki:read:own_dept` or
+`wiki:read:all`, or the four wiki tools return `Access denied: your token's role does not include
+wiki:read.` And the resolved identity carries a knowledge-type restriction derived from the
+sources that employee can see: unrestricted for `wiki:read:all` and for admins, the KT slugs of
+their visible sources otherwise, and an empty list — meaning **no** wiki access — when they hold no
+`wiki:read` at all. `read_wiki_index` returns a catalog filtered the same way.
+
+So an empty result can mean any of: department scope, workspace scope, or a knowledge type this
+token cannot reach.
 
 Employees can mint or revoke their own token under **Profile**. Admins can also mint/revoke from **Employees**.
 

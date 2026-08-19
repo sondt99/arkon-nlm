@@ -261,6 +261,7 @@ class GoogleVision(VisionProvider):
             )
 
         # Retry logic for transient network errors
+        last_exc: Optional[Exception] = None
         for attempt in range(3):
             try:
                 response = await self.client.aio.models.generate_content(
@@ -276,9 +277,19 @@ class GoogleVision(VisionProvider):
                 return response.text.strip() if response.text else ""
             except Exception as e:
                 logger.warning(f"Google Vision attempt {attempt + 1} failed: {e}")
+                last_exc = e
                 if attempt < 2:
                     await asyncio.sleep(2)
-        return ""
+        # RAISE, do not `return ""`. An empty caption is indistinguishable from a successful
+        # one to every consumer: `caption_images_task` counted it as captioned, so its
+        # `if captioned == 0: raise` could never fire, and the resume filter
+        # `SourceImage.caption.is_(None)` stopped matching because "" is not NULL — so the
+        # retry found nothing to do and the images stayed permanently uncaptioned. A total
+        # vision outage looked like a completed job with no way back.
+        # AnthropicVision has always propagated; this brings the other two in line.
+        raise RuntimeError(
+            f"Google Vision failed after 3 attempts: {last_exc}"
+        ) from last_exc
 
     async def test_connection(self) -> tuple[bool, str]:
         try:

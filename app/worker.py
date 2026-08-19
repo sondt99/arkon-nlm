@@ -1271,6 +1271,13 @@ async def caption_images_task(ctx: dict, source_id: str):
                     vision_provider.analyze_image(img_bytes, content_type, prompt=vision_prompt),
                     timeout=per_image_timeout,
                 )
+                # A blank caption is not a caption. Persisting "" marked the image done and
+                # made it invisible to this task's own resume filter
+                # (`SourceImage.caption.is_(None)`), because "" is not NULL — so the image
+                # was permanently uncaptioned with nothing recording why. Leaving the column
+                # NULL is what lets the next run pick it up.
+                if not (caption or "").strip():
+                    raise ValueError("vision provider returned an empty caption")
                 # Each image gets its own session — no concurrent session access.
                 async with async_session_factory() as upd_session:
                     await upd_session.execute(

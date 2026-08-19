@@ -11,6 +11,7 @@ from loguru import logger
 
 from app.config import settings
 from app.mcp.server import create_mcp_server
+from app.services.upload_guard import BodySizeLimitMiddleware
 
 # Create the MCP server and its HTTP app (lifespan must be composed with FastAPI)
 mcp_server = create_mcp_server()
@@ -23,7 +24,7 @@ async def seed_default_admin():
 
     from app.database import async_session_factory
     from app.database.models import Department, Employee
-    from app.services.auth_service import hash_password
+    from app.services.auth_service import hash_password_async
 
     try:
         async with async_session_factory() as session:
@@ -38,11 +39,13 @@ async def seed_default_admin():
             session.add(dept)
             await session.flush()
 
-            # Create admin user from .env
+            # Create admin user from .env. bcrypt at cost 12 is ~250 ms of uninterruptible
+            # CPU, and this runs on the event loop during lifespan startup, so the inline
+            # form delayed every other startup step and the first requests behind it.
             admin = Employee(
                 name="Admin",
                 email=settings.default_admin_email,
-                password_hash=hash_password(settings.default_admin_password),
+                password_hash=await hash_password_async(settings.default_admin_password),
                 role="admin",
                 department_id=dept.id,
             )
@@ -116,6 +119,14 @@ app = FastAPI(
     version="0.1.0",
     lifespan=lifespan,
 )
+
+# --- Request body size limit ---
+# Added before CORS so it ends up *inside* CORSMiddleware: middleware added later is
+# outermost, and a 413 emitted outside CORS would reach a browser without the
+# Access-Control-Allow-Origin header, i.e. as an opaque network error rather than a
+# readable status. Route-level guards cannot replace this — they only run once the ASGI
+# server has already received the whole body.
+app.add_middleware(BodySizeLimitMiddleware)
 
 # --- CORS ---
 logger.info(f"Allowed CORS origins: {settings.cors_origin_list}")

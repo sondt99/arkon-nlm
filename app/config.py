@@ -68,6 +68,51 @@ class Settings(BaseSettings):
         default=200,
         description="Cap for .zip archive uploads before extraction.",
     )
+    max_request_body_mb: int = Field(
+        default=256,
+        description="Hard cap on any request body, enforced by BodySizeLimitMiddleware "
+                    "before a route runs. The route-level guards only fire after the ASGI "
+                    "server has already received the whole body, so nginx's 500 MB was the "
+                    "real limit. Must stay above max_zip_upload_mb plus multipart framing.",
+    )
+
+    # --- Zip extraction (app/services/zip_service.py) ---
+    # Caps on the *decompressed* archive. The upload cap above bounds the compressed
+    # bytes only, and zeroed files compress ~1000:1, so a 200 MB archive can still
+    # inflate to gigabytes.
+    max_zip_entries: int = Field(
+        default=50,
+        description="Maximum number of files extracted from one archive; bounds DB "
+                    "connection and worker-queue pressure from a many-entry archive.",
+    )
+    max_zip_member_mb: int = Field(
+        default=50,
+        description="Per-entry decompressed cap. Enforced on bytes actually inflated, "
+                    "not on the archive's self-declared entry size.",
+    )
+    max_zip_total_mb: int = Field(
+        default=500,
+        description="Aggregate decompressed cap for one archive. Entries are spooled to "
+                    "a temp file rather than held on the heap, so this bounds disk, not RSS.",
+    )
+
+    # --- Skill contribution workspaces ---
+    max_contribution_text_kb: int = Field(
+        default=1024,
+        description="Cap on PutFileRequest.content for the text PUT path. It arrives as a "
+                    "JSON string, so no multipart guard applies to it.",
+    )
+    max_contribution_total_mb: int = Field(
+        default=25,
+        description="Cumulative byte budget for one contribution's workspace. Per-file caps "
+                    "bound a single request; without this a contributor can repeat an "
+                    "under-cap write under fresh paths until storage fills.",
+    )
+    max_contribution_files: int = Field(
+        default=200,
+        description="Cumulative file-count budget for one contribution's workspace. Above "
+                    "the 100-entry cap on ZIP-created contributions so those stay editable.",
+    )
 
     # --- MCP tokens ---
     mcp_token_expiry_days: int = Field(
@@ -192,6 +237,22 @@ class Settings(BaseSettings):
             raise ValueError(
                 "DATABASE_URL still embeds a default password. Set a unique value in your .env file."
             )
+        return self
+
+    @model_validator(mode="after")
+    def validate_upload_limit_relationships(self):
+        # A body cap below a route cap makes the route cap unreachable: the middleware
+        # would 413 an upload the endpoint is documented to accept, and the failure would
+        # only show up for users uploading near the route limit.
+        largest_route_cap = max(self.max_upload_mb, self.max_zip_upload_mb)
+        if self.max_request_body_mb < largest_route_cap:
+            raise ValueError(
+                f"MAX_REQUEST_BODY_MB ({self.max_request_body_mb}) is below the largest "
+                f"per-route upload cap ({largest_route_cap} MB), so those uploads could "
+                "never succeed. Raise it above the route caps."
+            )
+        if self.max_zip_member_mb > self.max_zip_total_mb:
+            raise ValueError("MAX_ZIP_MEMBER_MB must not exceed MAX_ZIP_TOTAL_MB")
         return self
 
     @model_validator(mode="after")

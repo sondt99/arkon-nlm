@@ -18,6 +18,7 @@ from sqlalchemy import exists, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
+from app.config import settings
 from app.database import get_db
 from app.database.models import (
     Employee,
@@ -461,7 +462,9 @@ async def upload_source(
             f"File type '{ext}' is not supported. Allowed: {', '.join(sorted(ALLOWED_EXTENSIONS))}",
         )
 
-    file_data = await file.read()
+    from app.services.upload_guard import read_upload_bounded
+
+    file_data = await read_upload_bounded(file, what="Upload")
 
     # Parse department_ids
     dept_uuids: list[uuid.UUID] = []
@@ -577,7 +580,11 @@ async def upload_zip_archive(
         db, user, scope_type, scope_id
     )
 
-    zip_data = await file.read()
+    from app.services.upload_guard import read_upload_bounded
+
+    zip_data = await read_upload_bounded(
+        file, limit_mb=settings.max_zip_upload_mb, what="Archive"
+    )
 
     try:
         result = extract_zip(zip_data)

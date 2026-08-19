@@ -296,6 +296,21 @@ async def generate_reply(
         prompt = question
 
     llm = await registry.get_chatbot_llm()
+
+    # Release the database connection before blocking on the provider.
+    #
+    # Every read this function needs (config flag, RAG pages, history) is already done, and
+    # generation can take up to chat_generation_timeout — 240 seconds by default. Holding
+    # the pooled connection across that window left it `idle in transaction`, so with
+    # pool_size=20 + max_overflow=10 roughly 30 concurrent chats exhausted the pool and
+    # every other endpoint began failing on connection checkout. The long-lived read
+    # transactions also blocked autovacuum.
+    #
+    # Committing here ends the read transaction; the caller opens a fresh one to persist
+    # the assistant message. `pages` and `system_prompt` are already materialised, so
+    # nothing below touches the expired ORM objects.
+    await session.commit()
+
     llm_started = time.perf_counter()
     deadline = asyncio.get_running_loop().time() + settings.chat_generation_timeout
     answer = await asyncio.wait_for(

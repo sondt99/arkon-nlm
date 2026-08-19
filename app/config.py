@@ -50,6 +50,18 @@ class Settings(BaseSettings):
     minio_secure: bool = Field(default=False)
     minio_presign_expiry_hours: int = Field(default=24)
 
+    # --- Uploads ---
+    max_upload_mb: int = Field(
+        default=100,
+        description="Per-file upload cap enforced in app/services/upload_guard.py. "
+                    "nginx allows 500 MB on /api/, and the API is one uvicorn process "
+                    "with a 2 GB container limit, so an unbounded read was an OOM.",
+    )
+    max_zip_upload_mb: int = Field(
+        default=200,
+        description="Cap for .zip archive uploads before extraction.",
+    )
+
     # --- MCP tokens ---
     mcp_token_expiry_days: int = Field(
         default=90,

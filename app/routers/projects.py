@@ -586,7 +586,9 @@ async def upload_workspace_source(
     await _require_workspace_role(db, user, project_id, WorkspaceRole.EDITOR.value)
 
     pid = uuid.UUID(project_id)
-    file_data = await file.read()
+    from app.services.upload_guard import read_upload_bounded
+
+    file_data = await read_upload_bounded(file, what="Upload")
     file_name = file.filename or "unknown"
 
     source = Source(

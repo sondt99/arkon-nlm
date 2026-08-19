@@ -29,10 +29,16 @@ class _Session:
     def __init__(self, rows):
         self.rows = rows
         self.statement = None
+        self.commits = 0
 
     async def execute(self, statement):
         self.statement = statement
         return _Result(self.rows)
+
+    async def commit(self):
+        # generate_reply commits before the provider call so the pooled connection is not
+        # held `idle in transaction` for the whole generation window (up to 240s).
+        self.commits += 1
 
 
 class _LLM:

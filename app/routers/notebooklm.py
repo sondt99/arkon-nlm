@@ -1007,8 +1007,9 @@ async def nlm_upload_source(
     import tempfile
 
     from app.services.notebooklm_service import add_nlm_source_file
+    from app.services.upload_guard import read_upload_bounded
 
-    content = await file.read()
+    content = await read_upload_bounded(file, what="Upload")
     suffix = Path(file.filename or "upload").suffix or ".bin"
     tmp_path = None
     try:

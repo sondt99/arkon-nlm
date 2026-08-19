@@ -455,7 +455,9 @@ async def upload_skill_contribution_file(
         if contribution.status == SkillContributionStatus.PENDING.value:
             contribution.status = SkillContributionStatus.DRAFT.value
             
-        content = await file.read()
+        from app.services.upload_guard import read_upload_bounded
+
+        content = await read_upload_bounded(file, what="File")
         storage_service.upload_file(full_path, content, content_type=file.content_type)
         await db.commit()
         return {"status": "ok", "path": file_path, "contribution_status": contribution.status}

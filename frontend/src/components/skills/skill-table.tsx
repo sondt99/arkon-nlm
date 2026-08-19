@@ -25,7 +25,7 @@ import { EmptyState } from "@/components/shared/empty-state";
 import { LoadingState } from "@/components/shared/loading-state";
 import { SaharaCard } from "@/components/ui/sahara-card";
 import { Skill } from "./skill-card";
-import { api, apiUpload } from "@/lib/api";
+import { api } from "@/lib/api";
 import {
   Dialog,
   DialogContent,
@@ -39,10 +39,8 @@ import {
   SelectContent,
   SelectItem,
   SelectTrigger,
-  SelectValue,
 } from "@/components/ui/select";
 import { Checkbox } from "@/components/ui/checkbox";
-import { SkillDetailDialog } from "./skill-detail-dialog";
 
 type Department = {
   id: string;
@@ -74,7 +72,6 @@ export function SkillTable({
 }: SkillTableProps) {
   const { canAccess } = useAuth();
   const [editSkill, setEditSkill] = React.useState<Skill | null>(null);
-  const [uploadSkill, setUploadSkill] = React.useState<Skill | null>(null);
 
   return (
     <div className="flex flex-col gap-2">
@@ -260,13 +257,6 @@ export function SkillTable({
           onSaved={() => { setEditSkill(null); onRefresh(); }}
         />
       )}
-      {uploadSkill && (
-        <UploadVersionDialog
-          skill={uploadSkill}
-          onClose={() => setUploadSkill(null)}
-          onUploaded={() => { setUploadSkill(null); onRefresh(); }}
-        />
-      )}
     </div>
   );
 }
@@ -424,98 +414,6 @@ function EditSkillDialog({
               ) : "Save Changes"}
             </Button>
           </div>
-        </div>
-      </DialogContent>
-    </Dialog>
-  );
-}
-
-function UploadVersionDialog({
-  skill,
-  onClose,
-  onUploaded,
-}: {
-  skill: Skill;
-  onClose: () => void;
-  onUploaded: () => void;
-}) {
-  const [isUploading, setIsUploading] = React.useState(false);
-  const [error, setError] = React.useState("");
-  const fileInputRef = React.useRef<HTMLInputElement>(null);
-
-  const handleUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (!file) return;
-
-    if (!file.name.endsWith(".zip")) {
-      setError("Please select a ZIP file");
-      return;
-    }
-
-    setIsUploading(true);
-    setError("");
-
-    const formData = new FormData();
-    formData.append("file", file);
-
-    const uploadUrl = `/api/skills/${skill.slug}/reupload`;
-
-    try {
-      await apiUpload(uploadUrl, formData);
-      onUploaded();
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "Failed to upload");
-    } finally {
-      setIsUploading(false);
-      if (fileInputRef.current) fileInputRef.current.value = "";
-    }
-  };
-
-  return (
-    <Dialog open onOpenChange={onClose}>
-      <DialogContent className="sm:max-w-md rounded-2xl">
-        <DialogHeader>
-          <DialogTitle className="text-xl font-serif">Upload New Version</DialogTitle>
-        </DialogHeader>
-
-        <div className="flex flex-col gap-6 mt-4 items-center py-4">
-          <div className="w-20 h-20 rounded-full bg-primary/5 flex items-center justify-center text-primary animate-in zoom-in-50 duration-500">
-            <span className="material-symbols-outlined text-4xl">cloud_upload</span>
-          </div>
-
-          <div className="text-center space-y-1">
-            <p className="text-sm font-medium text-foreground">Update <span className="text-primary font-bold">{skill.name}</span></p>
-            <p className="text-xs text-muted-foreground px-8">Upload a new ZIP package to replace the current files and create a new version.</p>
-          </div>
-
-          <div className="w-full">
-            <Button
-              className="w-full h-12 rounded-xl bg-primary text-primary-foreground font-bold shadow-lg shadow-primary/20 gap-2"
-              onClick={() => fileInputRef.current?.click()}
-              disabled={isUploading}
-            >
-              {isUploading ? (
-                <span className="material-symbols-outlined animate-spin text-lg">progress_activity</span>
-              ) : (
-                <span className="material-symbols-outlined text-lg">upload_file</span>
-              )}
-              {isUploading ? "Uploading..." : "Select ZIP Package"}
-            </Button>
-            <input
-              type="file"
-              ref={fileInputRef}
-              className="hidden"
-              accept=".zip"
-              onChange={handleUpload}
-            />
-          </div>
-
-          {error && (
-            <div className="w-full text-destructive text-[11px] font-bold bg-destructive/5 px-3 py-2 rounded-xl flex items-center gap-2 border border-destructive/10 animate-in fade-in slide-in-from-top-1">
-              <span className="material-symbols-outlined text-sm">error</span>
-              {error}
-            </div>
-          )}
         </div>
       </DialogContent>
     </Dialog>

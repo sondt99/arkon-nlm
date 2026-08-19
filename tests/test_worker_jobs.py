@@ -12,8 +12,11 @@ assertions. Those catch a reverted edit but cannot tell a working handler from o
 body was commented out; these run the handler.
 """
 
+import ast
 import asyncio
+import inspect
 import os
+import pathlib
 import time
 import uuid
 import zipfile
@@ -775,8 +778,11 @@ async def test_reembed_ignores_a_job_that_is_not_pending(fake_db, monkeypatch):
 
 
 class _FakeVision:
-    def __init__(self, fail_keys=()):
+    def __init__(self, fail_keys=(), blank_keys=()):
         self.fail_keys = set(fail_keys)
+        # A provider that SUCCEEDS but returns nothing usable. Distinct from fail_keys
+        # because it is the case that used to be persisted as a real caption.
+        self.blank_keys = set(blank_keys)
         self.calls: list[str] = []
 
     async def analyze_image(self, data, content_type, prompt=None):
@@ -784,6 +790,8 @@ class _FakeVision:
         self.calls.append(key)
         if key in self.fail_keys:
             raise RuntimeError("vision provider 500")
+        if key in self.blank_keys:
+            return "   "
         return f"caption for {key}"
 
 
@@ -1229,4 +1237,97 @@ def test_every_registered_arq_job_has_a_failure_test_here():
     assert _COVERED_JOBS - registered == set(), (
         "these jobs are no longer registered with any worker; drop them from "
         f"_COVERED_JOBS: {sorted(_COVERED_JOBS - registered)}"
+    )
+
+
+# --------------------------------------------------------------------------- #
+# #122 — vision failure reported as a successful caption
+#
+# `AnthropicVision` propagated its exception; `OpenAIVision` and `GoogleVision` both
+# `return ""` after three failed attempts. That defeated TWO earlier fixes at once:
+# `if captioned == 0: raise` could never fire, and the resume filter
+# `SourceImage.caption.is_(None)` stopped matching because "" is not NULL.
+# --------------------------------------------------------------------------- #
+
+def test_no_vision_provider_returns_a_blank_caption_on_a_failure_path():
+    """The invariant: `analyze_image` must never hand back `""` instead of failing.
+
+    An empty caption is indistinguishable from a successful one to every consumer.
+    `caption_images_task` counted it as captioned, so `if captioned == 0: raise` could never
+    fire, and the resume filter `SourceImage.caption.is_(None)` stopped matching because ""
+    is not NULL — the image stayed permanently uncaptioned with nothing recording why.
+
+    Asserted on the AST, not on source text: a commented-out `return ""` still satisfies a
+    substring search, which is the same trap one level up.
+    """
+    import app.ai.providers.anthropic_provider as a
+    import app.ai.providers.google as g
+    import app.ai.providers.openai_provider as o
+
+    for mod in (a, g, o):
+        tree = ast.parse(pathlib.Path(inspect.getfile(mod)).read_text(encoding="utf-8"))
+        for fn in ast.walk(tree):
+            if not (isinstance(fn, (ast.AsyncFunctionDef, ast.FunctionDef))
+                    and fn.name == "analyze_image"):
+                continue
+            blanks = [
+                n.lineno for n in ast.walk(fn)
+                if isinstance(n, ast.Return)
+                and isinstance(n.value, ast.Constant)
+                and n.value.value == ""
+            ]
+            assert not blanks, (
+                f"{mod.__name__}.analyze_image returns an empty caption at line(s) {blanks}; "
+                "the worker cannot tell that from a real caption"
+            )
+
+
+def test_a_provider_that_swallows_its_retries_must_end_by_raising():
+    """Narrower companion to the above, aimed at the shape the bug actually had.
+
+    AnthropicVision has no try/except and no retry loop, so an exception propagates on its
+    own and its final `return caption` is correct. OpenAI and Google DO catch inside a retry
+    loop, and a caught exception has to be re-raised at the end or it is simply lost.
+    """
+    import app.ai.providers.google as g
+    import app.ai.providers.openai_provider as o
+
+    for mod in (g, o):
+        tree = ast.parse(pathlib.Path(inspect.getfile(mod)).read_text(encoding="utf-8"))
+        for fn in ast.walk(tree):
+            if not (isinstance(fn, (ast.AsyncFunctionDef, ast.FunctionDef))
+                    and fn.name == "analyze_image"):
+                continue
+            assert any(isinstance(n, ast.ExceptHandler) for n in ast.walk(fn)), (
+                f"{mod.__name__} no longer catches; update this test's premise"
+            )
+            assert isinstance(fn.body[-1], ast.Raise), (
+                f"{mod.__name__}.analyze_image catches its retries but ends in "
+                f"{type(fn.body[-1]).__name__} — the caught failure goes nowhere"
+            )
+
+
+@pytest.mark.asyncio
+async def test_a_blank_caption_is_a_failure_not_a_silent_write(fake_db, monkeypatch):
+    """An empty caption written to the row is invisible to the resume filter.
+
+    `SourceImage.caption.is_(None)` is how a retry finds work to do, so persisting "" marks
+    the image done forever. Leaving the column NULL is what makes the next run pick it up.
+    """
+    from app.database.models import Source, SourceImage
+
+    src = fake_db.seed(Source, _source(status="ready", progress=100))
+    _seed_images(fake_db, src.id, 2)
+    _patch_captioning(monkeypatch, _FakeVision(blank_keys={"images/0.png"}))
+
+    await worker.caption_images_task({}, str(src.id))
+
+    rows = [r for r in fake_db.table_rows(SourceImage.__tablename__)
+            if getattr(r, "source_id", None) == src.id]
+    # `== ""` would be vacuous: the fake returns whitespace, which is just as useless as a
+    # caption and just as invisible to `caption.is_(None)`. Assert on blankness, not equality.
+    blanks = [r for r in rows if r.caption is not None and not r.caption.strip()]
+    assert not blanks, (
+        f"{len(blanks)} blank caption(s) persisted; `caption.is_(None)` can never "
+        "re-select those rows, so the images stay uncaptioned forever"
     )

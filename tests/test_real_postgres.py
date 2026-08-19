@@ -328,3 +328,124 @@ async def test_the_1_hop_expansion_cannot_cross_a_workspace_boundary(pg_sessionm
             await s.execute(delete(WikiLink).where(WikiLink.from_slug.in_(slugs)))
             await s.execute(delete(WikiPage).where(WikiPage.slug.in_(slugs)))
             await s.commit()
+
+
+# --------------------------------------------------------------------------- #
+# get_db's commit contract (#136).
+#
+# These exist because I tried to make the commit conditional — "only commit if the request
+# wrote something" — and it LOST DATA. Recorded here as a guard so the next person does not
+# repeat it.
+#
+# A write reaches the transaction by three different routes, and a conditional commit has to
+# detect all of them or silently discard one:
+#
+#   1. ORM add, not flushed        -> session.new is populated
+#   2. ORM add/modify, then flush  -> session.new/dirty are EMPTY (37 handlers do this)
+#   3. Core session.execute(update(...)) -> fires no ORM flush event AND leaves the
+#                                     collections empty
+#
+# My attempt covered 1 and 2 via the `after_flush` event and missed 3 entirely: a handler
+# writing only through a Core UPDATE had its change rolled back. Verified — the row still
+# read "before" afterwards.
+#
+# A future `text("UPDATE ...")` would be a fourth route and would evade any of it. So the
+# unconditional commit stays, and these tests fail if someone makes it conditional and gets
+# any route wrong.
+# --------------------------------------------------------------------------- #
+
+async def test_an_unflushed_orm_write_is_committed(pg_sessionmaker, migrated_postgres):
+    """Route 1: add and return, letting get_db's commit do the flush."""
+    sid = await _write_through_get_db(migrated_postgres, "unflushed", flush=False)
+    await _assert_persisted_then_clean(pg_sessionmaker, sid, "unflushed")
+
+
+async def test_a_flushed_orm_write_is_committed(pg_sessionmaker, migrated_postgres):
+    """Route 2: the shape 37 handlers use. After a flush the collections are EMPTY."""
+    sid = await _write_through_get_db(migrated_postgres, "flushed", flush=True)
+    await _assert_persisted_then_clean(pg_sessionmaker, sid, "flushed")
+
+
+async def test_a_core_dml_write_is_committed(pg_sessionmaker, migrated_postgres):
+    """Route 3 — the one my conditional-commit attempt lost.
+
+    No ORM object is touched, so nothing is dirty and no flush event fires. Only an
+    unconditional commit keeps it.
+    """
+    from sqlalchemy import update
+    from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
+
+    import app.database as db_mod
+
+    engine = create_async_engine(migrated_postgres)
+    maker = async_sessionmaker(engine, expire_on_commit=False)
+    original = db_mod.async_session_factory
+    db_mod.async_session_factory = maker
+    sid = uuid.uuid4()
+    try:
+        async with maker() as s:
+            s.add(Source(id=sid, title="before", source_type="file",
+                         status="ready", progress=0, scope_type="global"))
+            await s.commit()
+
+        agen = db_mod.get_db()
+        session = await agen.__anext__()
+        await session.execute(update(Source).where(Source.id == sid).values(title="after"))
+        assert not session.new and not session.dirty and not session.deleted, (
+            "premise: a Core UPDATE leaves the ORM collections empty, which is why a "
+            "dirty-based commit check discards it"
+        )
+        with pytest.raises(StopAsyncIteration):
+            await agen.__anext__()
+
+        async with maker() as check:
+            row = await check.get(Source, sid)
+            assert row.title == "after", (
+                "a Core UPDATE was rolled back — get_db's commit has been made conditional "
+                "and does not detect Core DML"
+            )
+    finally:
+        db_mod.async_session_factory = original
+        async with maker() as s:
+            await s.execute(delete(Source).where(Source.id == sid))
+            await s.commit()
+        await engine.dispose()
+
+
+async def _write_through_get_db(url: str, title: str, *, flush: bool):
+    """Drive one request through the real get_db dependency and return the row id."""
+    from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
+
+    import app.database as db_mod
+
+    engine = create_async_engine(url)
+    maker = async_sessionmaker(engine, expire_on_commit=False)
+    original = db_mod.async_session_factory
+    db_mod.async_session_factory = maker
+    sid = uuid.uuid4()
+    try:
+        agen = db_mod.get_db()
+        session = await agen.__anext__()
+        session.add(Source(id=sid, title=title, source_type="file",
+                           status="ready", progress=0, scope_type="global"))
+        if flush:
+            await session.flush()
+            assert not session.new and not session.dirty
+        else:
+            assert session.new
+        with pytest.raises(StopAsyncIteration):
+            await agen.__anext__()
+    finally:
+        db_mod.async_session_factory = original
+        await engine.dispose()
+    return sid
+
+
+async def _assert_persisted_then_clean(pg_sessionmaker, sid, title: str):
+    async with pg_sessionmaker() as s:
+        row = await s.get(Source, sid)
+        assert row is not None and row.title == title, (
+            f"a {title} write did not survive get_db — the commit contract is broken"
+        )
+        await s.execute(delete(Source).where(Source.id == sid))
+        await s.commit()

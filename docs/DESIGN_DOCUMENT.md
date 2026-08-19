@@ -476,7 +476,7 @@ stripped, and the question is placed after the fence closes. The optional second
 
 ## 7. RBAC (Hệ thống quyền hạn)
 
-Two realms. Implementation: `app/services/permission_engine.py`, `permissions.py`, `policy_engine.py`.
+Two realms. Implementation: `app/services/permission_engine.py`, `permissions.py`.
 
 ### 7.1 Global
 

@@ -44,6 +44,16 @@ Org permissions look like `org:departments:read` (the third part is the action, 
 | `doc:edit:own_dept` / `:all` | Edit metadata |
 | `doc:delete:own_dept` / `:all` | Delete |
 
+**Knowledge types need the `:all` form, not `:own_dept`.** Creating, renaming and deleting a
+knowledge type require `doc:create:all` / `doc:edit:all` / `doc:delete:all` respectively
+(`app/routers/knowledge_types.py`). A knowledge type is org-wide — every department sees it —
+so `:own_dept` was never the right gate for it, even though the same permission family
+governs the documents inside.
+
+Consequence worth knowing before you debug it: a Contributor or Department Admin holding only
+`doc:create:own_dept` now gets **403** from the knowledge-type screens in the admin UI. That
+is intended (changed in #116), not a regression.
+
 A file with **no** department **and** `scope_type != project` is global: anyone with the matching action can see it. Workspace uploads (`scope_type=project`) have no department rows on purpose — they are **not** global. Only workspace members (or a system admin) can read them.
 
 ### Wiki
@@ -53,7 +63,7 @@ A file with **no** department **and** `scope_type != project` is global: anyone 
 | `wiki:read:own_dept` / `:all` | Read pages |
 | `wiki:write:own_dept` | Propose drafts on global pages |
 | `wiki:write:all` | Direct edit + approve/reject drafts |
-| `wiki:delete:own_dept` / `:all` | **Not currently effective — admin only.** `app/routers/wiki.py` rejects any non-admin after the permission check, so granting this to a custom role does nothing. (`super_admin` appears in that check but exists nowhere else in the codebase.) Tracked in issue #86. |
+| `wiki:delete:own_dept` / `:all` | Effective. A project page needs workspace editor or above; a global page needs `wiki:delete:all`. A caller without access gets **404, not 403** — a 403 would confirm the page exists to someone not entitled to know. Previously this was admin-only in practice: the guard tested for a `super_admin` role that is assigned nowhere, so it reduced to admin, and the page lookup defaulted to global scope so project pages 404'd regardless. Fixed in #116. |
 
 ### Skills
 

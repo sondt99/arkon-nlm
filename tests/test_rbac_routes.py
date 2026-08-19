@@ -998,3 +998,119 @@ async def test_create_employee_audits_the_real_id():
     # bug BOTH are the string "None", so they match and the test passes.
     assert entries[0].resource_id not in (None, "None", "")
     assert entries[0].resource_id == str(out["id"])
+
+
+# --------------------------------------------------------------------------- #
+# Two escalations an independent review found AFTER the first two were closed.
+#
+# Both were invisible to `ensure_no_escalation`, which compares permission STRINGS:
+#   - an MCP token is a credential, not a permission
+#   - `department_id` changes what `:own_dept` resolves to, without changing the string
+# --------------------------------------------------------------------------- #
+
+@pytest.mark.asyncio
+async def test_cannot_mint_an_mcp_token_for_another_employee():
+    """The token carries the target's authority, so this is credential issuance.
+
+    `MCPAuthService.verify_token` resolves an admin's token to `is_admin=True` with every
+    permission and no source restriction, and it is accepted by the MCP server AND the REST
+    Export API. Minting also rotates the victim's existing token, so it doubles as a denial
+    of service on their integration.
+    """
+    actor = _manager(["org:employees:manage"])
+    victim = Employee(
+        id=uuid.uuid4(), name="Admin", email="admin@x", password_hash="h",
+        role="admin", department_id=DEPT_ID,
+    )
+
+    with pytest.raises(HTTPException) as exc:
+        await rbac_router.generate_mcp_token(
+            emp_id=victim.id, db=_FakeSession(victim), _user=actor,
+        )
+
+    assert exc.value.status_code == 403
+
+
+@pytest.mark.asyncio
+async def test_an_admin_may_still_mint_a_token_for_someone_else():
+    admin = SimpleNamespace(id=uuid.uuid4(), role="admin", custom_role=None, custom_role_id=None)
+    target = Employee(
+        id=uuid.uuid4(), name="T", email="t@x", password_hash="h",
+        role="employee", department_id=DEPT_ID,
+    )
+    out = await rbac_router.generate_mcp_token(
+        emp_id=target.id, db=_FakeSession(target), _user=admin,
+    )
+    assert out.token
+
+
+@pytest.mark.asyncio
+async def test_cannot_move_yourself_to_another_department():
+    """`department_id` is what every `:own_dept` permission resolves against.
+
+    The demonstrated attack: an attacker in HR holding
+    {org:employees:manage, doc:read:own_dept} gets False from
+    can_access_document(finance_source), PUTs their own id with Finance's department_id,
+    and gets True. No permission string changed, so ensure_no_escalation saw nothing.
+    """
+    me_id = uuid.uuid4()
+    actor = _manager(["org:employees:manage", "doc:read:own_dept"], emp_id=me_id)
+    me = Employee(
+        id=me_id, name="Me", email="me@x", password_hash="h",
+        role="employee", department_id=DEPT_ID,
+    )
+    finance = uuid.uuid4()
+    body = SimpleNamespace(
+        name=None, email=None, department_id=finance, role=None, password=None,
+        custom_role_id=None, model_fields_set=set(),
+    )
+
+    with pytest.raises(HTTPException) as exc:
+        await rbac_router.update_employee(
+            emp_id=me.id, body=body, db=_FakeSession(me), _user=actor,
+        )
+
+    assert exc.value.status_code == 403
+    assert me.department_id == DEPT_ID, "the write must not land"
+
+
+@pytest.mark.asyncio
+async def test_moving_another_employee_between_departments_still_works():
+    """The routine HR operation this permission exists for must not regress."""
+    actor = _manager(["org:employees:manage"])
+    target = Employee(
+        id=uuid.uuid4(), name="T", email="t@x", password_hash="h",
+        role="employee", department_id=DEPT_ID,
+    )
+    finance = uuid.uuid4()
+    body = SimpleNamespace(
+        name=None, email=None, department_id=finance, role=None, password=None,
+        custom_role_id=None, model_fields_set=set(),
+    )
+
+    await rbac_router.update_employee(
+        emp_id=target.id, body=body, db=_FakeSession(target), _user=actor,
+    )
+
+    assert target.department_id == finance
+
+
+@pytest.mark.asyncio
+async def test_a_no_op_department_write_is_not_refused():
+    """Echoing the current value is not a move, and clients do echo whole objects."""
+    me_id = uuid.uuid4()
+    actor = _manager(["org:employees:manage"], emp_id=me_id)
+    me = Employee(
+        id=me_id, name="Me", email="me@x", password_hash="h",
+        role="employee", department_id=DEPT_ID,
+    )
+    body = SimpleNamespace(
+        name=None, email=None, department_id=DEPT_ID, role=None, password=None,
+        custom_role_id=None, model_fields_set=set(),
+    )
+
+    await rbac_router.update_employee(
+        emp_id=me.id, body=body, db=_FakeSession(me), _user=actor,
+    )
+
+    assert me.department_id == DEPT_ID

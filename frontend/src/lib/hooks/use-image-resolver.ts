@@ -8,6 +8,10 @@ export type ImageResolverState = {
   resolved: Record<string, string>;
   denied: Set<string>;
   loading: boolean;
+  /** The resolve call itself failed. Distinct from "this id is not in `resolved`",
+   *  which the caller renders as a missing image — a transport failure is not the
+   *  same fact as the document referencing an image that does not exist. */
+  failed: boolean;
 };
 
 type ResolveResponse = {
@@ -15,11 +19,21 @@ type ResolveResponse = {
   denied: string[];
 };
 
-const EMPTY: ImageResolverState = {
-  resolved: {},
-  denied: new Set(),
-  loading: false,
+/**
+ * The outcome of one resolve, tagged with the id-set it answers for.
+ *
+ * `loading` is derived from `key !== resolution.key` rather than stored, so it cannot be
+ * left stuck: a stored flag has to be cleared on every exit path, and the failure path
+ * and the superseded-request path are exactly the ones that get missed.
+ */
+type Resolution = {
+  key: string;
+  resolved: Record<string, string>;
+  denied: Set<string>;
+  failed: boolean;
 };
+
+const EMPTY: Resolution = { key: "", resolved: {}, denied: new Set(), failed: false };
 
 /**
  * Resolve `image://<uuid>` references inside wiki content_md to authenticated
@@ -35,73 +49,85 @@ const EMPTY: ImageResolverState = {
  *   - uuids absent from both = unknown / missing
  */
 export function useImageResolver(ids: string[]): ImageResolverState {
-  const [state, setState] = useState<ImageResolverState>(EMPTY);
-  const reqId = useRef(0);
-  const blobUrlsRef = useRef<string[]>([]);
+  const [resolution, setResolution] = useState<Resolution>(EMPTY);
+  /** The object URLs currently handed out via `resolution`. Only these may be revoked. */
+  const liveUrlsRef = useRef<string[]>([]);
 
   // Stable key for dependency comparison (sorted, deduped).
   const key = Array.from(new Set(ids)).sort().join(",");
 
   useEffect(() => {
-    const revokePrevious = () => {
-      for (const url of blobUrlsRef.current) URL.revokeObjectURL(url);
-      blobUrlsRef.current = [];
-    };
+    if (!key) return;
 
-    if (!key) {
-      revokePrevious();
-      setState(EMPTY);
-      return;
-    }
-    const myReq = ++reqId.current;
-    setState((s) => ({ ...s, loading: true }));
+    const controller = new AbortController();
 
     api<ResolveResponse>("/api/wiki/images/resolve", {
       method: "POST",
       body: { ids: key.split(",") },
+      signal: controller.signal,
     })
       .then(async (res) => {
         const entries = Object.entries(res.resolved || {});
-        const blobs = await Promise.all(
+        const created = await Promise.all(
           entries.map(async ([id, url]) => {
             try {
-              const blob = await fetchAuthedBlob(url);
+              const blob = await fetchAuthedBlob(url, undefined, controller.signal);
               return [id, URL.createObjectURL(blob)] as const;
             } catch {
               return [id, null] as const;
             }
           })
         );
-        if (myReq !== reqId.current) {
-          // A newer request superseded this one; discard these blob URLs.
-          for (const [, url] of blobs) if (url) URL.revokeObjectURL(url);
+
+        // `createObjectURL` is what allocates, so the liveness check has to come after it.
+        // Checked before, an unmount landing in this window took the success branch and
+        // created one blob: URL per image with nothing left alive to revoke it — pinning
+        // every full-resolution Blob for the lifetime of the document.
+        if (controller.signal.aborted) {
+          for (const [, url] of created) if (url) URL.revokeObjectURL(url);
           return;
         }
 
-        revokePrevious();
         const resolved: Record<string, string> = {};
-        for (const [id, url] of blobs) {
+        const nextUrls: string[] = [];
+        for (const [id, url] of created) {
           if (url) {
             resolved[id] = url;
-            blobUrlsRef.current.push(url);
+            nextUrls.push(url);
           }
         }
-        setState({
-          resolved,
-          denied: new Set(res.denied || []),
-          loading: false,
-        });
+
+        // Revoke the previous batch only once the replacement is in hand. Revoking in the
+        // effect cleanup instead killed URLs the rendered output was still pointing at, so
+        // every image turned into a broken-image icon for the duration of the next fetch.
+        const superseded = liveUrlsRef.current;
+        liveUrlsRef.current = nextUrls;
+        for (const url of superseded) URL.revokeObjectURL(url);
+
+        setResolution({ key, resolved, denied: new Set(res.denied || []), failed: false });
       })
       .catch(() => {
-        if (myReq !== reqId.current) return;
-        revokePrevious();
-        setState({ resolved: {}, denied: new Set(), loading: false });
+        if (controller.signal.aborted) return;
+        setResolution({ key, resolved: {}, denied: new Set(), failed: true });
       });
 
-    return () => {
-      revokePrevious();
-    };
+    return () => controller.abort();
   }, [key]);
 
-  return state;
+  // Unmount-only. Declared after the resolve effect so its cleanup runs second: the abort
+  // above has already fired, so any in-flight run will revoke whatever it allocated itself.
+  useEffect(
+    () => () => {
+      for (const url of liveUrlsRef.current) URL.revokeObjectURL(url);
+      liveUrlsRef.current = [];
+    },
+    []
+  );
+
+  return {
+    resolved: resolution.resolved,
+    denied: resolution.denied,
+    loading: key !== "" && resolution.key !== key,
+    failed: resolution.key === key && resolution.failed,
+  };
 }

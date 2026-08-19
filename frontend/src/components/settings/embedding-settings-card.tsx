@@ -101,6 +101,17 @@ const EMBEDDING_PROVIDERS: ProviderDef[] = [
   },
 ];
 
+/**
+ * `/api/settings` never returns a stored secret, only a bullet mask — `"•" * 8 + last4` for
+ * long values and `"•" * len` for values of eight characters or fewer. The two ad-hoc guards
+ * this replaces disagreed: `startsWith("••••")` did not recognise a short secret masked to
+ * `"•••"`, so that mask was forwarded to `/api/settings/fetch-models` as the real credential.
+ * API keys are ASCII, so a bullet anywhere can only have come from the mask.
+ */
+function isMaskedSecret(value: string): boolean {
+  return value.includes("•");
+}
+
 // ── Component ─────────────────────────────────────────────────────────────────
 
 export function EmbeddingSettingsCard() {
@@ -114,6 +125,9 @@ export function EmbeddingSettingsCard() {
   const [maskedKeys, setMaskedKeys] = useState<Record<string, string>>({});
   const [apiKey, setApiKey] = useState("");
   const [baseUrl, setBaseUrl] = useState("");
+  /** What the server currently holds for the one global `embedding_base_url` key. Needed to
+   *  tell an edit apart from a provider switch redisplaying a default. */
+  const [savedBaseUrl, setSavedBaseUrl] = useState("");
 
   // Fetch state
   const [fetchedModels, setFetchedModels] = useState<string[] | null>(null);
@@ -156,8 +170,11 @@ export function EmbeddingSettingsCard() {
       }
       setMaskedKeys(masked);
 
-      const savedBaseUrl = settings["embedding_base_url"];
-      if (typeof savedBaseUrl === "string") setBaseUrl(savedBaseUrl);
+      const storedBaseUrl = settings["embedding_base_url"];
+      if (typeof storedBaseUrl === "string") {
+        setBaseUrl(storedBaseUrl);
+        setSavedBaseUrl(storedBaseUrl);
+      }
 
       if (initSelection) {
         const activeId = c.active_spec_id ?? c.specs[0]?.id ?? null;
@@ -185,12 +202,15 @@ export function EmbeddingSettingsCard() {
     setFetchError("");
     setFetchedModels(null);
     try {
-      const key = apiKey.startsWith("••••") ? "" : apiKey;
-      const res = await api<{ models: string[] }>("/api/settings/fetch-models", {
+      const key = isMaskedSecret(apiKey) ? "" : apiKey;
+      const res = await api<{ models?: string[] }>("/api/settings/fetch-models", {
         method: "POST",
         body: { base_url: baseUrl, api_key: key },
       });
-      setFetchedModels(res.models);
+      // The annotation is a claim about the response, not a guarantee. A body without
+      // `models` gave `undefined`, which passes a `!== null` guard and then throws on
+      // `.length` — a render crash, not a missing-data message.
+      setFetchedModels(Array.isArray(res.models) ? res.models : []);
       // Reset model selection after fresh fetch
       setSelectedSpecId(null);
       setCustomModel(false);
@@ -209,7 +229,11 @@ export function EmbeddingSettingsCard() {
     setCustomModelInput("");
     setFetchedModels(null);
     setFetchError("");
-    setBaseUrl(def.defaultBaseUrl ?? "");
+    // Coming back to the provider that is actually active restores its stored endpoint.
+    // Re-applying `defaultBaseUrl` here replaced a hand-configured Ollama host with the
+    // packaged default, and the unconditional write below then persisted that.
+    const activeProvider = catalog?.specs.find((sp) => sp.id === catalog?.active_spec_id)?.provider;
+    setBaseUrl(provider === activeProvider ? savedBaseUrl : def.defaultBaseUrl ?? "");
     const firstSpec = catalog?.specs.find((sp) => sp.provider === provider);
     setSelectedSpecId(firstSpec?.id ?? null);
   }
@@ -238,7 +262,7 @@ export function EmbeddingSettingsCard() {
   const selectedSpec = catalog?.specs.find((sp) => sp.id === selectedSpecId) ?? null;
   const job = status?.current_job ?? null;
   const jobBusy = job && (job.status === "pending" || job.status === "running");
-  const isMaskedKey = apiKey.includes("•");
+  const isMaskedKey = isMaskedSecret(apiKey);
   const hasNewKey = apiKey.trim().length > 0 && !isMaskedKey;
   const activeSpecId = catalog?.active_spec_id ?? null;
   const effectiveSpecId = customModel
@@ -265,8 +289,16 @@ export function EmbeddingSettingsCard() {
     try {
       const settingsToSave: Record<string, string> = {};
       if (hasNewKey) settingsToSave[`embedding_api_key__${selectedProvider}`] = apiKey.trim();
-      settingsToSave["embedding_base_url"] = baseUrl.trim();
-      await api("/api/settings", { method: "PUT", body: { settings: settingsToSave } });
+      // `embedding_base_url` is a single global key (`config_service.ALL_CONFIG_KEYS`), and
+      // it is not sensitive, so an empty string really does erase it. Writing it on every
+      // save meant opening OpenAI to compare models and then hitting Save destroyed the
+      // Ollama endpoint the whole system was embedding through.
+      if (baseUrl.trim() !== savedBaseUrl.trim()) {
+        settingsToSave["embedding_base_url"] = baseUrl.trim();
+      }
+      if (Object.keys(settingsToSave).length > 0) {
+        await api("/api/settings", { method: "PUT", body: { settings: settingsToSave } });
+      }
       if (willSwitch) {
         const switchBody: Record<string, unknown> = { model_spec_id: effectiveSpecId };
         if (customModel) {
@@ -424,7 +456,7 @@ export function EmbeddingSettingsCard() {
                 {fetchError}
               </p>
             )}
-            {fetchedModels !== null && (
+            {Array.isArray(fetchedModels) && (
               <p className="text-xs text-green-600 dark:text-green-400 flex items-center gap-1">
                 <span className="material-symbols-outlined text-sm">check_circle</span>
                 {fetchedModels.length} models loaded — {providerSpecs.length} in catalog, {fetchedNotInCatalog.length} custom

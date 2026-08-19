@@ -289,6 +289,11 @@ export function WikiContent({
                 return <WikiImage alt={altStr} status="denied" />;
               if (imageResolver.loading)
                 return <WikiImage alt={altStr} status="loading" />;
+              // A failed resolve call is not the same fact as "the document points at an
+              // image that no longer exists", and rendering both as "missing" told the
+              // reader the page was broken when the request was.
+              if (imageResolver.failed)
+                return <WikiImage alt={altStr} status="error" />;
               return <WikiImage alt={altStr} status="missing" />;
             },
             table: ({ children }) => (

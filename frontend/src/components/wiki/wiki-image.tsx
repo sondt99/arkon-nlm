@@ -7,7 +7,7 @@ import {
   DialogTrigger,
 } from "@/components/ui/dialog";
 
-type Status = "ok" | "loading" | "denied" | "missing";
+type Status = "ok" | "loading" | "denied" | "missing" | "error";
 
 export function WikiImage({
   src,
@@ -33,6 +33,18 @@ export function WikiImage({
           lock
         </span>
         Hình ảnh bị giới hạn quyền truy cập
+        {alt ? <span className="block mt-1 italic">{alt}</span> : null}
+      </span>
+    );
+  }
+
+  if (status === "error") {
+    return (
+      <span className="block my-4 rounded-lg border border-dashed border-destructive/40 bg-destructive/5 px-4 py-8 text-center text-xs text-destructive">
+        <span className="material-symbols-outlined align-middle mr-1" style={{ fontSize: 16 }}>
+          cloud_off
+        </span>
+        Không tải được hình ảnh — hãy thử tải lại trang
         {alt ? <span className="block mt-1 italic">{alt}</span> : null}
       </span>
     );

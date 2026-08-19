@@ -396,6 +396,9 @@ export default function ChatPage() {
   const [messages, setMessages] = React.useState<Message[]>([]);
   const [loadingConvs, setLoadingConvs] = React.useState(true);
   const [loadingMsgs, setLoadingMsgs] = React.useState(false);
+  /** Id of the conversation whose transcript failed to load. Keyed by id, like `reveal`
+   *  below, so switching away clears it without a reset effect. */
+  const [msgLoadFailedFor, setMsgLoadFailedFor] = React.useState<string | null>(null);
   const [sending, setSending] = React.useState(false);
   const [reveal, setReveal] = React.useState<{ convId: string; msgId: string; length: number } | null>(null);
   const [input, setInput] = React.useState("");
@@ -413,6 +416,14 @@ export default function ChatPage() {
   const textareaRef = React.useRef<HTMLTextAreaElement>(null);
   const editInputRef = React.useRef<HTMLInputElement>(null);
   const skipMessageLoadRef = React.useRef<string | null>(null);
+  /** The conversation currently on screen and a controller that cancels everything loading
+   *  for it. Written by the conversation-switch effect; a request that outlives the switch
+   *  compares against it before writing, since a reply must never land in a transcript the
+   *  user has already navigated away from. */
+  const activeConvLoadRef = React.useRef<{
+    id: string | null;
+    controller: AbortController;
+  } | null>(null);
   const revealVersionRef = React.useRef(0);
   const [convSidebarCollapsed, toggleConvSidebar] = useConvSidebarCollapse();
 
@@ -467,26 +478,51 @@ export default function ChatPage() {
     loadConversations();
   }, [loadConversations]);
 
-  const loadMessages = React.useCallback((convId: string) => {
+  // Every write is gated on the signal of the conversation that asked for the load. Ungated,
+  // clicking a slow conversation A and then B rendered B and then let A's late response
+  // overwrite it: the sidebar highlighted B while the transcript was A's, and the next
+  // message was posted to B's id but appended to the visible A transcript.
+  const loadMessages = React.useCallback(async (convId: string, signal: AbortSignal) => {
+    // The outgoing transcript has to go too. Leaving it up while the new one loads is the
+    // same "sidebar says B, transcript is A" confusion, only briefer.
+    setMessages([]);
+    setMsgLoadFailedFor(null);
     setLoadingMsgs(true);
-    api<Message[]>(`/api/chat/conversations/${convId}/messages`)
-      .then((data) => setMessages(Array.isArray(data) ? data : []))
-      .catch(() => setMessages([]))
-      .finally(() => setLoadingMsgs(false));
+    try {
+      const data = await api<Message[]>(`/api/chat/conversations/${convId}/messages`, { signal });
+      if (signal.aborted) return;
+      setMessages(Array.isArray(data) ? data : []);
+    } catch {
+      if (signal.aborted) return;
+      // `setMessages([])` here rendered a failed fetch as an empty conversation, and the
+      // user's reflex is to retype the message they think was lost.
+      setMsgLoadFailedFor(convId);
+    } finally {
+      if (!signal.aborted) setLoadingMsgs(false);
+    }
   }, []);
 
   React.useEffect(() => {
     revealVersionRef.current += 1;
     pinnedToBottomRef.current = true;
+
+    // Scoped to the conversation, not to the request: `handleSend` and the edit-recovery
+    // path consult the same record to decide whether their reply still belongs on screen.
+    const controller = new AbortController();
+    activeConvLoadRef.current = { id: activeConvId, controller };
+
     // Deselecting a conversation always clears the transcript at the call site, so there is
     // nothing to reset here.
-    if (!activeConvId) return;
-    if (skipMessageLoadRef.current === activeConvId) {
-      skipMessageLoadRef.current = null;
-      setLoadingMsgs(false);
-      return;
+    if (activeConvId) {
+      if (skipMessageLoadRef.current === activeConvId) {
+        skipMessageLoadRef.current = null;
+        setLoadingMsgs(false);
+      } else {
+        void loadMessages(activeConvId, controller.signal);
+      }
     }
-    loadMessages(activeConvId);
+
+    return () => controller.abort();
   }, [activeConvId, loadMessages]);
 
   // Follow the transcript only while the user is parked at the bottom. Unconditionally
@@ -589,11 +625,14 @@ export default function ChatPage() {
       { ...prev[msgIndex], content: text },
     ]);
 
+    // An edit takes up to CHAT_REQUEST_TIMEOUT_MS; the user is free to leave for another
+    // conversation meanwhile, and this reply must not follow them there.
     try {
       const result = await api<{ user_message: Message; assistant_message: Message }>(
         `/api/chat/conversations/${activeConvId}/messages/${msgId}/edit`,
         { method: "PATCH", body: { content: text, persona }, timeoutMs: CHAT_REQUEST_TIMEOUT_MS }
       );
+      if (activeConvLoadRef.current?.id !== activeConvId) return;
       setMessages((prev) => [
         ...prev.slice(0, msgIndex),
         result.user_message,
@@ -602,8 +641,10 @@ export default function ChatPage() {
       await revealAssistantMessage(activeConvId, result.assistant_message);
     } catch {
       const recovered = await recoverCompletedReply(activeConvId, text);
+      const live = activeConvLoadRef.current;
+      if (live?.id !== activeConvId) return;
       if (recovered) setMessages(recovered);
-      else loadMessages(activeConvId);
+      else await loadMessages(activeConvId, live.controller.signal);
     } finally {
       setSending(false);
       textareaRef.current?.focus();
@@ -668,18 +709,26 @@ export default function ChatPage() {
       }
     }
 
+    // The reply belongs to `convId`, but the transcript on screen belongs to whatever the
+    // sidebar last selected — and a send can run for CHAT_REQUEST_TIMEOUT_MS. Every branch
+    // below re-checks before touching `messages`; the sidebar title is keyed by id and so
+    // stays correct either way.
+    const onScreen = () => activeConvLoadRef.current?.id === convId;
+
     try {
       const result = await api<{ user_message: Message; assistant_message: Message }>(
         `/api/chat/conversations/${convId}/messages`,
         { method: "POST", body: { content: text, persona }, timeoutMs: CHAT_REQUEST_TIMEOUT_MS }
       );
 
-      setMessages((prev) => [
-        ...prev.filter((m) => m.id !== tempUserMsg.id),
-        result.user_message,
-        result.assistant_message,
-      ]);
-      await revealAssistantMessage(convId, result.assistant_message);
+      if (onScreen()) {
+        setMessages((prev) => [
+          ...prev.filter((m) => m.id !== tempUserMsg.id),
+          result.user_message,
+          result.assistant_message,
+        ]);
+        await revealAssistantMessage(convId, result.assistant_message);
+      }
 
       // Update conversation title in sidebar
       setConversations((prev) =>
@@ -691,6 +740,7 @@ export default function ChatPage() {
       );
     } catch {
       const recovered = await recoverCompletedReply(convId, text);
+      if (!onScreen()) return;
       if (recovered) {
         setMessages(recovered);
       } else {
@@ -1007,6 +1057,24 @@ export default function ChatPage() {
                 <span className="material-symbols-outlined text-3xl text-muted-foreground animate-spin">
                   progress_activity
                 </span>
+              </div>
+            ) : msgLoadFailedFor === activeConvId && messages.length === 0 ? (
+              <div className="h-full flex flex-col items-center justify-center gap-3 text-center">
+                <span className="material-symbols-outlined text-3xl text-destructive/60">
+                  cloud_off
+                </span>
+                <p className="text-sm text-muted-foreground">
+                  Couldn&apos;t load this conversation. Your messages are still saved.
+                </p>
+                <button
+                  onClick={() => {
+                    const live = activeConvLoadRef.current;
+                    if (live?.id) void loadMessages(live.id, live.controller.signal);
+                  }}
+                  className="px-3 py-1.5 rounded-full border border-border text-xs text-muted-foreground hover:border-primary/40 hover:text-foreground transition-colors"
+                >
+                  Try again
+                </button>
               </div>
             ) : messages.length === 0 ? (
               <div className="h-full flex flex-col items-center justify-center gap-2 text-center">

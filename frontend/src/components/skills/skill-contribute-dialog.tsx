@@ -38,17 +38,15 @@ export function SkillContributeDialog({ skillId, skillName, versions, onContribu
   const { canAccess, hasPermission } = useAuth();
   const [isOpen, setIsOpen] = useState(false);
   const [loading, setLoading] = useState(false);
-  const [mode, setMode] = useState<"new" | "fork">(skillId ? "fork" : "new");
-
-  useEffect(() => {
-    if (skillId) setMode("fork");
-    else setMode("new");
-  }, [skillId]);
+  // Derived, not stated: `mode` was seeded from `skillId` and then re-set to the same value
+  // by an effect, which is just a slower way of computing it.
+  const mode: "new" | "fork" = skillId ? "fork" : "new";
 
   const [title, setTitle] = useState(skillName ? `Improve ${skillName}` : "");
-  const [selectedVersion, setSelectedVersion] = useState<string | null>(
-    versions && versions.length > 0 ? String(versions[0].version_number) : null
-  );
+  /** The version the user explicitly picked; `null` means "the newest one". Seeding this from
+   *  the `versions` prop captured it while the parent's fetch was still in flight, so the list
+   *  was empty, nothing ever re-synced it, and every fork submitted `base_version: null`. */
+  const [selectedVersion, setSelectedVersion] = useState<string | null>(null);
   const [duplicateSkill, setDuplicateSkill] = useState<{ id: string, name: string } | null>(null);
   const [showDuplicateWarning, setShowDuplicateWarning] = useState(false);
 
@@ -70,6 +68,10 @@ export function SkillContributeDialog({ skillId, skillName, versions, onContribu
   }, [skillId, externalDepartments]);
 
   const isTitleValid = mode === "fork" || /^[a-zA-Z0-9\s\-_À-ỹ]+$/.test(title);
+
+  const latestVersion =
+    versions && versions.length > 0 ? String(versions[0].version_number) : null;
+  const effectiveVersion = selectedVersion ?? latestVersion;
 
   const performSubmit = async (finalSkillId: string | null, finalBaseVersion: number | null) => {
     try {
@@ -115,7 +117,7 @@ export function SkillContributeDialog({ skillId, skillName, versions, onContribu
 
     await performSubmit(
       mode === "fork" ? skillId || null : null,
-      mode === "fork" ? (selectedVersion ? parseInt(selectedVersion) : null) : null
+      mode === "fork" ? (effectiveVersion ? parseInt(effectiveVersion) : null) : null
     );
   };
 
@@ -248,7 +250,7 @@ export function SkillContributeDialog({ skillId, skillName, versions, onContribu
             {mode === "fork" && skillId && versions && versions.length > 0 && (
               <div className="grid gap-2 animate-in fade-in slide-in-from-top-1">
                 <Label>Base Version</Label>
-                <Select value={selectedVersion || ""} onValueChange={setSelectedVersion}>
+                <Select value={effectiveVersion || ""} onValueChange={setSelectedVersion}>
                   <SelectTrigger className="bg-secondary/5 h-11">
                     <SelectValue placeholder="Select version" />
                   </SelectTrigger>

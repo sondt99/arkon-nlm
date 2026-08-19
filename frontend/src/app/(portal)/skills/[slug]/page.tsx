@@ -39,9 +39,15 @@ export default function SkillDetailPage() {
   const [skill, setSkill] = useState<Skill | null>(null);
   const [loading, setLoading] = useState(true);
   const [notFound, setNotFound] = useState(false);
+  const [loadFailed, setLoadFailed] = useState(false);
   const [isUploading, setIsUploading] = useState(false);
   const [versions, setVersions] = useState<SkillVersion[]>([]);
-  const [viewingVersion, setViewingVersion] = useState<number | null>(null);
+  /** The version the user explicitly picked. `null` means "whatever is current", which is
+   *  what the unparameterised endpoint returns. Storing the resolved number here instead
+   *  made the load effect its own trigger: it depended on this value and also wrote it, so
+   *  every page view cost two round-trips and flashed the spinner twice. */
+  const [requestedVersion, setRequestedVersion] = useState<number | null>(null);
+  const [reloadToken, setReloadToken] = useState(0);
   const [isSettingLatest, setIsSettingLatest] = useState(false);
   const [activeContributionId, setActiveContributionId] = useState<string | null>(null);
   const [reviewContributionId, setReviewContributionId] = useState<string | null>(null);
@@ -49,39 +55,68 @@ export default function SkillDetailPage() {
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
-    async function loadSkill() {
+    if (!slug) return;
+    const controller = new AbortController();
+
+    (async () => {
       try {
         setLoading(true);
         setNotFound(false);
-        const url = viewingVersion 
-          ? `/api/skills/${slug}?version=${viewingVersion}` 
+        setLoadFailed(false);
+        const url = requestedVersion
+          ? `/api/skills/${slug}?version=${requestedVersion}`
           : `/api/skills/${slug}`;
-        const data = await api<Skill>(url);
+        const data = await api<Skill>(url, { signal: controller.signal });
+        if (controller.signal.aborted) return;
         setSkill(data);
-        if (!viewingVersion) setViewingVersion(data.current_version);
       } catch (error) {
+        if (controller.signal.aborted) return;
         console.error("Failed to load skill:", error);
         if (error instanceof ApiError && error.status === 404) {
           setNotFound(true);
+        } else {
+          // Without this the page rendered `null` on any non-404 failure — a blank screen
+          // with no back link and nothing saying what went wrong.
+          setLoadFailed(true);
         }
       } finally {
-        setLoading(false);
+        if (!controller.signal.aborted) setLoading(false);
       }
-    }
-    if (slug) loadSkill();
-  }, [slug, viewingVersion]);
+    })();
+
+    return () => controller.abort();
+  }, [slug, requestedVersion, reloadToken]);
 
   useEffect(() => {
-    async function loadVersions() {
+    if (!slug) return;
+    const controller = new AbortController();
+
+    (async () => {
       try {
-        const data = await api<SkillVersion[]>(`/api/skills/${slug}/versions`);
-        setVersions(data);
+        const data = await api<SkillVersion[]>(`/api/skills/${slug}/versions`, {
+          signal: controller.signal,
+        });
+        if (!controller.signal.aborted) setVersions(data);
       } catch (error) {
-        console.error("Failed to load versions:", error);
+        if (!controller.signal.aborted) console.error("Failed to load versions:", error);
       }
-    }
-    if (slug) loadVersions();
-  }, [slug]);
+    })();
+
+    return () => controller.abort();
+  }, [slug, reloadToken]);
+
+  /** Re-fetch the skill and its version list. Replaces six `window.location.reload()` calls,
+   *  each of which discarded the whole SPA — bundle re-downloaded, `AuthProvider` re-running
+   *  `/api/auth/me`, sidebar and file-tree state reset — to refresh two endpoints. Resetting
+   *  the selection to "current" matches what a reload did, and is what these mutations mean:
+   *  they all publish or merge a new latest version. */
+  const refresh = () => {
+    setRequestedVersion(null);
+    setReloadToken((n) => n + 1);
+  };
+
+  /** What is on screen: the explicit pick, else whatever the server called current. */
+  const viewingVersion = requestedVersion ?? skill?.current_version ?? null;
 
   const handleDelete = async () => {
     if (!skill || !confirm(`Are you sure you want to delete ${skill.name}?`)) return;
@@ -101,7 +136,7 @@ export default function SkillDetailPage() {
       setIsSettingLatest(true);
       await api(`/api/skills/${slug}/set-latest?version=${viewingVersion}`, { method: "POST" });
       alert(`Version ${viewingVersion} is now the latest.`);
-      window.location.reload();
+      refresh();
     } catch (error) {
       alert("Failed to set latest version");
     } finally {
@@ -131,8 +166,8 @@ export default function SkillDetailPage() {
       if (result.status === "skipped") {
         alert(result.message);
       } else {
-        // Reload to show new version and updated documentation
-        window.location.reload();
+        // Show the new version and updated documentation
+        refresh();
       }
     } catch (error) {
       const msg = error instanceof ApiError ? (error.data as any)?.detail : "Upload failed";
@@ -151,7 +186,7 @@ export default function SkillDetailPage() {
       await api(`/api/skill-contributions/${activeContributionId}/submit`, { method: "POST" });
       alert("Contribution submitted successfully!");
       setActiveContributionId(null);
-      window.location.reload();
+      refresh();
     } catch (err) {
       console.error("Failed to submit contribution:", err);
       alert("Submit failed: " + (err instanceof Error ? err.message : "Unknown error"));
@@ -164,7 +199,7 @@ export default function SkillDetailPage() {
       await api(`/api/skill-contributions/${id}/approve`, { method: "POST" });
       alert("Contribution approved and merged successfully!");
       setReviewContributionId(null);
-      window.location.reload(); // Reload to see changes
+      refresh(); // Pull in the merged version
     } catch (err) {
       // Do NOT remove the item here. The error path used to run the same optimistic
       // removal as success, so a 500 or 403 showed an alert and then made the
@@ -226,7 +261,33 @@ export default function SkillDetailPage() {
         </div>
       );
     }
-    return null;
+    return (
+      <div className="flex flex-col gap-8 py-12 animate-in fade-in duration-500">
+        <div className="flex items-center gap-2 text-sm text-muted-foreground">
+          <button
+            onClick={() => router.push("/skills")}
+            className="flex items-center hover:text-primary transition-colors"
+          >
+            <span className="material-symbols-outlined text-base mr-1">arrow_back</span>
+            Back to Skills
+          </button>
+        </div>
+        <EmptyState
+          icon="cloud_off"
+          title={loadFailed ? "Couldn't load this skill" : "Nothing to show"}
+          description={
+            loadFailed
+              ? "The request for this skill failed. It may be a connection problem — retrying is safe."
+              : "This skill has no data to display."
+          }
+          action={
+            <Button onClick={refresh} variant="outline" className="mt-4 shadow-sahara rounded-xl font-bold uppercase tracking-widest text-[11px] h-11 px-8">
+              Try Again
+            </Button>
+          }
+        />
+      </div>
+    );
   }
 
   const dateStr = new Date(skill.updated_at).toLocaleString("vi-VN", {
@@ -335,7 +396,7 @@ export default function SkillDetailPage() {
               <div className="space-y-3">
                 <Select 
                   value={viewingVersion?.toString() || ""} 
-                  onValueChange={(v) => setViewingVersion(v ? parseInt(v) : null)}
+                  onValueChange={(v) => setRequestedVersion(v ? parseInt(v) : null)}
                 >
                   <SelectTrigger className="w-full bg-secondary/5 border-primary/20 h-10">
                     <SelectValue placeholder="Select version" />
@@ -381,28 +442,6 @@ export default function SkillDetailPage() {
         </div>
       </div>
 
-      <style jsx global>{`
-        .markdown-content {
-          color: #1f2328;
-          font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "Noto Sans", Helvetica, Arial, sans-serif, "Apple Color Emoji", "Segoe UI Emoji";
-        }
-        .markdown-content h1 { font-size: 2em; font-weight: 600; margin-top: 24px; margin-bottom: 16px; padding-bottom: .3em; border-bottom: 1px solid #d0d7de; }
-        .markdown-content h2 { font-size: 1.5em; font-weight: 600; margin-top: 24px; margin-bottom: 16px; padding-bottom: .3em; border-bottom: 1px solid #d0d7de; }
-        .markdown-content h3 { font-size: 1.25em; font-weight: 600; margin-top: 24px; margin-bottom: 16px; }
-        .markdown-content p { margin-top: 0; margin-bottom: 16px; line-height: 1.5; }
-        .markdown-content ul { list-style-type: disc; margin-bottom: 16px; padding-left: 2em; }
-        .markdown-content ol { list-style-type: decimal; margin-bottom: 16px; padding-left: 2em; }
-        .markdown-content li { margin-top: .25em; }
-        .markdown-content code { padding: .2em .4em; margin: 0; font-size: 85%; white-space: break-spaces; background-color: rgba(175,184,193,0.2); border-radius: 6px; font-family: ui-monospace,SFMono-Regular,SF Mono,Menlo,Consolas,Liberation Mono,monospace; }
-        .markdown-content pre { padding: 16px; overflow: auto; font-size: 85%; line-height: 1.45; background-color: #f6f8fa; border-radius: 6px; margin-bottom: 16px; border: 1px solid #d0d7de; }
-        .markdown-content pre code { padding: 0; margin: 0; font-size: 100%; word-break: normal; white-space: pre; background: transparent; border: 0; }
-        .markdown-content blockquote { padding: 0 1em; color: #636c76; border-left: .25em solid #d0d7de; margin-bottom: 16px; }
-        .markdown-content table { border-spacing: 0; border-collapse: collapse; margin-top: 0; margin-bottom: 16px; width: 100%; overflow: auto; border: 1px solid var(--border); border-radius: 8px; }
-        .markdown-content th, .markdown-content td { padding: 8px 16px; border: 1px solid var(--border); }
-        .markdown-content th { background-color: rgba(194, 101, 42, 0.05); font-weight: 700; }
-        .markdown-content tr { background-color: transparent; }
-        .markdown-content tr:nth-child(2n) { background-color: rgba(58, 48, 42, 0.02); }
-      `}</style>
 
       {activeContributionId && (
         <Dialog open onOpenChange={() => setActiveContributionId(null)}>
@@ -435,7 +474,7 @@ export default function SkillDetailPage() {
                         const { api } = await import("@/lib/api");
                         await api(`/api/skill-contributions/${activeContributionId}`, { method: "DELETE" });
                         setActiveContributionId(null);
-                        window.location.reload();
+                        refresh();
                       } catch (err) {
                         console.error("Failed to delete contribution:", err);
                         alert("Delete failed: " + (err instanceof Error ? err.message : "Unknown error"));
@@ -521,7 +560,7 @@ export default function SkillDetailPage() {
                 contributionId={reviewContributionId} 
                 onStatusChange={() => {
                   setReviewContributionId(null);
-                  window.location.reload();
+                  refresh();
                 }}
               />
             </div>

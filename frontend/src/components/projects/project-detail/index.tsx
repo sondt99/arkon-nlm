@@ -46,12 +46,15 @@ export function ProjectDetail({ project, isAdmin, onBack }: Props) {
     }
   }, [project.id]);
 
-  const loadWiki = useCallback(async () => {
-    setWikiLoading(true);
+  // `silent` exists because the status poll calls this every three seconds. Without it the
+  // Wiki tab replaced its page list with a spinner on every tick, so a workspace with a
+  // document still processing was unreadable — the sibling knowledge page already had the flag.
+  const loadWiki = useCallback(async (silent = false) => {
+    if (!silent) setWikiLoading(true);
     try {
       const pages = await api<WikiPageSummary[]>(`/api/projects/${project.id}/wiki?limit=2000`);
       setWikiPages(pages);
-      
+
       try {
         const idxData = await api<{ content_md: string }>(`/api/projects/${project.id}/wiki/index`);
         setWikiIndexMd(idxData.content_md);
@@ -60,8 +63,9 @@ export function ProjectDetail({ project, isAdmin, onBack }: Props) {
       }
     } catch (err) {
       console.error(err);
+      if (!silent) setError("Failed to load workspace wiki");
     } finally {
-      setWikiLoading(false);
+      if (!silent) setWikiLoading(false);
     }
   }, [project.id]);
 
@@ -79,18 +83,27 @@ export function ProjectDetail({ project, isAdmin, onBack }: Props) {
     loadWiki();
   }, [load, loadWiki]);
 
-  // Poll for document processing status
+  // Poll for document processing status.
+  //
+  // `plan_ready` is excluded on purpose: it is terminal until a human approves the plan
+  // (`notebooklm/page.tsx` classifies it the same way), so including it meant a workspace
+  // sitting in plan review fired three requests every three seconds forever with nothing
+  // on the server able to change the answer. Depends on the boolean rather than on
+  // `sources`, which this effect's own callback replaces.
+  const hasPendingSources = sources.some(
+    s => s.status === "pending" || s.status === "processing"
+  );
+
   useEffect(() => {
-    const hasPending = sources.some(s => s.status === "pending" || s.status === "processing" || s.status === "plan_ready");
-    if (!hasPending) return;
+    if (!hasPendingSources) return;
 
     const interval = setInterval(() => {
       loadProjectSources();
-      loadWiki(); // Also reload wiki pages so the count live-updates
+      void loadWiki(true); // Also reload wiki pages so the count live-updates
     }, 3000);
 
     return () => clearInterval(interval);
-  }, [sources, loadProjectSources, loadWiki]);
+  }, [hasPendingSources, loadProjectSources, loadWiki]);
 
   const memberIds = new Set(members.map((m) => m.employee_id));
   const sourceIds = new Set(sources.map((s) => s.source_id));
@@ -193,7 +206,7 @@ export function ProjectDetail({ project, isAdmin, onBack }: Props) {
           wikiPages={wikiPages}
           wikiLoading={wikiLoading}
           wikiIndexMd={wikiIndexMd}
-          onWikiChanged={loadWiki}
+          onWikiChanged={() => void loadWiki()}
         />
       )}
     </div>

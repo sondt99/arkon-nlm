@@ -27,6 +27,7 @@ from app.database.models import (
     SourceDepartment,
     WikiPage,
     WikiPageContribution,
+    WorkspaceRole,
 )
 from app.database.repository import Repository
 from app.services.audit_service import log_audit
@@ -101,6 +102,92 @@ class SourceUpdate(BaseModel):
     department_ids: Optional[list[uuid.UUID]] = None
     scope_type: Optional[str] = None
     scope_id: Optional[uuid.UUID] = None
+
+
+async def _require_source_access(
+    db: AsyncSession, user: Employee, source_id: uuid.UUID, action: str
+) -> Source:
+    """Load a source and assert row-level access, or raise.
+
+    require_permission() only checks that the caller holds the coarse permission; its own
+    docstring notes it performs no row-level scoping. Endpoints that address a source by
+    id must therefore also call can_access_document, which is what the plan and
+    knowledge-impact endpoints were missing while their six siblings in this file had it.
+    """
+    source = await db.get(Source, source_id)
+    if not source:
+        raise HTTPException(status_code=404, detail="Source not found")
+
+    from app.services.permission_engine import can_access_document
+
+    if not await can_access_document(db, user, source, action):
+        raise HTTPException(
+            status_code=403, detail="You do not have access to this document"
+        )
+    return source
+
+
+async def _validate_source_scope(
+    db: AsyncSession,
+    user: Employee,
+    scope_type: Optional[str],
+    scope_id: Optional[str | uuid.UUID],
+) -> tuple[str, Optional[uuid.UUID]]:
+    """Validate a client-supplied source scope, returning the values to persist.
+
+    Three endpoints accepted scope_type/scope_id straight from the request and assigned
+    them to the Source with no membership check. Because the ingestion pipeline binds the
+    compiler's *write* scope from the Source row, that let a caller with only
+    doc:create:own_dept compile a document into any workspace's private wiki — and, via
+    PATCH, relocate an existing source into or out of one.
+
+    Rules:
+      * scope_type must be a known value; anything else is rejected rather than silently
+        treated as global (the same free-string weakness that made skill contribution
+        scope forgeable).
+      * project scope requires editor+ membership of that specific workspace.
+      * project scope requires a scope_id; global scope must not carry one.
+    """
+    resolved = (scope_type or ScopeType.GLOBAL.value).strip()
+    valid = {ScopeType.GLOBAL.value, ScopeType.PROJECT.value}
+    if resolved not in valid:
+        raise HTTPException(
+            status_code=422,
+            detail=f"scope_type must be one of {sorted(valid)}",
+        )
+
+    if resolved == ScopeType.GLOBAL.value:
+        # A global source carries no workspace. Dropping a stray scope_id rather than
+        # storing it keeps the row from looking workspace-scoped to later readers.
+        return resolved, None
+
+    if not scope_id:
+        raise HTTPException(
+            status_code=422, detail="scope_id is required when scope_type is 'project'"
+        )
+
+    # Parse here rather than at the call sites, where a bare uuid.UUID(...) on a
+    # client-supplied string raised ValueError and surfaced as a 500 instead of a 422.
+    workspace_id: uuid.UUID
+    if isinstance(scope_id, uuid.UUID):
+        workspace_id = scope_id
+    else:
+        try:
+            workspace_id = uuid.UUID(str(scope_id))
+        except (ValueError, AttributeError, TypeError):
+            raise HTTPException(status_code=422, detail="scope_id is not a valid UUID")
+
+    from app.services.permission_engine import get_workspace_role, workspace_role_can
+
+    ws_role = await get_workspace_role(db, user, workspace_id)
+    if user.role != "admin" and not (
+        ws_role and workspace_role_can(ws_role, WorkspaceRole.EDITOR.value)
+    ):
+        raise HTTPException(
+            status_code=403,
+            detail="Workspace editor access is required to place a document in this workspace",
+        )
+    return resolved, workspace_id
 
 
 async def _wiki_page_count(session: AsyncSession, source_id: uuid.UUID) -> int:
@@ -395,6 +482,12 @@ async def upload_source(
             if did != user.department_id:
                 raise HTTPException(403, "You can only assign documents to your own department")
 
+    # The check above validates *which departments* may be attached; it never looked at
+    # scope_id, so a workspace could be named without membership of it.
+    resolved_scope_type, resolved_scope_id = await _validate_source_scope(
+        db, user, scope_type, scope_id
+    )
+
     repo = Repository(db)
     source = Source(
         title=title or file.filename,
@@ -406,8 +499,8 @@ async def upload_source(
         progress_message="Queued for ingestion...",
         knowledge_type_id=uuid.UUID(knowledge_type_id) if knowledge_type_id else None,
         contributed_by_employee_id=user.id,
-        scope_type=scope_type or ScopeType.GLOBAL.value,
-        scope_id=uuid.UUID(scope_id) if scope_id else None,
+        scope_type=resolved_scope_type,
+        scope_id=resolved_scope_id,
     )
     source = await repo.create(source)
     await db.flush()
@@ -478,6 +571,12 @@ async def upload_zip_archive(
     if not file_name.endswith(".zip"):
         raise HTTPException(status_code=400, detail="Only .zip files are accepted by this endpoint.")
 
+    # Validate the target scope before doing any extraction work, so an unauthorised
+    # workspace placement is rejected before we spend memory on the archive.
+    resolved_scope_type, resolved_scope_id = await _validate_source_scope(
+        db, user, scope_type, scope_id
+    )
+
     zip_data = await file.read()
 
     try:
@@ -527,8 +626,8 @@ async def upload_zip_archive(
             progress_message="Queued for ingestion...",
             knowledge_type_id=uuid.UUID(knowledge_type_id) if knowledge_type_id else None,
             contributed_by_employee_id=user.id,
-            scope_type=scope_type or ScopeType.GLOBAL.value,
-            scope_id=uuid.UUID(scope_id) if scope_id else None,
+            scope_type=resolved_scope_type,
+            scope_id=resolved_scope_id,
         )
         source = await repo.create(source)
         await db.flush()
@@ -634,8 +733,36 @@ async def update_source(
     if body.knowledge_type_id is not None:
         source.knowledge_type_id = body.knowledge_type_id
     if body.scope_type is not None:
-        source.scope_type = body.scope_type
-        source.scope_id = body.scope_id
+        # Relocation is a privileged re-classification, not an ordinary field edit: it can
+        # push a document into a workspace the caller cannot read, or pull a workspace's
+        # document out to global scope where everyone can. So authorise BOTH ends — the
+        # scope it is leaving and the scope it is entering.
+        old_scope_type = source.scope_type
+        old_scope_id = source.scope_id
+        new_scope_type, new_scope_id = await _validate_source_scope(
+            db, _user, body.scope_type, body.scope_id
+        )
+
+        scope_changed = (old_scope_type, old_scope_id) != (new_scope_type, new_scope_id)
+        if scope_changed and old_scope_type == ScopeType.PROJECT.value and old_scope_id:
+            # Leaving a workspace requires editor+ on the workspace it is leaving.
+            from app.services.permission_engine import (
+                get_workspace_role,
+                workspace_role_can,
+            )
+
+            old_role = await get_workspace_role(db, _user, old_scope_id)
+            if _user.role != "admin" and not (
+                old_role and workspace_role_can(old_role, WorkspaceRole.EDITOR.value)
+            ):
+                raise HTTPException(
+                    status_code=403,
+                    detail="Workspace editor access is required to move this document "
+                           "out of its current workspace",
+                )
+
+        source.scope_type = new_scope_type
+        source.scope_id = new_scope_id
 
     # Update department M2M
     if body.department_ids is not None:
@@ -743,6 +870,11 @@ async def get_compilation_plan(
 ):
     """Return the current compilation plan for a source (MRP Phase 2.5)."""
     from app.database.models import SourceCompilationPlan
+
+    # The plan exposes the full LLM compilation output for the document, so it needs the
+    # same row-level check as reading the document itself.
+    await _require_source_access(db, _user, source_id, "read")
+
     plan = (await db.execute(
         select(SourceCompilationPlan).where(SourceCompilationPlan.source_id == source_id)
     )).scalar_one_or_none()
@@ -777,6 +909,10 @@ async def approve_compilation_plan(
     from datetime import datetime, timezone
 
     from app.database.models import SourceCompilationPlan
+
+    # body.modified_plan is merged into plan_json and then written to the wiki by the
+    # REFINE task, so this is a write against the source's scope — not merely a read.
+    await _require_source_access(db, user, source_id, "edit")
 
     plan = (await db.execute(
         select(SourceCompilationPlan).where(SourceCompilationPlan.source_id == source_id)
@@ -881,6 +1017,10 @@ async def reject_compilation_plan(
 
     from app.database.models import SourceCompilationPlan
 
+    # Destructive: sets source.status = "error" and overwrites error_message, which kills
+    # another department's ingestion if the caller cannot see the source.
+    await _require_source_access(db, user, source_id, "edit")
+
     plan = (await db.execute(
         select(SourceCompilationPlan).where(SourceCompilationPlan.source_id == source_id)
     )).scalar_one_or_none()
@@ -914,9 +1054,9 @@ async def get_source_knowledge_impact(
     _user: Employee = require_permission("doc:read"),
 ):
     """Preview exactly how deleting a source will affect compiled knowledge."""
-    source = await db.get(Source, source_id)
-    if not source:
-        raise HTTPException(status_code=404, detail="Source not found")
+    # Returns every affected page's slug, title, and contribution_summary — i.e. wiki
+    # content derived from a document the caller may not be able to open.
+    source = await _require_source_access(db, _user, source_id, "read")
 
     contribution_page_ids = select(WikiPageContribution.page_id).where(
         WikiPageContribution.source_id == source_id,

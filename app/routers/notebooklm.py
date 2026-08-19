@@ -27,7 +27,12 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from app.database import get_db
-from app.database.models import NotebookLMArtifact, NotebookLMNotebook, Source
+from app.database.models import (
+    Employee,
+    NotebookLMArtifact,
+    NotebookLMNotebook,
+    Source,
+)
 from app.services.audit_service import log_audit
 from app.services.auth_service import (
     get_current_user,
@@ -705,7 +710,7 @@ async def get_artifact(
 async def ingest_artifact(
     artifact_db_id: uuid.UUID,
     db: AsyncSession = Depends(get_db),
-    current_user=Depends(require_permission("doc:create")),
+    current_user: Employee = require_permission("doc:create"),
 ):
     """Add a completed artifact to the Arkon wiki (trigger ingest pipeline)."""
     art = await db.get(NotebookLMArtifact, artifact_db_id)
@@ -1068,7 +1073,7 @@ async def nlm_ingest_artifact(
     nlm_id: str,
     artifact_id: str,
     db: AsyncSession = Depends(get_db),
-    current_user=Depends(require_permission("doc:create")),
+    current_user: Employee = require_permission("doc:create"),
 ):
     """Fetch artifact from NLM and create an Arkon Source + enqueue ingestion pipeline.
 
@@ -1251,7 +1256,7 @@ async def nlm_ingest_chat(
     nlm_id: str,
     body: ChatIngestRequest,
     db: AsyncSession = Depends(get_db),
-    current_user=Depends(require_permission("doc:create")),
+    current_user: Employee = require_permission("doc:create"),
 ):
     """Save a NotebookLM chat conversation as a wiki source."""
     from app.worker import get_arq_pool

@@ -842,12 +842,17 @@ async def test_one_failing_image_does_not_lose_the_other_captions(fake_db, monke
 
 
 @pytest.mark.asyncio
-async def test_caption_failures_never_touch_the_source_status(fake_db, monkeypatch):
-    """This job runs beside the pipeline, so marking the source would clobber it.
+async def test_caption_failures_fail_the_job_but_never_the_source(fake_db, monkeypatch):
+    """Two requirements that pull in opposite directions, both of which must hold.
 
-    caption_images_task is enqueued in parallel with ingest_map_reduce_task; a caption
-    failure that wrote status="error" would overwrite a source that went on to compile
-    perfectly well.
+    The job must FAIL so arq retries it: returning normally when every vision call errored
+    reported a success that produced no captions, so arq recorded the job COMPLETE and
+    `max_tries` never engaged (#88).
+
+    But it must not mark the SOURCE. caption_images_task is enqueued in parallel with
+    ingest_map_reduce_task, so a caption failure that wrote status="error" would clobber a
+    source that went on to compile perfectly well. Captions are an enhancement; their
+    absence is not an ingestion failure.
     """
     from app.database.models import Source
 
@@ -855,10 +860,31 @@ async def test_caption_failures_never_touch_the_source_status(fake_db, monkeypat
     _seed_images(fake_db, src.id, 2)
     _patch_captioning(monkeypatch, _FakeVision(fail_keys={"images/0.png", "images/1.png"}))
 
-    await worker.caption_images_task({}, str(src.id))
+    with pytest.raises(RuntimeError, match="vision call"):
+        await worker.caption_images_task({}, str(src.id))
 
     assert src.status == "ready"
     assert src.progress == 100
+    assert src.error_message is None
+
+
+@pytest.mark.asyncio
+async def test_partial_caption_failure_does_not_fail_the_job(fake_db, monkeypatch):
+    """Only a total failure is a job failure.
+
+    If some images captioned, the run produced real value and retrying would redo the
+    successful ones; the raise is reserved for "nothing worked", which is the signal that
+    the provider or config is broken rather than one image being awkward.
+    """
+    from app.database.models import Source
+
+    src = fake_db.seed(Source, _source(status="ready", progress=100))
+    _seed_images(fake_db, src.id, 2)
+    _patch_captioning(monkeypatch, _FakeVision(fail_keys={"images/0.png"}))
+
+    await worker.caption_images_task({}, str(src.id))
+
+    assert src.status == "ready"
     assert src.error_message is None
 
 

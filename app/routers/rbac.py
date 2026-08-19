@@ -22,7 +22,9 @@ from app.services.auth_service import (
 )
 from app.services.employee_policy import (
     ensure_can_assign_custom_role,
+    ensure_can_assign_department,
     ensure_can_assign_role,
+    ensure_can_mint_token_for,
     ensure_can_set_password,
     ensure_can_toggle,
     ensure_not_last_admin,
@@ -331,6 +333,7 @@ async def update_employee(
     if body.email is not None:
         emp.email = body.email
     if body.department_id is not None:
+        ensure_can_assign_department(_user, emp, body.department_id)
         emp.department_id = body.department_id
     if "custom_role_id" in body.model_fields_set:
         new_role = await _resolve_custom_role(db, body.custom_role_id)
@@ -399,6 +402,8 @@ async def generate_mcp_token(
     emp = await db.get(Employee, emp_id)
     if not emp:
         raise HTTPException(404, "Employee not found")
+
+    ensure_can_mint_token_for(_user, emp)
 
     auth_svc = MCPAuthService(db)
     token = await auth_svc.generate_token(emp.id)

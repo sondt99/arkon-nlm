@@ -92,6 +92,57 @@ def ensure_can_assign_custom_role(actor, role, target=None) -> None:
             )
 
 
+def ensure_can_mint_token_for(actor, target) -> None:
+    """Issue or rotate another employee's MCP token.
+
+    An MCP token is a CREDENTIAL, not a permission — so `ensure_no_escalation`, which
+    compares permission strings, cannot see this. `org:employees:manage` alone was enough to
+    POST `/employees/{any_id}/token` and receive a working bearer token for an **admin**
+    account. `MCPAuthService.verify_token` resolves that to `is_admin=True` with every
+    permission and no source restriction, and it is accepted by both the MCP server (so
+    `edit_wiki_page` / `approve_draft`) and the REST Export API. Minting also *rotates* the
+    victim's existing token, so it doubles as a denial of service on their integration.
+
+    Gated like `ensure_can_set_password`, because handing out a bearer token for an account
+    is materially the same act as setting its password. Employees mint their own token
+    through the self-service route, which targets their own row and needs no permission.
+    """
+    if str(getattr(actor, "id", "")) == str(getattr(target, "id", "")):
+        return
+    if not is_system_admin(actor):
+        raise HTTPException(
+            status_code=403,
+            detail="Only a system admin can issue an MCP token for another employee",
+        )
+
+
+def ensure_can_assign_department(actor, target, new_department_id) -> None:
+    """Move an employee between departments.
+
+    `department_id` is what every `:own_dept` permission resolves against, so changing your
+    own is a permission widening that `ensure_no_escalation` cannot detect — it compares
+    permission *strings*, and the string does not change. Demonstrated: an attacker in HR
+    holding `{org:employees:manage, doc:read:own_dept}` gets `False` from
+    `can_access_document(finance_source)`, PUTs their own id with Finance's
+    `department_id`, and gets `True`.
+
+    Moving OTHER employees stays available to `org:employees:manage` — that is the routine
+    HR operation this permission exists for. Only self-reassignment is refused, and only
+    when it is an actual change, so a no-op PUT that echoes the current value still works.
+    """
+    if new_department_id is None:
+        return
+    if str(getattr(target, "department_id", "")) == str(new_department_id):
+        return
+    if is_system_admin(actor):
+        return
+    if str(getattr(actor, "id", "")) == str(getattr(target, "id", "")):
+        raise HTTPException(
+            status_code=403,
+            detail="You cannot move yourself to a different department",
+        )
+
+
 def ensure_can_set_password(actor) -> None:
     if not is_system_admin(actor):
         raise HTTPException(

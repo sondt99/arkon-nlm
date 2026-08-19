@@ -20,6 +20,18 @@ updates:
     labels: [area:infra]
     commit-message:
       prefix: "chore(deps)"
+    # Major bumps of a RUNTIME image are not a patch — they are a platform migration, and
+    # Dependabot cannot tell the difference. Left unguarded, the first weekly run opened PRs
+    # for python 3.12 -> 3.14, node 22 -> 26 and redis 7 -> 8 simultaneously; each of those
+    # changes the interpreter or the server the app runs against, and a green CI run only
+    # proves the image builds, not that pgvector/asyncpg/arq behave the same on it.
+    #
+    # Patch and minor still flow through, which is where the security fixes that justify
+    # Dependabot actually live. A major is a deliberate piece of work: bump the digest by
+    # hand, run the stack, then remove nothing here.
+    ignore:
+      - dependency-name: "*"
+        update-types: ["version-update:semver-major"]
 
   - package-ecosystem: docker
     directory: /frontend
@@ -29,6 +41,18 @@ updates:
     labels: [area:infra]
     commit-message:
       prefix: "chore(deps)"
+    # Major bumps of a RUNTIME image are not a patch — they are a platform migration, and
+    # Dependabot cannot tell the difference. Left unguarded, the first weekly run opened PRs
+    # for python 3.12 -> 3.14, node 22 -> 26 and redis 7 -> 8 simultaneously; each of those
+    # changes the interpreter or the server the app runs against, and a green CI run only
+    # proves the image builds, not that pgvector/asyncpg/arq behave the same on it.
+    #
+    # Patch and minor still flow through, which is where the security fixes that justify
+    # Dependabot actually live. A major is a deliberate piece of work: bump the digest by
+    # hand, run the stack, then remove nothing here.
+    ignore:
+      - dependency-name: "*"
+        update-types: ["version-update:semver-major"]
 
   # The sole ingress for the whole stack. This is the one that was `FROM nginx:alpine` with
   # no version at all.
@@ -40,6 +64,18 @@ updates:
     labels: [area:infra]
     commit-message:
       prefix: "chore(deps)"
+    # Major bumps of a RUNTIME image are not a patch — they are a platform migration, and
+    # Dependabot cannot tell the difference. Left unguarded, the first weekly run opened PRs
+    # for python 3.12 -> 3.14, node 22 -> 26 and redis 7 -> 8 simultaneously; each of those
+    # changes the interpreter or the server the app runs against, and a green CI run only
+    # proves the image builds, not that pgvector/asyncpg/arq behave the same on it.
+    #
+    # Patch and minor still flow through, which is where the security fixes that justify
+    # Dependabot actually live. A major is a deliberate piece of work: bump the digest by
+    # hand, run the stack, then remove nothing here.
+    ignore:
+      - dependency-name: "*"
+        update-types: ["version-update:semver-major"]
 
   # docker-compose.yml `image:` entries — postgres/pgvector, redis, minio.
   - package-ecosystem: docker-compose
@@ -50,9 +86,23 @@ updates:
     labels: [area:infra]
     commit-message:
       prefix: "chore(deps)"
+    # Major bumps of a RUNTIME image are not a patch — they are a platform migration, and
+    # Dependabot cannot tell the difference. Left unguarded, the first weekly run opened PRs
+    # for python 3.12 -> 3.14, node 22 -> 26 and redis 7 -> 8 simultaneously; each of those
+    # changes the interpreter or the server the app runs against, and a green CI run only
+    # proves the image builds, not that pgvector/asyncpg/arq behave the same on it.
+    #
+    # Patch and minor still flow through, which is where the security fixes that justify
+    # Dependabot actually live. A major is a deliberate piece of work: bump the digest by
+    # hand, run the stack, then remove nothing here.
+    ignore:
+      - dependency-name: "*"
+        update-types: ["version-update:semver-major"]
 
-  # GitHub Actions majors. Left to Dependabot rather than hand-bumped, because a workflow
-  # change cannot be verified locally — only by running it on a real runner.
+  # GitHub Actions majors ARE left to Dependabot, unlike the runtime images above. A
+  # workflow change cannot be verified locally — only by running it on a real runner — and
+  # the blast radius of a bad action version is a red CI run, not a production platform
+  # change. Branch protection means these still cannot merge without all four jobs passing.
   - package-ecosystem: github-actions
     directory: /
     schedule:

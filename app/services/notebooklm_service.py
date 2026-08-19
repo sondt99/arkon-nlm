@@ -525,3 +525,79 @@ async def nlm_chat_ask(
                 for ref in result.references
             ],
         }
+
+
+class CookieConversionError(Exception):
+    """A browser cookie export that cannot become a usable Playwright storage_state."""
+
+    def __init__(self, message: str, *, missing: Optional[set[str]] = None,
+                 found: Optional[set[str]] = None) -> None:
+        super().__init__(message)
+        self.missing = missing or set()
+        self.found = found or set()
+
+
+def cookies_to_storage_state(raw_cookies: list[dict]) -> dict:
+    """Convert a browser cookie export into Playwright's `storage_state` shape.
+
+    Extracted from the `import_cookies` route handler, which was 139 lines with this pure
+    conversion buried in the middle and therefore untestable without a request. It is worth
+    isolating because it is FORMAT-SENSITIVE and silently lossy when it guesses wrong:
+
+      - Cookie-Editor exports `expirationDate`; rookiepy exports `expires`
+      - Cookie-Editor exports `httpOnly` (camelCase); rookiepy exports `http_only`
+      - a cookie missing any of name/value/domain, or on a non-Google domain, is dropped
+
+    Every one of those is a browser-extension detail that can change without notice, and a
+    wrong guess produces a storage_state that looks valid and then fails to authenticate —
+    which is indistinguishable, to the admin, from "my Google session expired".
+
+    Raises CookieConversionError with the missing and found cookie names, so the caller can
+    build a message that tells the admin what to re-export rather than just "invalid".
+    """
+    try:
+        from notebooklm.auth import MINIMUM_REQUIRED_COOKIES, _is_allowed_auth_domain
+    except ImportError as exc:  # pragma: no cover - depends on an optional package
+        raise CookieConversionError(
+            "notebooklm-py is not installed on the server."
+        ) from exc
+
+    converted: list[dict] = []
+    for c in raw_cookies:
+        name = c.get("name", "")
+        value = c.get("value", "")
+        domain = c.get("domain", "")
+        if not name or not value or not domain:
+            continue
+        if not _is_allowed_auth_domain(domain):
+            continue
+
+        # `if ... is not None` rather than `or`: a session cookie can carry
+        # expirationDate == 0, and `or` would treat that as absent and silently fall through
+        # to the other key — or to -1, changing the cookie's lifetime.
+        expires = c.get("expirationDate")
+        if expires is None:
+            expires = c.get("expires")
+
+        http_only = c.get("httpOnly", c.get("http_only", False))
+        converted.append({
+            "name": name,
+            "value": value,
+            "domain": domain,
+            "path": c.get("path", "/"),
+            "expires": int(expires) if expires is not None else -1,
+            "httpOnly": bool(http_only),
+            "secure": bool(c.get("secure", False)),
+            "sameSite": "None",
+        })
+
+    found = {c["name"] for c in converted}
+    missing = set(MINIMUM_REQUIRED_COOKIES) - found
+    if missing:
+        raise CookieConversionError(
+            "the export is missing required Google cookies",
+            missing=missing,
+            found=found,
+        )
+
+    return {"cookies": converted, "origins": []}

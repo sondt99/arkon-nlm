@@ -283,55 +283,31 @@ async def import_cookies(
     if not body.cookies:
         raise HTTPException(status_code=400, detail="cookies array is empty")
 
+    # The conversion lives in the service so it can be tested without a request: it is
+    # format-sensitive (Cookie-Editor vs rookiepy key names) and silently lossy when it
+    # guesses wrong. See notebooklm_service.cookies_to_storage_state.
+    from app.services.notebooklm_service import (
+        CookieConversionError,
+        cookies_to_storage_state,
+    )
+
     try:
-        from notebooklm.auth import MINIMUM_REQUIRED_COOKIES, _is_allowed_auth_domain
-    except ImportError as exc:
-        logger.exception("notebooklm-py import failed")
-        raise HTTPException(
-            status_code=503,
-            detail="notebooklm-py is not installed on the server.",
-        ) from exc
-
-    # Convert Cookie-Editor browser extension export → Playwright storage_state format.
-    # Cookie-Editor uses "expirationDate" (not "expires") and "httpOnly" (already camelCase).
-    # We handle both Cookie-Editor and rookiepy formats.
-    converted = []
-    for c in body.cookies:
-        domain = c.get("domain", "")
-        name = c.get("name", "")
-        value = c.get("value", "")
-        if not name or not value or not domain:
-            continue
-        if not _is_allowed_auth_domain(domain):
-            continue
-        # Cookie-Editor: "expirationDate" | rookiepy: "expires"
-        expires = c.get("expirationDate") or c.get("expires")
-        # Cookie-Editor: "httpOnly" (camelCase) | rookiepy: "http_only" (snake_case)
-        http_only = c.get("httpOnly", c.get("http_only", False))
-        converted.append({
-            "name": name,
-            "value": value,
-            "domain": domain,
-            "path": c.get("path", "/"),
-            "expires": int(expires) if expires is not None else -1,
-            "httpOnly": bool(http_only),
-            "secure": bool(c.get("secure", False)),
-            "sameSite": "None",
-        })
-    storage_state = {"cookies": converted, "origins": []}
-
-    # Validate minimum required cookies are present
-    cookie_names = {c["name"] for c in converted}
-    missing = MINIMUM_REQUIRED_COOKIES - cookie_names
-    if missing:
+        storage_state = cookies_to_storage_state(body.cookies)
+    except CookieConversionError as exc:
+        if not exc.missing:
+            # Only raised for a missing notebooklm-py, which is a server config problem.
+            logger.exception("cookie conversion failed")
+            raise HTTPException(status_code=503, detail=str(exc)) from exc
         raise HTTPException(
             status_code=400,
             detail=(
-                f"Missing required Google cookies: {', '.join(sorted(missing))}. "
+                f"Missing required Google cookies: {', '.join(sorted(exc.missing))}. "
                 "Export cookies while on notebooklm.google.com (must be logged in). "
-                f"Found: {', '.join(sorted(cookie_names)[:10]) or 'none'}."
+                f"Found: {', '.join(sorted(exc.found)[:10]) or 'none'}."
             ),
-        )
+        ) from exc
+
+    converted = storage_state["cookies"]
 
     # Determine storage directory
     import json
@@ -355,7 +331,13 @@ async def import_cookies(
         json.dumps(storage_state, indent=2, ensure_ascii=False),
         encoding="utf-8",
     )
-    logger.info(f"NLM session cookies saved: {len(converted)} cookies, required present: {MINIMUM_REQUIRED_COOKIES}")
+    # The required-cookie check already passed inside cookies_to_storage_state, so logging
+    # the constant added nothing. The domains are the useful detail when diagnosing an
+    # export that saved cleanly and then failed to authenticate.
+    logger.info(
+        "NLM session cookies saved: %d cookies across %d domain(s)",
+        len(converted), len({c["domain"] for c in converted}),
+    )
 
     # Live verification: saving the file only proves the format is valid, not that
     # Google accepts the cookies. Do one real call so the user learns immediately

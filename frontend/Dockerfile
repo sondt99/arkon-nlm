@@ -1,11 +1,17 @@
+# All three stages pin node by DIGEST, not just by the floating `22-alpine` tag, so the same
+# source cannot build against a different Node patch release next week. The tag stays for
+# readability; Docker uses the digest when both are given. Bumps arrive as reviewable
+# Dependabot PRs (.github/dependabot.yml). Keep the three digests identical — a build stage
+# on a different libc than the runtime stage is how native-module breakage gets shipped.
+
 # Stage 1: Install dependencies
-FROM node:22-alpine AS deps
+FROM node:22-alpine@sha256:c610fcdfb1d5b4740dd70c284ed3cb16bb857e0f7166196e36a5501df7a3aa32 AS deps
 WORKDIR /app
 COPY package.json package-lock.json ./
 RUN npm ci
 
 # Stage 2: Build
-FROM node:22-alpine AS builder
+FROM node:22-alpine@sha256:c610fcdfb1d5b4740dd70c284ed3cb16bb857e0f7166196e36a5501df7a3aa32 AS builder
 WORKDIR /app
 COPY --from=deps /app/node_modules ./node_modules
 COPY . .
@@ -19,7 +25,7 @@ ENV NEXT_TELEMETRY_DISABLED=1
 RUN npm run build
 
 # Stage 3: Runtime (minimal standalone image)
-FROM node:22-alpine AS runner
+FROM node:22-alpine@sha256:c610fcdfb1d5b4740dd70c284ed3cb16bb857e0f7166196e36a5501df7a3aa32 AS runner
 WORKDIR /app
 
 ENV NODE_ENV=production

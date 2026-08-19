@@ -1,7 +1,22 @@
-FROM nginx:alpine
+# Pinned by version AND digest. This was `FROM nginx:alpine` — no version whatsoever — in
+# the single ingress for the entire stack, so a routine `docker compose build nginx` could
+# bump nginx across minor lines without anyone choosing to. It had already drifted: the tag
+# resolves to 1.31.3 today, several minor releases past what the config was written against.
+# The digest below is exactly what `nginx:alpine` resolves to now, so this pin changes
+# nothing that is running — it only stops the next silent move. Bumps come as reviewable
+# Dependabot PRs (.github/dependabot.yml).
+FROM nginx:1.31-alpine@sha256:4a73073bd557c65b759505da037898b61f1be6cbcc3c2c3aeac22d2a470c1752
+
 # Bake the reverse-proxy config into the image instead of bind-mounting it from
 # the host, so nginx has no dependency on the E: drive mount (which Docker
 # Desktop's WSL2 file-sharing intermittently drops). Rebuild to apply edits:
 #   docker compose -f docker-compose.yml build nginx && docker compose ... up -d nginx
-COPY rate-limit.conf /etc/nginx/conf.d/00-rate-limit.conf
+#
+# 00- prefix: conf.d is included alphabetically, and the limit_req_zone / map directives in
+# http-common.conf must be defined before the server block in nginx.conf references them.
+COPY http-common.conf /etc/nginx/conf.d/00-http-common.conf
 COPY nginx.conf /etc/nginx/conf.d/default.conf
+
+# Fail the build, not the deploy, on a config typo. Without this a bad directive only
+# surfaces when the container starts and the whole stack's ingress is already down.
+RUN nginx -t

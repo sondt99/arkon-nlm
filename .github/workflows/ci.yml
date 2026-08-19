@@ -124,7 +124,7 @@ jobs:
       # Build-verify all three images so a pip/npm resolution break, or a bad nginx
       # directive, is caught here rather than during a production deploy.
       - name: Build backend image
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@v7
         with:
           context: .
           push: false
@@ -132,7 +132,7 @@ jobs:
           cache-to: type=gha,mode=max
 
       - name: Build frontend image
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@v7
         with:
           context: ./frontend
           push: false
@@ -145,7 +145,7 @@ jobs:
       # nginx.conf or http-common.conf fails the build here instead of taking the
       # ingress down on deploy.
       - name: Build nginx image (runs nginx -t)
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@v7
         with:
           context: ./nginx
           push: false

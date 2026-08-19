@@ -53,8 +53,7 @@ dependencies = [
     # Security floors for transitive deps (pulled in via content-core etc.)
     "aiohttp>=3.14.3",          # PYSEC-2026-3545/3546/3547
     "pyasn1>=0.6.4",            # PYSEC-2026-3455/3456/3457
-    # NOTE: pillow has open PYSEC advisories fixed in 12.x, but moviepy
-    # (via content-core) pins pillow<12.0 — upgrade blocked upstream.
+    "pillow>=12.3.0",           # 13 high + 5 moderate advisories; see [tool.uv] below
 ]
 
 [project.optional-dependencies]
@@ -81,3 +80,32 @@ line-length = 88
 [tool.ruff.lint]
 select = ["E", "F", "I"]
 ignore = ["E501"]
+
+
+[tool.uv]
+# moviepy 2.2.1 (the latest release) declares `pillow<12.0,>=9.2.0`, and it is a HARD
+# dependency of content-core, not an extra. That pin was holding pillow at 11.3.0 with 13
+# high and 5 moderate advisories open — several of them heap out-of-bounds writes in image
+# parsing (`Image.paste`, PSD tile extents, GD dimensions, PCF/BDF font files).
+#
+# Those are reachable here, not theoretical: `kb_service._extract_text_from_file` hands
+# UPLOADED files to `content_core.content.extraction.extract_content`, and content-core
+# pulls pillow directly as well as through python-pptx. An authenticated user with
+# `doc:create` chooses the bytes that get parsed.
+#
+# The pin turns out to be conservative rather than required. Verified in an isolated venv
+# with pillow 12.3.0 + moviepy 2.2.1:
+#   - `import content_core.content.extraction` succeeds. This matters because content-core
+#     imports moviepy EAGERLY, so an incompatibility would take down the whole extraction
+#     path rather than only video.
+#   - moviepy's own image path still works (ImageClip -> get_frame round-trip).
+#   - The pillow operations content-core and python-pptx actually use (new / paste / save)
+#     all work.
+#
+# Arkon also never exercises moviepy's video code: `zip_service.ALLOWED_EXTENSIONS` is
+# {.pdf .docx .doc .txt .md .csv .xlsx .pptx} — no video format is accepted at any upload
+# entry point.
+#
+# Revisit when moviepy relaxes the pin; then this override can be deleted rather than
+# widened.
+override-dependencies = ["pillow>=12.3.0"]

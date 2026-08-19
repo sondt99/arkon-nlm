@@ -55,7 +55,12 @@ jobs:
           m "$COMMON" && { for k in backend frontend migrations images; do echo "$k=true" >> "$GITHUB_OUTPUT"; done; exit 0; }
           m '^(app/|tests/|alembic/)'            && echo "backend=true"    >> "$GITHUB_OUTPUT" || true
           m '^frontend/'                          && echo "frontend=true"   >> "$GITHUB_OUTPUT" || true
-          m '^(alembic/|app/database/|app/config)' && echo "migrations=true" >> "$GITHUB_OUTPUT" || true
+          # tests/test_real_postgres.py is included because the real-database tier RUNS as a
+          # step on the migrations job. Without it, a PR that only edits those tests skips the
+          # only job that can execute them — which happened on #137: it added three tests to
+          # that file and CI reported Migrations=SKIPPED.
+          m '^(alembic/|app/database/|app/config|tests/test_real_postgres\.py|tests/conftest\.py)' \
+                                                  && echo "migrations=true" >> "$GITHUB_OUTPUT" || true
           m '^(Dockerfile|frontend/Dockerfile|nginx/|docker-compose|entrypoint|migrate\.sh)' \
                                                   && echo "images=true"     >> "$GITHUB_OUTPUT" || true
 

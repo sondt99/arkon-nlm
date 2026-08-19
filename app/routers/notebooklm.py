@@ -221,8 +221,15 @@ async def notebooklm_auth_status(
             "message": f"Connected{f' as {email}' if email else ''}.",
             "last_refreshed": last_refreshed,
         }
-    except Exception as e:
-        return {"authenticated": False, "email": None, "message": f"Could not read session file: {e}"}
+    except Exception:
+        # Reported with HTTP 200 and rendered verbatim in the admin UI, so `{e}` put the
+        # server's filesystem paths and JSON parser internals on an operator's screen.
+        logger.exception("NLM session-file read failed")
+        return {
+            "authenticated": False,
+            "email": None,
+            "message": "Could not read the stored session. Re-import cookies.",
+        }
 
 
 @router.post("/notebooklm/auth/refresh")
@@ -245,8 +252,12 @@ async def notebooklm_refresh_session(
             await client.refresh_auth()
         last_refreshed = state_file.stat().st_mtime
         return {"success": True, "message": "Session refreshed", "last_refreshed": last_refreshed}
-    except Exception as e:
-        return {"success": False, "message": str(e)}
+    except Exception:
+        logger.exception("NLM manual session refresh failed")
+        return {
+            "success": False,
+            "message": "Session refresh failed. Re-import cookies or install a master token.",
+        }
 
 
 class CookieImport(BaseModel):
@@ -274,8 +285,12 @@ async def import_cookies(
 
     try:
         from notebooklm.auth import MINIMUM_REQUIRED_COOKIES, _is_allowed_auth_domain
-    except ImportError as e:
-        raise HTTPException(status_code=503, detail=f"notebooklm-py not installed: {e}")
+    except ImportError as exc:
+        logger.exception("notebooklm-py import failed")
+        raise HTTPException(
+            status_code=503,
+            detail="notebooklm-py is not installed on the server.",
+        ) from exc
 
     # Convert Cookie-Editor browser extension export → Playwright storage_state format.
     # Cookie-Editor uses "expirationDate" (not "expires") and "httpOnly" (already camelCase).
@@ -384,7 +399,10 @@ async def import_cookies(
         return {
             "success": True,
             "verified": False,
-            "message": f"Cookies saved but verification failed: {e}",
+            "message": (
+                "Cookies saved, but the verification call failed for an unexpected "
+                "reason. See the server log."
+            ),
         }
 
 
@@ -429,18 +447,33 @@ async def import_master_token(
 
     storage.mkdir(parents=True, exist_ok=True)
     mt_file = storage / "master_token.json"
-    mt_file.write_text(
-        json.dumps({
-            "master_token": body.master_token.strip(),
-            "email": body.email.strip(),
-            "android_id": body.android_id.strip(),
-        }),
-        encoding="utf-8",
-    )
+    # Created 0600 before a byte is written, rather than written under the default umask and
+    # narrowed afterwards. `except OSError: pass` on the chmod meant a failure left a
+    # full-account, long-lived Google credential world-readable while the docstring above,
+    # the response and the log all still promised 0600 — the exact "reports success" shape.
+    # os.open with 0o600 removes the window as well as the silence.
     try:
-        os.chmod(mt_file, 0o600)
-    except OSError:
-        pass
+        fd = os.open(mt_file, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+        try:
+            os.write(fd, json.dumps({
+                "master_token": body.master_token.strip(),
+                "email": body.email.strip(),
+                "android_id": body.android_id.strip(),
+            }).encode("utf-8"))
+        finally:
+            os.close(fd)
+        os.chmod(mt_file, 0o600)  # in case the file already existed with wider bits
+    except OSError as exc:
+        # Do not leave a credential behind that we could not protect.
+        logger.exception("Could not store the NLM master token with 0600 permissions")
+        mt_file.unlink(missing_ok=True)
+        raise HTTPException(
+            status_code=500,
+            detail=(
+                "Could not store the master token with owner-only permissions, so it was "
+                "not saved. Check the NOTEBOOKLM_STORAGE_PATH mount on the server."
+            ),
+        ) from exc
 
     # Remove any stale cookie session so the client mints cleanly from the token
     # (from_storage takes the "storage absent -> mint from sibling token" path).
@@ -471,7 +504,14 @@ async def import_master_token(
                 ),
             }
         logger.exception("NLM master token verification failed with a non-auth error")
-        return {"success": True, "verified": False, "message": f"Master token saved but verification failed: {e}"}
+        return {
+            "success": True,
+            "verified": False,
+            "message": (
+                "Master token saved, but the verification call failed for an unexpected "
+                "reason. See the server log."
+            ),
+        }
 
 
 @router.delete("/notebooklm/auth/session", status_code=200)
@@ -565,9 +605,9 @@ async def create_notebook(
             text_content=text_content,
             source_title=source_title,
         )
-    except Exception as e:
-        logger.error(f"NLM create_notebook failed: {e}")
-        raise HTTPException(status_code=502, detail=f"NotebookLM API error: {e}")
+    except Exception as exc:
+        logger.exception("NLM create_notebook failed")
+        raise _nlm_error(exc)
 
     nb = NotebookLMNotebook(
         notebook_id=notebook_nlm_id,
@@ -892,7 +932,9 @@ def _nlm_error(e: Exception) -> HTTPException:
             status_code=401,
             detail="NotebookLM session expired. Re-import cookies to reconnect.",
         )
-    return HTTPException(status_code=502, detail=f"NotebookLM API error: {e}")
+    # Fixed text: every 502 in this router funnels through here, and the upstream
+    # exception message routinely carries request URLs and Google response bodies.
+    return HTTPException(status_code=502, detail="NotebookLM API error — see server log.")
 
 
 # ---------------------------------------------------------------------------
@@ -1213,8 +1255,9 @@ async def nlm_artifact_preview_data(
     await _resolve_nlm_notebook(db, current_user, nlm_id)
     try:
         artifacts = await list_nlm_artifacts(nlm_id)
-    except Exception as e:
-        raise HTTPException(status_code=502, detail=f"Could not fetch artifacts: {e}")
+    except Exception as exc:
+        logger.exception("NLM artifact listing failed for notebook={}", nlm_id)
+        raise HTTPException(status_code=502, detail="Could not fetch artifacts.") from exc
 
     artifact = next((a for a in artifacts if a["id"] == artifact_id), None)
     if not artifact:
@@ -1226,8 +1269,9 @@ async def nlm_artifact_preview_data(
 
     try:
         data = await get_artifact_preview_data(nlm_id, artifact_id, artifact["kind"])
-    except Exception as e:
-        raise HTTPException(status_code=502, detail=f"Could not load preview: {e}")
+    except Exception as exc:
+        logger.exception("NLM artifact preview failed for notebook={} artifact={}", nlm_id, artifact_id)
+        raise HTTPException(status_code=502, detail="Could not load the artifact preview.") from exc
 
     if not data:
         raise HTTPException(status_code=502, detail="No preview data available")
@@ -1262,8 +1306,9 @@ async def nlm_ingest_artifact(
     await _resolve_nlm_notebook(db, current_user, nlm_id)
     try:
         artifacts = await list_nlm_artifacts(nlm_id)
-    except Exception as e:
-        raise HTTPException(status_code=502, detail=f"Could not fetch artifacts: {e}")
+    except Exception as exc:
+        logger.exception("NLM artifact listing failed for notebook={}", nlm_id)
+        raise HTTPException(status_code=502, detail="Could not fetch artifacts.") from exc
 
     artifact = next((a for a in artifacts if a["id"] == artifact_id), None)
     if not artifact:
@@ -1284,8 +1329,9 @@ async def nlm_ingest_artifact(
 
         try:
             data = await get_artifact_bytes(nlm_id, artifact_id, kind)
-        except Exception as e:
-            raise HTTPException(status_code=502, detail=f"Could not download slide deck: {e}")
+        except Exception as exc:
+            logger.exception("NLM slide-deck download failed for artifact={}", artifact_id)
+            raise HTTPException(status_code=502, detail="Could not download the slide deck.") from exc
 
         if not data:
             raise HTTPException(status_code=502, detail="Slide deck produced no data")
@@ -1322,8 +1368,9 @@ async def nlm_ingest_artifact(
         # Text artifact: extract text → text source → MRP pipeline
         try:
             text = await get_artifact_text(nlm_id, artifact_id, kind)
-        except Exception as e:
-            raise HTTPException(status_code=502, detail=f"Could not extract artifact text: {e}")
+        except Exception as exc:
+            logger.exception("NLM artifact text extraction failed for artifact={}", artifact_id)
+            raise HTTPException(status_code=502, detail="Could not extract the artifact text.") from exc
 
         if not text:
             raise HTTPException(status_code=502, detail="Artifact produced no extractable text")
@@ -1367,8 +1414,9 @@ async def nlm_download_artifact(
     await _resolve_nlm_notebook(db, current_user, nlm_id)
     try:
         artifacts = await list_nlm_artifacts(nlm_id)
-    except Exception as e:
-        raise HTTPException(status_code=502, detail=f"Could not fetch artifacts: {e}")
+    except Exception as exc:
+        logger.exception("NLM artifact listing failed for notebook={}", nlm_id)
+        raise HTTPException(status_code=502, detail="Could not fetch artifacts.") from exc
 
     artifact = next((a for a in artifacts if a["id"] == artifact_id), None)
     if not artifact:
@@ -1382,8 +1430,9 @@ async def nlm_download_artifact(
 
     try:
         data = await get_artifact_bytes(nlm_id, artifact_id, kind)
-    except Exception as e:
-        raise HTTPException(status_code=502, detail=f"Download failed: {e}")
+    except Exception as exc:
+        logger.exception("NLM artifact download failed for artifact={}", artifact_id)
+        raise HTTPException(status_code=502, detail="Artifact download failed.") from exc
 
     if not data:
         raise HTTPException(status_code=502, detail="Empty artifact data")

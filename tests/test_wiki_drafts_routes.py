@@ -39,18 +39,29 @@ class _FakeSession:
     only fires during a real flush, and the draft response model requires the id.
     """
 
-    def __init__(self, *rows, drafts=()):
+    def __init__(self, *rows, drafts=(), joined=()):
         self._rows = {(type(r).__name__, r.id): r for r in rows}
         self.query_results = list(drafts)
+        # (draft, page) tuples for the joined draft-queue query, which reads its rows with
+        # .all() rather than .scalars(). The stub cannot evaluate a WHERE clause, so the
+        # queue's scoping is asserted on the emitted statement instead — see
+        # test_the_draft_queue_scopes_in_sql_before_the_limit.
+        self.joined_results = list(joined)
+        self.statements: list[object] = []
         self.added: list[object] = []
         self.commits = 0
 
     async def get(self, model, ident):
         return self._rows.get((model.__name__, ident))
 
-    async def execute(self, _statement):
+    async def execute(self, statement):
+        self.statements.append(statement)
         rows = self.query_results
-        return SimpleNamespace(scalars=lambda: SimpleNamespace(all=lambda: rows))
+        joined = self.joined_results
+        return SimpleNamespace(
+            scalars=lambda: SimpleNamespace(all=lambda: rows),
+            all=lambda: joined,
+        )
 
     def add(self, obj):
         if getattr(obj, "id", None) is None:
@@ -573,21 +584,54 @@ async def test_reading_a_draft_returns_the_documented_shape():
 
 @pytest.mark.asyncio
 async def test_the_draft_queue_hides_drafts_the_caller_cannot_review():
-    """wiki:read is enough to call this route, so the per-page review check inside the
-    loop is the only thing keeping another department's pending text out of the queue."""
+    """wiki:read is enough to call this route, so the reviewability rule is the only thing
+    keeping another workspace's pending text out of the queue.
+
+    The rule now lives in `_build_reviewable_filter` (it used to be a per-row loop that ran
+    *after* LIMIT), so this asserts the clause itself. A caller holding only wiki:read:all
+    gets a predicate that no global page can satisfy — it demands editor+ membership of the
+    page's workspace — while wiki:write:all admits global pages as well.
+    """
+    read_only = drafts_router._build_reviewable_filter
+
+    reader_clause = read_only(_user("wiki:read:all"))
+    assert reader_clause is not None, "wiki:read:all must not see the whole queue"
+    reader_sql = str(reader_clause.compile(compile_kwargs={"literal_binds": True}))
+    assert "project_members" in reader_sql
+    assert "scope_type" in reader_sql
+    # No disjunct admits a global page: every branch requires the project scope.
+    assert reader_sql.count("scope_type") == reader_sql.count("wiki_pages.scope_type")
+    assert " != " not in reader_sql, "a `scope_type != project` branch would let globals in"
+
+    writer_clause = read_only(_user("wiki:write:all"))
+    writer_sql = str(writer_clause.compile(compile_kwargs={"literal_binds": True}))
+    assert "!=" in writer_sql, "wiki:write:all must also admit non-project (global) pages"
+
+    admin_clause = read_only(_user(role="admin"))
+    assert admin_clause is None, "admins review everything"
+
+
+@pytest.mark.asyncio
+async def test_the_draft_queue_scopes_in_sql_before_the_limit():
+    """LIMIT used to be applied before the per-row review check, so a scoped reviewer got an
+    arbitrarily truncated page — anything from all 50 rows to none — with no signal that the
+    rest of their queue existed. The predicate must reach the same statement as the LIMIT.
+    """
     page = _page()
     draft = _draft(page)
-    db = _FakeSession(page, draft, drafts=[draft])
+    db = _FakeSession(page, draft, joined=[(draft, page)])
 
-    visible = await drafts_router.list_all_drafts(
+    await drafts_router.list_all_drafts(
         status="pending", limit=50, db=db, user=_user("wiki:read:all")
     )
-    assert visible == []
 
-    reviewable = await drafts_router.list_all_drafts(
-        status="pending", limit=50, db=db, user=_user("wiki:write:all")
+    statement = db.statements[-1]
+    assert statement._limit_clause is not None, "the query must still be bounded"
+    where_sql = str(statement.whereclause.compile(compile_kwargs={"literal_binds": True}))
+    assert "project_members" in where_sql, (
+        "the reviewability predicate is not in this statement's WHERE clause, so LIMIT is "
+        "again being applied to rows the caller cannot review"
     )
-    assert [d.id for d in reviewable] == [draft.id]
 
 
 @pytest.mark.asyncio

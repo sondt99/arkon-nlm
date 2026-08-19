@@ -51,7 +51,10 @@ class AuditListResponse(BaseModel):
 async def get_audit_log(
     page: int = Query(1, ge=1),
     page_size: int = Query(50, ge=1, le=200),
-    principal_id: Optional[str] = None,
+    # Typed rather than parsed below: `uuid.UUID(principal_id)` on a query-string value
+    # raised ValueError, and nothing translates that, so filtering the audit log by a
+    # mistyped id answered 500 instead of 422.
+    principal_id: Optional[uuid.UUID] = None,
     action: Optional[str] = None,
     decision: Optional[str] = None,
     resource_type: Optional[str] = None,
@@ -65,7 +68,7 @@ async def get_audit_log(
     stmt = select(AuditLog)
 
     if principal_id:
-        stmt = stmt.where(AuditLog.principal_id == uuid.UUID(principal_id))
+        stmt = stmt.where(AuditLog.principal_id == principal_id)
     if action:
         stmt = stmt.where(AuditLog.action == action)
     if decision:

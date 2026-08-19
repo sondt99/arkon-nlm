@@ -6,7 +6,7 @@ Permission model v2: uses scoped permission format.
 import uuid
 from typing import Optional
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -67,8 +67,11 @@ class EmployeeCreate(BaseModel):
     email: str
     password: Optional[str] = None
     role: str = "employee"
-    department_id: str
-    custom_role_id: Optional[str] = None
+    # Typed as UUID so a malformed id is a 422 from Pydantic. These were `str` and each
+    # call site did a bare uuid.UUID(...) with no ValueError handler registered anywhere,
+    # which turned every typo into a 500.
+    department_id: uuid.UUID
+    custom_role_id: Optional[uuid.UUID] = None
 
 
 class EmployeeUpdate(BaseModel):
@@ -77,8 +80,8 @@ class EmployeeUpdate(BaseModel):
     email: Optional[str] = None
     password: Optional[str] = None
     role: Optional[str] = None
-    department_id: Optional[str] = None
-    custom_role_id: Optional[str] = None
+    department_id: Optional[uuid.UUID] = None
+    custom_role_id: Optional[uuid.UUID] = None
 
 
 class EmployeeOut(BaseModel):
@@ -149,12 +152,12 @@ async def create_department(
 
 @router.put("/departments/{dept_id}")
 async def update_department(
-    dept_id: str,
+    dept_id: uuid.UUID,
     body: DepartmentCreate,
     db: AsyncSession = Depends(get_db),
     _user: Employee = require_permission("org:departments:manage"),
 ):
-    dept = await db.get(Department, uuid.UUID(dept_id))
+    dept = await db.get(Department, dept_id)
     if not dept:
         raise HTTPException(404, "Department not found")
     dept.name = body.name
@@ -166,11 +169,11 @@ async def update_department(
 
 @router.delete("/departments/{dept_id}")
 async def delete_department(
-    dept_id: str,
+    dept_id: uuid.UUID,
     db: AsyncSession = Depends(get_db),
     _user: Employee = require_permission("org:departments:manage"),
 ):
-    dept = await db.get(Department, uuid.UUID(dept_id))
+    dept = await db.get(Department, dept_id)
     if not dept:
         raise HTTPException(404, "Department not found")
     employee_count = (
@@ -194,10 +197,13 @@ async def delete_department(
 
 @router.get("/employees")
 async def list_employees(
-    department_id: Optional[str] = None,
-    search: Optional[str] = None,
-    page: int = 1,
-    page_size: int = 20,
+    department_id: Optional[uuid.UUID] = Query(None),
+    search: Optional[str] = Query(None),
+    page: int = Query(1, ge=1),
+    # Bare `page_size: int = 20` accepted any integer, so one request could dump the whole
+    # employee directory — names, emails, departments and token state — in a single page.
+    # Capped at the same 200 as the audit log.
+    page_size: int = Query(20, ge=1, le=200),
     db: AsyncSession = Depends(get_db),
     _user: Employee = require_permission("org:employees:read"),
 ):
@@ -210,8 +216,8 @@ async def list_employees(
     count_base = select(sa_func.count(Employee.id))
 
     if department_id:
-        base = base.where(Employee.department_id == uuid.UUID(department_id))
-        count_base = count_base.where(Employee.department_id == uuid.UUID(department_id))
+        base = base.where(Employee.department_id == department_id)
+        count_base = count_base.where(Employee.department_id == department_id)
     if search:
         escaped = search.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
         like = f"%{escaped}%"
@@ -258,7 +264,7 @@ async def create_employee(
     _user: Employee = require_permission("org:employees:manage"),
 ):
     """Create a new employee."""
-    dept = await db.get(Department, uuid.UUID(body.department_id))
+    dept = await db.get(Department, body.department_id)
     if not dept:
         raise HTTPException(400, "Department not found")
 
@@ -285,7 +291,7 @@ async def create_employee(
         email=body.email,
         password_hash=password_hash,
         role=body.role,
-        department_id=uuid.UUID(body.department_id),
+        department_id=body.department_id,
         custom_role_id=new_role.id if new_role else None,
     )
     db.add(emp)
@@ -295,7 +301,7 @@ async def create_employee(
     return {"id": str(emp.id), "name": emp.name, "email": emp.email}
 
 
-async def _resolve_custom_role(db: AsyncSession, custom_role_id: Optional[str]):
+async def _resolve_custom_role(db: AsyncSession, custom_role_id: Optional[uuid.UUID]):
     """Load the Role a request is trying to assign, so its grants can be authorized.
 
     The id arrived from the request body and was written to the column unchecked, so the
@@ -303,7 +309,7 @@ async def _resolve_custom_role(db: AsyncSession, custom_role_id: Optional[str]):
     """
     if not custom_role_id:
         return None
-    role = await db.get(Role, uuid.UUID(custom_role_id))
+    role = await db.get(Role, custom_role_id)
     if not role:
         raise HTTPException(404, "Role not found")
     return role
@@ -311,12 +317,12 @@ async def _resolve_custom_role(db: AsyncSession, custom_role_id: Optional[str]):
 
 @router.put("/employees/{emp_id}")
 async def update_employee(
-    emp_id: str,
+    emp_id: uuid.UUID,
     body: EmployeeUpdate,
     db: AsyncSession = Depends(get_db),
     _user: Employee = require_permission("org:employees:manage"),
 ):
-    emp = await db.get(Employee, uuid.UUID(emp_id))
+    emp = await db.get(Employee, emp_id)
     if not emp:
         raise HTTPException(404, "Employee not found")
 
@@ -325,7 +331,7 @@ async def update_employee(
     if body.email is not None:
         emp.email = body.email
     if body.department_id is not None:
-        emp.department_id = uuid.UUID(body.department_id)
+        emp.department_id = body.department_id
     if "custom_role_id" in body.model_fields_set:
         new_role = await _resolve_custom_role(db, body.custom_role_id)
         ensure_can_assign_custom_role(_user, new_role, target=emp)
@@ -348,11 +354,11 @@ async def update_employee(
 
 @router.delete("/employees/{emp_id}")
 async def delete_employee(
-    emp_id: str,
+    emp_id: uuid.UUID,
     db: AsyncSession = Depends(get_db),
     _user: Employee = require_permission("org:employees:manage"),
 ):
-    emp = await db.get(Employee, uuid.UUID(emp_id))
+    emp = await db.get(Employee, emp_id)
     if not emp:
         raise HTTPException(404, "Employee not found")
     if emp.role == "admin":
@@ -364,12 +370,12 @@ async def delete_employee(
 
 @router.patch("/employees/{emp_id}/toggle")
 async def toggle_employee(
-    emp_id: str,
+    emp_id: uuid.UUID,
     db: AsyncSession = Depends(get_db),
     _user: Employee = require_permission("org:employees:manage"),
 ):
     """Activate or deactivate an employee."""
-    emp = await db.get(Employee, uuid.UUID(emp_id))
+    emp = await db.get(Employee, emp_id)
     if not emp:
         raise HTTPException(404, "Employee not found")
     ensure_can_toggle(_user, emp, active_admin_count=await _active_admin_count(db))
@@ -385,12 +391,12 @@ async def toggle_employee(
 
 @router.post("/employees/{emp_id}/token", response_model=TokenResponse)
 async def generate_mcp_token(
-    emp_id: str,
+    emp_id: uuid.UUID,
     db: AsyncSession = Depends(get_db),
     _user: Employee = require_permission("org:employees:manage"),
 ):
     """Generate (or regenerate) an MCP token for an employee."""
-    emp = await db.get(Employee, uuid.UUID(emp_id))
+    emp = await db.get(Employee, emp_id)
     if not emp:
         raise HTTPException(404, "Employee not found")
 
@@ -410,13 +416,13 @@ async def generate_mcp_token(
 
 @router.delete("/employees/{emp_id}/token")
 async def revoke_mcp_token(
-    emp_id: str,
+    emp_id: uuid.UUID,
     db: AsyncSession = Depends(get_db),
     _user: Employee = require_permission("org:employees:manage"),
 ):
     """Revoke an employee's MCP token."""
     auth_svc = MCPAuthService(db)
-    revoked = await auth_svc.revoke_token(uuid.UUID(emp_id))
+    revoked = await auth_svc.revoke_token(emp_id)
     if not revoked:
         raise HTTPException(404, "Employee not found or has no token")
     return {"revoked": True}

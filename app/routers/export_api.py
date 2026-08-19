@@ -22,6 +22,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.ai.registry import ProviderRegistry
 from app.database import get_db
 from app.database.models import ChatConversation, Employee
+from app.routers.chat import assert_conversation_scope
 from app.services import chat_service
 from app.services.mcp_auth_service import (
     ResolvedIdentity,
@@ -75,6 +76,14 @@ class ExportSearchResponse(BaseModel):
 # Helpers
 # ---------------------------------------------------------------------------
 
+async def _token_employee(db: AsyncSession, identity: ResolvedIdentity) -> Employee:
+    """The Employee the bearer token belongs to, for the membership checks below."""
+    employee = await db.get(Employee, identity.employee_id)
+    if not employee:
+        raise HTTPException(status_code=401, detail="This token's owner no longer exists")
+    return employee
+
+
 async def _resolve_scope(
     db: AsyncSession,
     identity: ResolvedIdentity,
@@ -84,8 +93,8 @@ async def _resolve_scope(
     if workspace_id is None:
         return "global", None
 
-    employee = await db.get(Employee, identity.employee_id)
-    if not employee or not await can_access_workspace(db, employee, workspace_id):
+    employee = await _token_employee(db, identity)
+    if not await can_access_workspace(db, employee, workspace_id):
         raise HTTPException(status_code=403, detail="You do not have access to this workspace")
     return "project", workspace_id
 
@@ -154,6 +163,12 @@ async def export_chat(
         conv = result.scalar_one_or_none()
         if not conv:
             raise HTTPException(status_code=404, detail="Conversation not found")
+        # The stored scope_type/scope_id is what generate_reply retrieves against, and it
+        # was written when the conversation was created. Only the ownership predicate above
+        # was re-checked on reuse, so a member removed from the workspace afterwards kept
+        # querying it indefinitely through this token — the membership that justified the
+        # scope was never verified again. Same rule as the portal chat router.
+        await assert_conversation_scope(db, await _token_employee(db, identity), conv)
     else:
         scope_type, scope_id = await _resolve_scope(db, identity, body.workspace_id)
         conv = ChatConversation(

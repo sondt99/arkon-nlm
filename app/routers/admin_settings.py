@@ -2,9 +2,10 @@
 Admin settings router — provider config, connection testing, dashboard stats.
 """
 
-from typing import Optional
+from typing import Awaitable, Callable, Optional
 
 from fastapi import APIRouter, Depends
+from loguru import logger
 from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -108,6 +109,34 @@ async def test_all_providers(
     }
 
 
+async def _run_connection_test(
+    capability: str,
+    probe: Callable[[], Awaitable[tuple[bool, str]]],
+) -> "TestConnectionResult":
+    """Run one provider probe and translate a raised exception into a fixed message.
+
+    The five test-* handlers each ended in `except Exception as e: return
+    TestConnectionResult(success=False, message=str(e))`, which put arbitrary internal text
+    — provider tracebacks, request URLs with the API key in them, driver errors — into a
+    200 OK response body. The probe's own (ok, msg) pair is still returned verbatim: that
+    string is written by the provider for exactly this purpose. Only the unexpected path is
+    generalised, and it goes to the log where an operator can actually read it.
+    """
+    try:
+        ok, msg = await probe()
+        return TestConnectionResult(success=ok, message=msg)
+    except Exception:
+        logger.exception("Provider connection test failed for capability={}", capability)
+        return TestConnectionResult(
+            success=False,
+            message=(
+                f"Could not reach the configured {capability} provider. "
+                "Check the provider, model and API key in Settings; "
+                "the server log has the details."
+            ),
+        )
+
+
 @router.post("/settings/test-embedding", response_model=TestConnectionResult)
 async def test_embedding(
     db: AsyncSession = Depends(get_db),
@@ -116,13 +145,11 @@ async def test_embedding(
     """Test the configured embedding provider."""
     from app.ai.registry import ProviderRegistry
 
-    try:
-        registry = ProviderRegistry(db)
-        provider = await registry.get_embedding()
-        ok, msg = await provider.test_connection()
-        return TestConnectionResult(success=ok, message=msg)
-    except Exception as e:
-        return TestConnectionResult(success=False, message=str(e))
+    async def _probe() -> tuple[bool, str]:
+        provider = await ProviderRegistry(db).get_embedding()
+        return await provider.test_connection()
+
+    return await _run_connection_test("embedding", _probe)
 
 
 @router.post("/settings/test-llm", response_model=TestConnectionResult)
@@ -133,13 +160,11 @@ async def test_llm(
     """Test the configured LLM provider."""
     from app.ai.registry import ProviderRegistry
 
-    try:
-        registry = ProviderRegistry(db)
-        provider = await registry.get_llm()
-        ok, msg = await provider.test_connection()
-        return TestConnectionResult(success=ok, message=msg)
-    except Exception as e:
-        return TestConnectionResult(success=False, message=str(e))
+    async def _probe() -> tuple[bool, str]:
+        provider = await ProviderRegistry(db).get_llm()
+        return await provider.test_connection()
+
+    return await _run_connection_test("LLM", _probe)
 
 
 @router.post("/settings/test-vision", response_model=TestConnectionResult)
@@ -150,15 +175,13 @@ async def test_vision(
     """Test the configured vision provider."""
     from app.ai.registry import ProviderRegistry
 
-    try:
-        registry = ProviderRegistry(db)
-        provider = await registry.get_vision()
+    async def _probe() -> tuple[bool, str]:
+        provider = await ProviderRegistry(db).get_vision()
         if not provider:
-            return TestConnectionResult(success=False, message="No vision provider configured")
-        ok, msg = await provider.test_connection()
-        return TestConnectionResult(success=ok, message=msg)
-    except Exception as e:
-        return TestConnectionResult(success=False, message=str(e))
+            return False, "No vision provider configured"
+        return await provider.test_connection()
+
+    return await _run_connection_test("vision", _probe)
 
 
 @router.post("/settings/test-chatbot", response_model=TestConnectionResult)
@@ -169,13 +192,11 @@ async def test_chatbot(
     """Test the configured chatbot LLM provider (falls back to main LLM if not set)."""
     from app.ai.registry import ProviderRegistry
 
-    try:
-        registry = ProviderRegistry(db)
-        provider = await registry.get_chatbot_llm()
-        ok, msg = await provider.test_connection()
-        return TestConnectionResult(success=ok, message=msg)
-    except Exception as e:
-        return TestConnectionResult(success=False, message=str(e))
+    async def _probe() -> tuple[bool, str]:
+        provider = await ProviderRegistry(db).get_chatbot_llm()
+        return await provider.test_connection()
+
+    return await _run_connection_test("chatbot", _probe)
 
 
 @router.post("/settings/test-gateway", response_model=TestConnectionResult)
@@ -186,13 +207,11 @@ async def test_gateway(
     """Test the configured Claude Code Gateway provider (falls back to main LLM if not set)."""
     from app.ai.registry import ProviderRegistry
 
-    try:
-        registry = ProviderRegistry(db)
-        provider = await registry.get_gateway_llm()
-        ok, msg = await provider.test_connection()
-        return TestConnectionResult(success=ok, message=msg)
-    except Exception as e:
-        return TestConnectionResult(success=False, message=str(e))
+    async def _probe() -> tuple[bool, str]:
+        provider = await ProviderRegistry(db).get_gateway_llm()
+        return await provider.test_connection()
+
+    return await _run_connection_test("gateway", _probe)
 
 
 # ---------------------------------------------------------------------------

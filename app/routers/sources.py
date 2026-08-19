@@ -128,6 +128,61 @@ async def _require_source_access(
     return source
 
 
+def _validate_department_scope(
+    user: Employee, dept_uuids: list[uuid.UUID], action: str
+) -> None:
+    """Authorise the department set a write attaches to a source.
+
+    The check used to be a bare loop over the submitted list, repeated at each call site,
+    and that shape hid two holes:
+
+      * An **empty** list iterates zero times and passed. Zero `source_departments` rows
+        is how this schema spells "global — visible to everyone holding doc:read", so
+        `doc:create:own_dept` could publish org-wide just by omitting the field. That
+        collapses the documented distinction between `:own_dept` and `:all` and is the
+        cheapest route to poisoning the global wiki.
+      * `add_url_source` had no loop at all, so any department id in the body was written.
+
+    So the rule lives here and every path that writes `SourceDepartment` calls it.
+    """
+    if user.role == "admin" or f"doc:{action}:all" in _get_user_permissions(user):
+        return
+
+    if not dept_uuids:
+        raise HTTPException(
+            403,
+            f"At least one department is required. Publishing a document with no "
+            f"department makes it visible to the whole organisation, which needs "
+            f"doc:{action}:all.",
+        )
+
+    for did in dept_uuids:
+        if did != user.department_id:
+            raise HTTPException(403, "You can only assign documents to your own department")
+
+
+def _storage_basename(file_name: str) -> str:
+    """Reduce a client-supplied upload name to one safe path segment.
+
+    The MinIO key is built as `sources/{id}/original/{name}` and only the *extension* was
+    validated, so a multipart filename of `../../x.pdf` wrote the blob outside the
+    source's own prefix. Nothing fails at upload time; the damage lands at deletion, when
+    `delete_source_completely` removes the row and `delete_prefix("sources/{id}/")` misses
+    the escaped object — it stays in the bucket with no row pointing at it, which is a
+    retention failure rather than a cosmetic key problem.
+
+    Backslashes are folded before the check because `safe_relative_path` rejects `..`
+    segments and `a\\..\\b` only becomes traversal once the separator is normalised.
+    """
+    from app.services.storage_service import safe_relative_path
+
+    candidate = (file_name or "").replace("\\", "/").rsplit("/", 1)[-1]
+    try:
+        return safe_relative_path(candidate)
+    except ValueError:
+        raise HTTPException(400, "File name cannot be used as a storage key")
+
+
 async def _validate_source_scope(
     db: AsyncSession,
     user: Employee,
@@ -410,7 +465,13 @@ async def get_source(
             from app.services.storage_service import storage_service
             download_url = await storage_service.get_presigned_url_async(source.minio_key)
         except Exception:
-            pass
+            # A null download_url is a degraded but valid response, so the request still
+            # succeeds — but `pass` left a broken MinIO config indistinguishable from a
+            # source that genuinely has no blob, with nothing in the log either way.
+            logger.exception(
+                "Presigned URL generation failed for source={} key={}",
+                source.id, source.minio_key,
+            )
 
     base = _to_response(source, wiki_count)
     return SourceDetail(
@@ -483,24 +544,27 @@ async def get_source_progress(
 async def upload_source(
     file: UploadFile = File(...),
     title: Optional[str] = Form(None),
-    knowledge_type_id: Optional[str] = Form(None),
+    knowledge_type_id: Optional[uuid.UUID] = Form(None),
     department_ids: Optional[str] = Form(None),  # comma-separated UUIDs
     scope_type: Optional[str] = Form(None),
     scope_id: Optional[str] = Form(None),
     db: AsyncSession = Depends(get_db),
     user: Employee = require_permission("doc:create"),
 ):
-    file_name = file.filename or "unknown"
-
     import os as _os
 
     from app.services.zip_service import ALLOWED_EXTENSIONS
-    ext = _os.path.splitext(file_name)[1].lower()
+    ext = _os.path.splitext(file.filename or "unknown")[1].lower()
     if ext not in ALLOWED_EXTENSIONS:
         raise HTTPException(
             400,
             f"File type '{ext}' is not supported. Allowed: {', '.join(sorted(ALLOWED_EXTENSIONS))}",
         )
+
+    # Sanitised once, then used for the row, the content-type guess and the object key
+    # alike — a name that only some of those three agree on is how the escaped blob at
+    # `sources/{id}/original/../../x.pdf` became invisible to deletion.
+    file_name = _storage_basename(file.filename or "unknown")
 
     from app.services.upload_guard import spooled_upload
 
@@ -517,13 +581,7 @@ async def upload_source(
                 except ValueError:
                     raise HTTPException(400, f"Invalid department_id: {d}")
 
-    # Scope validation: own_dept users can only assign their own department
-    perms = _get_user_permissions(user)
-    if user.role != "admin" and "doc:create:all" not in perms:
-        # User only has doc:create:own_dept
-        for did in dept_uuids:
-            if did != user.department_id:
-                raise HTTPException(403, "You can only assign documents to your own department")
+    _validate_department_scope(user, dept_uuids, "create")
 
     # The check above validates *which departments* may be attached; it never looked at
     # scope_id, so a workspace could be named without membership of it.
@@ -533,14 +591,14 @@ async def upload_source(
 
     repo = Repository(db)
     source = Source(
-        title=title or file.filename,
+        title=title or file_name,
         source_type="file",
         file_name=file_name,
         file_size=file_size,
         status="pending",
         progress=0,
         progress_message="Queued for ingestion...",
-        knowledge_type_id=uuid.UUID(knowledge_type_id) if knowledge_type_id else None,
+        knowledge_type_id=knowledge_type_id,
         contributed_by_employee_id=user.id,
         scope_type=resolved_scope_type,
         scope_id=resolved_scope_id,
@@ -595,7 +653,7 @@ async def upload_source(
 @router.post("/sources/upload-zip", status_code=201)
 async def upload_zip_archive(
     file: UploadFile = File(...),
-    knowledge_type_id: Optional[str] = Form(None),
+    knowledge_type_id: Optional[uuid.UUID] = Form(None),
     department_ids: Optional[str] = Form(None),
     scope_type: Optional[str] = Form(None),
     scope_id: Optional[str] = Form(None),
@@ -654,28 +712,24 @@ async def upload_zip_archive(
                 except ValueError:
                     raise HTTPException(status_code=400, detail=f"Invalid department_id: {d}")
 
-    perms = _get_user_permissions(user)
-    if user.role != "admin" and "doc:create:all" not in perms:
-        for did in dept_uuids:
-            if did != user.department_id:
-                raise HTTPException(
-                    status_code=403,
-                    detail="You can only assign documents to your own department",
-                )
+    _validate_department_scope(user, dept_uuids, "create")
 
     repo = Repository(db)
     created_sources: list[Source] = []
 
     for extracted in result.files:
+        # extract_zip is basename-only, so this is defence in depth rather than the live
+        # hole — but the key must not depend on that invariant holding one layer away.
+        entry_name = _storage_basename(extracted.filename)
         source = Source(
-            title=extracted.filename,
+            title=entry_name,
             source_type="file",
-            file_name=extracted.filename,
+            file_name=entry_name,
             file_size=len(extracted.data),
             status="pending",
             progress=0,
             progress_message="Queued for ingestion...",
-            knowledge_type_id=uuid.UUID(knowledge_type_id) if knowledge_type_id else None,
+            knowledge_type_id=knowledge_type_id,
             contributed_by_employee_id=user.id,
             scope_type=resolved_scope_type,
             scope_id=resolved_scope_id,
@@ -687,13 +741,13 @@ async def upload_zip_archive(
             db.add(SourceDepartment(source_id=source.id, department_id=did))
         await db.flush()
 
-        minio_key = f"sources/{source.id}/original/{extracted.filename}"
+        minio_key = f"sources/{source.id}/original/{entry_name}"
         # One request can carry 50 entries, so on the loop this was 50 sequential
         # blocking urllib3 transfers with nothing else in the process able to run between.
         await storage_service.upload_file_async(
             object_name=minio_key,
             data=extracted.data,
-            content_type=_guess_content_type(extracted.filename),
+            content_type=_guess_content_type(entry_name),
         )
         source.minio_key = minio_key
         await db.flush()
@@ -728,6 +782,8 @@ async def add_url_source(
     db: AsyncSession = Depends(get_db),
     user: Employee = require_permission("doc:create"),
 ):
+    _validate_department_scope(user, list(req.department_ids), "create")
+
     repo = Repository(db)
     source = Source(
         title=req.title or req.url,
@@ -819,6 +875,10 @@ async def update_source(
 
     # Update department M2M
     if body.department_ids is not None:
+        # Same rule as upload: an empty list here *unpublishes* the departments and turns
+        # the row global, so PATCH was the second way to reach org-wide visibility with
+        # only doc:edit:own_dept.
+        _validate_department_scope(_user, list(body.department_ids), "edit")
         # Delete existing
         await db.execute(
             sql_delete(SourceDepartment).where(SourceDepartment.source_id == source_id)
@@ -1122,23 +1182,38 @@ async def get_source_knowledge_impact(
         ))
         .order_by(WikiPage.title)
     )).scalars().all()
+    # Two aggregates for the whole set instead of two queries per row. The loop below used
+    # to issue both per page and the page list is unbounded, so a 300-page source cost
+    # ~601 round trips on an endpoint the delete dialog calls synchronously.
+    page_ids = [page.id for page in page_rows]
+    summaries: dict[uuid.UUID, str] = {}
+    contribution_counts: dict[uuid.UUID, int] = {}
+    if page_ids:
+        summaries = {
+            row.page_id: row.summary
+            for row in (await db.execute(
+                select(WikiPageContribution.page_id, WikiPageContribution.summary).where(
+                    WikiPageContribution.page_id.in_(page_ids),
+                    WikiPageContribution.source_id == source_id,
+                )
+            )).all()
+        }
+        contribution_counts = {
+            page_id: n
+            for page_id, n in (await db.execute(
+                select(WikiPageContribution.page_id, func.count())
+                .where(WikiPageContribution.page_id.in_(page_ids))
+                .group_by(WikiPageContribution.page_id)
+            )).all()
+        }
+
     pages = []
     for page in page_rows:
-        contribution = (await db.execute(
-            select(WikiPageContribution).where(
-                WikiPageContribution.page_id == page.id,
-                WikiPageContribution.source_id == source_id,
-            )
-        )).scalar_one_or_none()
-        contribution_count = (await db.execute(
-            select(func.count()).select_from(WikiPageContribution).where(
-                WikiPageContribution.page_id == page.id,
-            )
-        )).scalar_one()
+        contribution_count = contribution_counts.get(page.id, 0)
         pages.append({
             "slug": page.slug,
             "title": page.title,
-            "contribution_summary": contribution.summary if contribution else "",
+            "contribution_summary": summaries.get(page.id) or "",
             "provenance_complete": page.provenance_complete,
             "action": (
                 "delete_page" if page.provenance_complete and contribution_count == 1

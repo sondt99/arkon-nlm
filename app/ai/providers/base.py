@@ -86,6 +86,36 @@ class EmbeddingProvider(ABC):
 # LLM (text generation)
 # ---------------------------------------------------------------------------
 
+class LLMOutputTruncated(RuntimeError):
+    """Raised when a provider stopped because it hit max_tokens.
+
+    Callers that commit model output to the knowledge base must treat this as a hard
+    failure rather than accepting a partial document — silently storing a body cut off
+    mid-sentence is worse than failing the step and retrying with a larger budget.
+    """
+
+    def __init__(self, partial: str, max_tokens: Optional[int] = None):
+        self.partial = partial
+        self.max_tokens = max_tokens
+        super().__init__(
+            f"Model output was truncated at max_tokens={max_tokens}; "
+            f"got {len(partial)} characters."
+        )
+
+
+@dataclass
+class LLMGeneration:
+    """A completion plus why generation stopped."""
+
+    text: str
+    # "end_turn" | "max_tokens" | "tool_use" | "refusal" | None (unknown)
+    stop_reason: Optional[str] = None
+    usage: Optional[dict] = None
+
+    @property
+    def truncated(self) -> bool:
+        return self.stop_reason == "max_tokens"
+
 class LLMProvider(ABC):
     """Generate text — used for summarization, webhook gateway, etc."""
 
@@ -103,6 +133,31 @@ class LLMProvider(ABC):
     ) -> str:
         """Generate a text completion."""
         ...
+
+    async def generate_detailed(
+        self,
+        prompt: str,
+        system: Optional[str] = None,
+        max_tokens: Optional[int] = None,
+        temperature: float = 0.7,
+        top_p: Optional[float] = None,
+    ) -> "LLMGeneration":
+        """Like generate(), but also reports why the model stopped.
+
+        stop_reason was previously computed and thrown away, so a response truncated at
+        max_tokens was committed as final content — see merger.py, where a merge cut off
+        mid-document still satisfied a char-length shrink guard.
+
+        Non-abstract with a conservative default so the other providers keep working: the
+        default reports stop_reason=None, meaning "unknown". Callers must read that as
+        "cannot rule out truncation", not as "not truncated". Providers able to report it
+        should override.
+        """
+        text = await self.generate(
+            prompt, system=system, max_tokens=max_tokens,
+            temperature=temperature, top_p=top_p,
+        )
+        return LLMGeneration(text=text, stop_reason=None)
 
     async def generate_with_tools(
         self,

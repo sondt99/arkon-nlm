@@ -13,7 +13,13 @@ from app.ai.agent_protocol import (
     neutral_to_anthropic_messages,
     openai_tools_to_anthropic,
 )
-from app.ai.providers.base import LLMProvider, ProviderConfig, VisionProvider
+from app.ai.providers.base import (
+    LLMGeneration,
+    LLMOutputTruncated,
+    LLMProvider,
+    ProviderConfig,
+    VisionProvider,
+)
 
 # Models that reject temperature / top_p / top_k (400 invalid_request_error).
 _NO_SAMPLING_MARKERS = (
@@ -43,6 +49,36 @@ def _apply_sampling(kwargs: dict, model_id: str, temperature: float, top_p: Opti
         kwargs["top_p"] = top_p
 
 
+# The SDK's own defaults are 2 retries and a 10-minute request timeout. Every caller wraps
+# these calls in a much shorter asyncio.wait_for, which cancels the coroutine mid-backoff —
+# so under a 429 with retry-after: 60 the SDK slept, the outer deadline fired, and
+# _extract_with_sem recorded the chunk as permanently failed. Configuring the client
+# explicitly keeps the SDK's backoff inside the caller's budget.
+_CLIENT_TIMEOUT_SECONDS = 90.0
+_CLIENT_MAX_RETRIES = 3
+
+
+def _collect_text(response) -> str:
+    """Join every text block in a response.
+
+    `response.content[0].text` assumed the first block is text. It is a heterogeneous list
+    of TextBlock / ThinkingBlock / ToolUseBlock: on models where adaptive thinking is on,
+    content[0] is a ThinkingBlock and .text raises AttributeError — swallowed by callers'
+    broad excepts and reported as a parse failure. Even without thinking, a response split
+    across multiple text blocks (citations, refusal fallbacks) silently lost everything
+    after the first.
+    """
+    if not response.content:
+        return ""
+    return "".join(
+        block.text for block in response.content if getattr(block, "type", None) == "text"
+    )
+
+
+def _stop_reason(response) -> Optional[str]:
+    return getattr(response, "stop_reason", None)
+
+
 class AnthropicLLM(LLMProvider):
     """Anthropic Claude LLM provider."""
 
@@ -57,6 +93,8 @@ class AnthropicLLM(LLMProvider):
             self._client = anthropic.AsyncAnthropic(
                 api_key=self.config.api_key,
                 base_url=self.config.base_url,
+                timeout=_CLIENT_TIMEOUT_SECONDS,
+                max_retries=_CLIENT_MAX_RETRIES,
             )
         return self._client
 
@@ -78,7 +116,47 @@ class AnthropicLLM(LLMProvider):
             kwargs["system"] = system
 
         response = await self.client.messages.create(**kwargs)
-        return response.content[0].text if response.content else ""
+        return _collect_text(response)
+
+    async def generate_detailed(
+        self,
+        prompt: str,
+        system: Optional[str] = None,
+        max_tokens: Optional[int] = None,
+        temperature: float = 0.7,
+        top_p: Optional[float] = None,
+    ) -> LLMGeneration:
+        """generate() plus the stop reason, so callers can detect truncation."""
+        resolved_max = max_tokens or 16384
+        kwargs = {
+            "model": self.config.model_id,
+            "max_tokens": resolved_max,
+            "messages": [{"role": "user", "content": prompt}],
+        }
+        _apply_sampling(kwargs, self.config.model_id, temperature, top_p)
+        if system:
+            kwargs["system"] = system
+
+        response = await self.client.messages.create(**kwargs)
+
+        # A refusal is a documented HTTP-200 outcome on current models; content is empty or
+        # partial, so reading it as an answer would store a blank body.
+        reason = _stop_reason(response)
+        if reason == "refusal":
+            raise RuntimeError(
+                "The model declined this request (stop_reason=refusal). "
+                "Content was not generated."
+            )
+
+        usage = None
+        if getattr(response, "usage", None):
+            usage = {
+                "input_tokens": response.usage.input_tokens,
+                "output_tokens": response.usage.output_tokens,
+            }
+        return LLMGeneration(
+            text=_collect_text(response), stop_reason=reason, usage=usage
+        )
 
     async def generate_with_tools(
         self,
@@ -152,6 +230,8 @@ class AnthropicVision(VisionProvider):
             self._client = anthropic.AsyncAnthropic(
                 api_key=self.config.api_key,
                 base_url=self.config.base_url,
+                timeout=_CLIENT_TIMEOUT_SECONDS,
+                max_retries=_CLIENT_MAX_RETRIES,
             )
         return self._client
 
@@ -168,9 +248,14 @@ class AnthropicVision(VisionProvider):
                 "If it's a regular image, provide a concise description."
             )
         b64 = base64.standard_b64encode(image_data).decode()
+        # 1024 tokens could not satisfy the prompt above, which explicitly asks the model to
+        # "explain the meaning and steps" of diagrams, flowcharts, and tables. A multi-step
+        # flowchart was described up to the cap and cut off mid-step, and the partial
+        # caption was then stored as the image's searchable text and embedded — this is the
+        # only path by which a diagram's content ever reaches the wiki.
         response = await self.client.messages.create(
             model=self.config.model_id,
-            max_tokens=1024,
+            max_tokens=4096,
             messages=[{
                 "role": "user",
                 "content": [
@@ -179,7 +264,11 @@ class AnthropicVision(VisionProvider):
                 ],
             }],
         )
-        return response.content[0].text if response.content else ""
+        caption = _collect_text(response)
+        if _stop_reason(response) == "max_tokens":
+            # Surface it rather than storing a caption cut off mid-sentence as if complete.
+            raise LLMOutputTruncated(caption, max_tokens=4096)
+        return caption
 
     async def test_connection(self) -> tuple[bool, str]:
         try:

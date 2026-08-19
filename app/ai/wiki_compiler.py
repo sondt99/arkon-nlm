@@ -344,11 +344,21 @@ async def compile_source_into_wiki(
     try:
         raw = await llm.generate(prompt=prompt, temperature=0.2)
     except Exception as e:
-        logger.warning(f"Wiki compile LLM call failed for source {source.id}: {e}")
-        return {"pages_created": 0, "pages_updated": 0, "log_entry": ""}
+        # Do NOT convert a provider failure into "successful ingest, zero pages".
+        #
+        # This returned zeros for every failure, which is indistinguishable from a
+        # legitimately empty document — and the caller then marked the source `ready` with
+        # error_message=None. So a rotated key (401), an invalid model ID (404), or a
+        # rejected sampling parameter (400) produced a green knowledge base with no content
+        # and no error recorded anywhere, visible only by grepping logs for WARNING.
+        logger.error(f"Wiki compile LLM call failed for source {source.id}: {e}")
+        raise
 
     operations = _parse_operations(raw)
     if not operations:
+        # An empty operations array is a legitimate outcome (nothing worth recording in this
+        # document), so this branch keeps returning zeros — but it is now distinguishable
+        # from the failure path above, which raises.
         logger.warning(f"Wiki compile produced no operations for source {source.id}")
         return {"pages_created": 0, "pages_updated": 0, "log_entry": ""}
 

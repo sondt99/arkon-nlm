@@ -375,6 +375,17 @@ def _convert_offsets(extract: dict, chunk: DocumentChunk) -> dict:
     return extract
 
 
+# A document is not usable knowledge if most of it failed to extract. Chosen at 70% so a
+# couple of genuinely unparseable chunks do not block an otherwise complete ingest, while a
+# rate-limit storm that kills most of the document fails loudly instead of producing a
+# confident page from a tenth of the source.
+MIN_MAP_COVERAGE = 0.70
+
+
+class MapCoverageError(RuntimeError):
+    """Raised when too few chunks survived the MAP phase to plan from."""
+
+
 async def extract_chunk(
     llm: LLMProvider,
     chunk: DocumentChunk,
@@ -519,5 +530,32 @@ async def run_map_phase(
 
     # Return all done rows
     done_rows = [existing_by_idx[c.index] for c in chunks if existing_by_idx[c.index].status == "done"]
-    logger.info(f"MRP MAP complete: {len(done_rows)}/{len(chunks)} chunks done for source={source_id}")
+    total = len(chunks)
+    coverage = (len(done_rows) / total) if total else 0.0
+    logger.info(
+        f"MRP MAP complete: {len(done_rows)}/{total} chunks done "
+        f"({coverage:.0%} coverage) for source={source_id}"
+    )
+
+    # Refuse to plan from a fraction of the document.
+    #
+    # Previously only the all-zero case raised, so 4 surviving chunks out of 40 produced a
+    # confidently-worded page covering a tenth of the source — and run_commit_phase then set
+    # status="ready", progress=100, and explicitly cleared error_message, so nothing in the
+    # UI or the activity log indicated data had been lost. verifier.check_coverage cannot
+    # catch it either, because it counts entities from the surviving extracts.
+    if total and coverage < MIN_MAP_COVERAGE:
+        failed = [
+            existing_by_idx[c.index] for c in chunks
+            if existing_by_idx[c.index].status != "done"
+        ]
+        sample = "; ".join(
+            (r.error_message or "unknown")[:120] for r in failed[:3]
+        )
+        raise MapCoverageError(
+            f"MAP phase covered only {len(done_rows)}/{total} chunks "
+            f"({coverage:.0%}), below the {MIN_MAP_COVERAGE:.0%} minimum. "
+            f"First failures: {sample}"
+        )
+
     return strategy, done_rows

@@ -733,12 +733,42 @@ async def _write_page_complex(
 # ---------------------------------------------------------------------------
 
 def _writer_retry_delay(exc: Exception, attempt_index: int) -> int:
-    """Honor provider retry_after hints, bounded to avoid runaway waits."""
+    """Honour the provider's retry-after hint, bounded to avoid runaway waits.
+
+    This used to mine `str(exc)` for the substring "retry_after". The Anthropic SDK
+    exposes the value on `exc.response.headers["retry-after"]` and its message text does
+    not contain that substring, so the regex never matched on this provider and the
+    docstring's promise was never kept: every rate-limited writer fell back to the fixed
+    (15, 60) schedule, then gave up after three rejected requests per page.
+    """
     fallback = WRITER_RETRY_DELAYS[min(attempt_index, len(WRITER_RETRY_DELAYS) - 1)]
-    match = re.search(r"retry_after['\"]?\s*[:=]\s*(\d+)", str(exc))
-    if not match:
+
+    header_value = None
+    response = getattr(exc, "response", None)
+    headers = getattr(response, "headers", None)
+    if headers is not None:
+        try:
+            header_value = headers.get("retry-after")
+        except Exception:
+            header_value = None
+
+    # Some SDKs surface it directly on the exception instead.
+    if header_value is None:
+        header_value = getattr(exc, "retry_after", None)
+
+    if header_value is None:
+        # Last resort: the old string scan, kept so a provider that only puts the hint in
+        # the message is still honoured.
+        match = re.search(r"retry[-_]after['\"]?\s*[:=]?\s*(\d+)", str(exc))
+        header_value = match.group(1) if match else None
+
+    if header_value is None:
         return fallback
-    return min(120, max(fallback, int(match.group(1))))
+    try:
+        requested = int(float(header_value))
+    except (TypeError, ValueError):
+        return fallback
+    return min(120, max(fallback, requested))
 
 async def run_refine_phase(
     session: AsyncSession,

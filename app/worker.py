@@ -17,7 +17,9 @@ from arq import cron
 from arq import func as arq_func
 from arq.connections import ArqRedis, RedisSettings, create_pool
 from loguru import logger
+from sqlalchemy import delete as sql_delete
 from sqlalchemy import select
+from sqlalchemy.orm import selectinload
 
 from app.config import settings
 
@@ -114,6 +116,19 @@ async def ingest_file_task(ctx: dict, source_id: str):
             images = extract_images(file_data, file_name, source_id)
 
             # Persist images so wiki content_md can reference them by uuid.
+            #
+            # Clear any rows from a previous attempt first. SourceImage carries
+            # UniqueConstraint(source_id, image_index) and WorkerSettings.max_tries = 3, so
+            # without this a retry re-inserted image_index=0, flush() raised IntegrityError,
+            # the handler pinned status="error", and all three attempts failed identically —
+            # leaving the source PERMANENTLY unprocessable, recoverable only by deleting
+            # source_images rows by hand. Deleting first makes the step idempotent, so a
+            # retry can actually succeed.
+            await session.execute(
+                sql_delete(SourceImage).where(SourceImage.source_id == uuid.UUID(source_id))
+            )
+            await session.flush()
+
             for img in images:
                 row = SourceImage(
                     source_id=uuid.UUID(source_id),
@@ -383,7 +398,33 @@ async def ingest_skill_task(ctx: dict, skill_id: str, version_id: str, file_path
         except Exception as e:
             logger.exception(f"Failed to process skill {skill_name}: {e}")
             skill.status = "error"
+            # NB: Skill has no error_message column — verified against the model rather than
+            # assumed. The detail lives in the log line above and in the arq job record,
+            # which now exists because this handler re-raises.
+
+            # Clean up the partial upload before marking the error. Without this, objects
+            # already written under skills/<id>/versions/<n>/ stayed behind, and the next
+            # attempt at the same version computed calculate_prefix_hash over a MIX of
+            # stale and new objects — producing a version_hash for content that was never
+            # a coherent package.
+            try:
+                from app.services.storage_service import storage_service
+                if version_id:
+                    storage_service.delete_prefix(
+                        f"skills/{skill_id}/versions/{version.version_number}/"
+                    )
+            except Exception as cleanup_exc:
+                logger.warning(
+                    f"Could not clean partial skill upload for {skill_id}: {cleanup_exc}"
+                )
+
             await session.commit()
+
+            # Re-raise so arq records a failure and retries. Swallowing the exception meant
+            # the function returned normally, arq marked the job COMPLETE, max_tries=3 never
+            # engaged, and there was no dead-letter record — a failed ingest looked like a
+            # successful one from the queue's point of view.
+            raise
         finally:
             # Clean up disk buffer
             if os.path.exists(file_path):
@@ -515,9 +556,17 @@ async def notebooklm_generate_task(ctx: dict, artifact_db_id: str):
                 artifact.status = "processing"
                 await session.commit()
 
-                # Poll until done (up to 1 hour)
+                # Poll with a budget strictly BELOW the arq job timeout.
+                #
+                # This used to pass timeout=3600.0, exactly equal to worker_job_timeout. So
+                # on a long generation arq cancelled the job first, raising CancelledError —
+                # which `except Exception` does not catch — and the artifact kept the
+                # status="processing" written above. The recovery block never ran, three
+                # retries hit the same wall, and the UI showed a spinner forever with no
+                # error. Leaving headroom lets this task's own handler win the race.
+                poll_budget = max(60.0, float(settings.worker_job_timeout) - 120.0)
                 final = await client.artifacts.wait_for_completion(
-                    notebook_nlm_id, gen.task_id, timeout=3600.0, poll_interval=10.0
+                    notebook_nlm_id, gen.task_id, timeout=poll_budget, poll_interval=10.0
                 )
 
                 if final.is_complete:
@@ -531,14 +580,28 @@ async def notebooklm_generate_task(ctx: dict, artifact_db_id: str):
                 await session.commit()
                 logger.success(f"NLM artifact {artifact_db_id} generation {artifact.status}")
 
-        except Exception as e:
-            logger.error(f"NLM generate task failed for {artifact_db_id}: {e}")
-            async with async_session_factory() as err_session:
-                art = await err_session.get(NotebookLMArtifact, art_id)
-                if art:
-                    art.status = "failed"
-                    art.error_message = str(e)[:500]
-                    await err_session.commit()
+        except BaseException as e:
+            # BaseException, not Exception: arq delivers CancelledError on job timeout, and
+            # catching only Exception left the artifact stuck at "processing" forever. The
+            # ingestion tasks in this file already use BaseException, so this was a
+            # per-task inconsistency rather than a design choice.
+            failure_detail = (str(e) or type(e).__name__)[:500]
+            logger.error(f"NLM generate task failed for {artifact_db_id}: {failure_detail}")
+
+            async def _mark_failed() -> None:
+                async with async_session_factory() as err_session:
+                    art = await err_session.get(NotebookLMArtifact, art_id)
+                    if art:
+                        art.status = "failed"
+                        art.error_message = failure_detail
+                        await err_session.commit()
+
+            # Shielded so the status write completes even though we are already being
+            # cancelled — otherwise the cancellation kills the recovery too.
+            try:
+                await asyncio.shield(_mark_failed())
+            except Exception as inner:
+                logger.error(f"Could not mark artifact {artifact_db_id} failed: {inner}")
             raise
 
 
@@ -562,7 +625,17 @@ async def notebooklm_ingest_artifact_task(ctx: dict, artifact_db_id: str):
             logger.warning(f"NLM ingest: artifact {artifact_db_id} not found")
             return
 
-        notebook = await session.get(NotebookLMNotebook, artifact.notebook_ref_id)
+        # selectinload, because the accesses below read notebook.source. That relationship
+        # is default-lazy with no global lazy override, so touching it from a plain
+        # coroutine raised MissingGreenlet — and since notebook.source_id is non-NULL in
+        # the normal case (notebooks are created by pushing an Arkon source), ingesting a
+        # NotebookLM artifact back into the wiki NEVER worked. Three retries failed
+        # identically and ingest_source_id was never set.
+        notebook = (await session.execute(
+            select(NotebookLMNotebook)
+            .where(NotebookLMNotebook.id == artifact.notebook_ref_id)
+            .options(selectinload(NotebookLMNotebook.source))
+        )).scalar_one_or_none()
         if not notebook:
             return
 
@@ -644,6 +717,10 @@ async def notebooklm_ingest_artifact_task(ctx: dict, artifact_db_id: str):
                     progress=0,
                     scope_type=notebook.source.scope_type if notebook.source else "global",
                     scope_id=notebook.source.scope_id if notebook.source else None,
+                    # Was omitted here, so binary-derived sources produced wiki pages with an
+                    # empty knowledge_type_slugs array — which the RBAC filters treat as
+                    # world-readable.
+                    knowledge_type_id=notebook.source.knowledge_type_id if notebook.source else None,
                     contributed_by_employee_id=notebook.created_by_employee_id,
                 )
                 session.add(source)

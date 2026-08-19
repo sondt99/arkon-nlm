@@ -89,11 +89,28 @@ async def merge_page_content(
     )
 
     try:
-        raw = await asyncio.wait_for(
-            llm.generate(prompt, system=MERGE_SYSTEM, temperature=0.1),
+        result = await asyncio.wait_for(
+            llm.generate_detailed(prompt, system=MERGE_SYSTEM, temperature=0.1),
             timeout=MERGE_TIMEOUT,
         )
-        merged = raw.strip()
+        merged = result.text.strip()
+
+        # Reject a truncated merge outright, before any length heuristic.
+        #
+        # The prompt tells the model the merged page must be "AT LEAST as long as the
+        # longer of the two inputs", while output is capped at 16,384 tokens. Merging a
+        # 60,000-char page with a 20,000-char one truncated at roughly 65,000 chars — which
+        # PASSED the shrink guard below (60,000 * 0.70 = 42,000) and was committed, silently
+        # dropping the tail. The guard is char-based against a token-capped output, so it
+        # only fires in the extreme case; for Vietnamese content, where a token is closer to
+        # 2 characters than 4, truncation begins far earlier while still clearing the ratio.
+        if result.truncated:
+            logger.warning(
+                f"MRP MERGE rejected for '{slug}': output hit max_tokens "
+                f"({len(merged)} chars). Using lossless fallback rather than committing a "
+                f"body cut off mid-document."
+            )
+            return lossless_merge_fallback(existing_content, new_content)
 
         # Sanity check: merged body must not be too short
         max_input_len = max(len(existing_content), len(new_content))

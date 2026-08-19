@@ -542,6 +542,16 @@ async def regenerate_index(
             lines.append("")
 
     new_md = "\n".join(lines).rstrip() + "\n"
+
+    # Locked for a different reason than append_log. This overwrites rather than appends, so
+    # a lost body is survivable — both writers derive `new_md` from the same table. The real
+    # hazards are the `page is None` branch (two concurrent regenerations both create an
+    # `_index` row, and nothing makes slug+scope unique for reserved pages) and the `version`
+    # increment below, which is a read-modify-write like any other.
+    await session.execute(
+        select(func.pg_advisory_xact_lock(func.hashtext(f"{INDEX_SLUG}:{scope_type}:{scope_id}")))
+    )
+
     page = await get_page_by_slug(session, INDEX_SLUG, scope_type=scope_type, scope_id=scope_id)
     if page is None:
         page = WikiPage(
@@ -574,6 +584,22 @@ async def append_log(
     """
     ts = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M")
     line = f"## [{ts}] {entry.strip()}"
+
+    # BEFORE the read, not after: this is a read-modify-write on a string column, so without
+    # the lock two concurrent ingests both read the same `content_md` and the second write
+    # overwrites the first. Demonstrated with two sessions — the surviving page held only
+    # `INGEST-DOC-B`, `INGEST-DOC-A` and the seed line were gone, and `version` went 1->2
+    # instead of 1->3. On the page whose entire purpose is being an audit trail.
+    #
+    # `run_commit_phase` takes this same lock per page slug, but `append_log` and
+    # `regenerate_index` are called OUTSIDE its span, which is how they were left unguarded.
+    #
+    # Keyed on slug AND scope: every scope has its own `_log`, and `hashtext(LOG_SLUG)` alone
+    # would serialise a workspace ingest against an unrelated global one.
+    await session.execute(
+        select(func.pg_advisory_xact_lock(func.hashtext(f"{LOG_SLUG}:{scope_type}:{scope_id}")))
+    )
+
     page = await get_page_by_slug(session, LOG_SLUG, scope_type=scope_type, scope_id=scope_id)
     if page is None:
         page = WikiPage(
@@ -872,6 +898,13 @@ async def approve_draft(
     if page is None:
         raise ValueError(f"Wiki page {draft.page_id} not found")
 
+    # Lock before reading `page.version`: the increment below is a read-modify-write, and the
+    # WikiPageRevision written from it is stamped with that number. Two concurrent writers
+    # therefore produced two revisions claiming the SAME version, which makes the history
+    # ambiguous and `rollback_to_revision` non-deterministic about which snapshot it restores.
+    # Keyed on the page id, so unrelated pages never contend.
+    await session.execute(select(func.pg_advisory_xact_lock(func.hashtext(str(page.id)))))
+
     final_content = edited_content_md.strip() if edited_content_md else draft.content_md
     page.content_md = final_content
     page.version = (page.version or 1) + 1
@@ -922,6 +955,12 @@ async def direct_edit_page(
     Sync write by an editor/admin — no review step.
     Creates a revision immediately.
     """
+    # Lock before reading `page.version`: the increment below is a read-modify-write, and the
+    # WikiPageRevision written from it is stamped with that number. Two concurrent writers
+    # therefore produced two revisions claiming the SAME version, which makes the history
+    # ambiguous and `rollback_to_revision` non-deterministic about which snapshot it restores.
+    # Keyed on the page id, so unrelated pages never contend.
+    await session.execute(select(func.pg_advisory_xact_lock(func.hashtext(str(page.id)))))
     page.content_md = content_md
     page.version = (page.version or 1) + 1
     await session.flush()
@@ -949,6 +988,12 @@ async def rollback_to_revision(
     Restore a page to a previous revision snapshot.
     Creates a new revision recording the rollback.
     """
+    # Lock before reading `page.version`: the increment below is a read-modify-write, and the
+    # WikiPageRevision written from it is stamped with that number. Two concurrent writers
+    # therefore produced two revisions claiming the SAME version, which makes the history
+    # ambiguous and `rollback_to_revision` non-deterministic about which snapshot it restores.
+    # Keyed on the page id, so unrelated pages never contend.
+    await session.execute(select(func.pg_advisory_xact_lock(func.hashtext(str(page.id)))))
     revision = (await session.execute(
         select(WikiPageRevision).where(
             WikiPageRevision.page_id == page.id,

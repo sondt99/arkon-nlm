@@ -22,9 +22,22 @@ lệnh trong đó đã hỏng khi repo được chuyển đi).
 
 ## Khởi động / Build
 
+> **Deploy vẫn là một lệnh.** `api` có `depends_on: migrate` với
+> `condition: service_completed_successfully`, nên `up -d` tự chạy migration trước rồi mới
+> khởi động API — không thể bị bỏ sót. Điểm khác so với trước là migration chạy trong một
+> service one-shot riêng (`restart: "no"`), không còn nằm trong entrypoint của mọi container.
+>
+> **Và nó fail-closed.** Nếu migration bị từ chối vì có bước phá dữ liệu, `migrate` exit 1,
+> `api` **không bao giờ start**, và schema giữ nguyên. Đã kiểm chứng: database ở revision
+> `013`, chạy `up -d api` → `migrate exit=1`, `api state=created`, schema vẫn `013`. API
+> không bao giờ chạy trên schema cũ.
+
 ```bash
-# Build và khởi động toàn bộ stack
+# Build và khởi động toàn bộ stack (migration chạy tự động, trước api)
 docker compose --env-file .env.docker up -d --build
+
+# Chỉ chạy migration, không khởi động gì khác — dùng khi cần override hoặc kiểm tra trước
+docker compose --env-file .env.docker run --rm migrate
 
 # Build và restart một service cụ thể (thường dùng nhất)
 docker compose --env-file .env.docker up -d --build api
@@ -67,9 +80,15 @@ docker compose --env-file .env.docker restart api
 docker compose --env-file .env.docker restart worker
 ```
 
-> **Lưu ý:** `entrypoint.sh` chạy `alembic upgrade head` mỗi lần container backend start — kể cả khi
-> chỉ `restart`. Nghĩa là `restart worker` cũng chạy migration lên database production. Nếu một
-> migration lỗi, `set -e` cộng `restart: always` tạo thành crash-loop không có circuit breaker.
+> **`restart` giờ đã an toàn.** Trước đây `entrypoint.sh` chạy `alembic upgrade head` mỗi lần
+> container backend start — kể cả khi chỉ `restart` — nên `restart worker` cũng chạy migration lên
+> database production, và `api` / `worker` / `worker_skills` đua nhau migrate cùng một database lúc
+> boot mà không có lock. Một migration lỗi cộng `set -e` cộng `restart: always` là crash-loop không
+> có circuit breaker.
+>
+> Bây giờ chỉ service `migrate` chạy migration, và nó có `restart: "no"` — lỗi thì dừng một lần rồi
+> nằm im, không loop. `entrypoint.sh` chỉ còn làm việc hạ quyền (chạy như `appuser`, không phải
+> root).
 
 ---
 
@@ -137,8 +156,12 @@ uv run --extra dev pytest tests/ -q
 ## Alembic (DB migrations)
 
 ```bash
-# Áp dụng migration mới nhất
-docker exec arkon_api alembic upgrade head
+# `up -d` đã tự chạy migration. Lệnh dưới đây chỉ cần khi muốn chạy riêng — ví dụ để xem
+# pre-flight nói gì, hoặc để dùng ALLOW_DESTRUCTIVE_MIGRATIONS. KHÔNG exec vào arkon_api.
+docker compose --env-file .env.docker run --rm migrate
+
+# Chỉ kiểm tra, không ghi gì
+docker compose --env-file .env.docker run --rm migrate ./migrate.sh --check
 
 # Xem migration hiện tại
 docker exec arkon_api alembic current
@@ -150,10 +173,23 @@ docker exec arkon_api alembic history
 docker exec arkon_api alembic revision --autogenerate -m "ten_migration"
 ```
 
-> **Bắt buộc đọc file sinh ra trước khi commit.** `alembic/env.py` chưa có `include_object` filter,
-> nên autogenerate không thấy các index được tạo bằng raw SQL và sẽ đề xuất `drop_index` cho chúng.
-> Đây chính là cách migration `018` đã xóa 4 index (gồm unique index trên `wiki_pages.slug` và 3 GIN
-> index) mà không ai để ý.
+> **Bắt buộc đọc file sinh ra trước khi commit.** `alembic/env.py` giờ đã có `include_object`
+> filter, nên autogenerate không còn đề xuất `drop_index` cho các index tạo bằng raw SQL — đó chính
+> là cách migration `018` đã xóa 4 index (unique index trên `wiki_pages.slug` và 3 GIN index) mà
+> không ai để ý. Nhưng filter chỉ chặn được thứ nó biết: index/bảng nào bạn tạo mà không khai báo
+> trong `models.py` vẫn sẽ bị đề xuất xóa ở lần autogenerate sau.
+>
+> **Migration xóa cột hoặc bảng sẽ bị từ chối.** `migrate.sh` quét trước phần `upgrade()` của các
+> revision chưa áp dụng, và nếu thấy `drop_table` / `drop_column` / `DROP` / `TRUNCATE` /
+> `DELETE FROM` thì dừng lại, in ra đúng file và số dòng, và không ghi gì cả. Database mới (chưa có
+> `alembic_version`) được miễn — không có dữ liệu nào để mất. Muốn chạy thật thì backup trước rồi:
+>
+> ```bash
+> docker exec arkon_postgres pg_dump -U arkon -d arkon -Fc > arkon-$(date +%F).dump
+> ALLOW_DESTRUCTIVE_MIGRATIONS=1 docker compose --env-file .env.docker run --rm migrate
+> ```
+>
+> Xem `alembic/README.md` để biết quy tắc khi cần xóa một cột đang có dữ liệu.
 
 ---
 

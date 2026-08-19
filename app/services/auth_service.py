@@ -21,6 +21,7 @@ from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
+from sqlalchemy.orm.attributes import set_committed_value
 
 from app.config import settings
 from app.database import get_db
@@ -160,14 +161,21 @@ async def get_current_user(
             detail="Account not found or deactivated",
         )
 
-    # Auto-attach the "Employee" system role if no custom role assigned
+    # Auto-attach the "Employee" system role if no custom role assigned.
+    #
+    # set_committed_value, not `employee.custom_role = sys_role`: the plain assignment
+    # dirtied a session-attached row, and get_db() commits unconditionally at the end of
+    # every request — so this defaulting *persisted*. An admin who deliberately cleared an
+    # employee's role had it silently written back on that employee's next request, and
+    # every authenticated GET turned into a write transaction. Populating the loaded value
+    # instead leaves the attribute clean, so the flush has nothing to write.
     if employee.role == "employee" and not employee.custom_role:
         from app.database.models import Role
         sys_role = (await db.execute(
             select(Role).where(Role.name == "Employee", Role.is_system.is_(True))
         )).scalar_one_or_none()
         if sys_role:
-            employee.custom_role = sys_role
+            set_committed_value(employee, "custom_role", sys_role)
 
     return employee
 

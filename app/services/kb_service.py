@@ -1,185 +1,22 @@
 """
-Knowledge Base service — document ingestion via the LLM Wiki pipeline.
+Knowledge Base service — text/image extraction helpers for the wiki pipeline.
 
-Pipeline: Upload → Extract text → Extract & caption images → Build outline →
-Compile into wiki (LLM). No chunking, no per-chunk embeddings — embeddings now
-live on WikiPage rows. Search is handled by app/services/wiki_service.py.
-
-Provider-agnostic: uses ProviderRegistry to resolve embedding/LLM/vision
-providers from app_config at runtime.
+Ingestion itself lives in app/worker.py (`ingest_file_task` + `caption_images_task`), which
+is the only path a source can take: upload → MinIO → arq. This module used to also carry a
+whole second `ingest_source()` implementation of the same pipeline, inline and unqueued,
+with no callers anywhere — it drifted (no resume, no per-image timeout, captions on the
+request loop) and every reader had to work out which of the two was live. Deleted; the
+helpers the worker imports are what remains.
 """
 
 import asyncio
-import uuid
 from typing import Optional
 
 from loguru import logger
-from sqlalchemy import delete
-from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.ai.registry import ProviderRegistry
-from app.ai.wiki_compiler import compile_source_into_wiki
-from app.database.models import KnowledgeType, Source, SourceImage
-from app.services.image_service import ImageInfo, extract_images
-from app.services.source_outline import assemble_full_text, build_outline
-from app.services.storage_service import storage_service
-
-_VISION_PROMPT = """Analyze this image and respond in exactly this format (two lines, nothing else):
-RELEVANT: yes
-CAPTION: <1-2 sentence description>
-
-Use RELEVANT: no for logos, watermarks, decorative borders, backgrounds, signatures, small icons, page headers/footers.
-Use RELEVANT: yes for diagrams, charts, photos, illustrations, tables, infographics, maps, technical drawings, screenshots with content."""
+from app.services.image_service import ImageInfo
 
 _MIN_OCR_CHARS = 50
-
-# ---------------------------------------------------------------------------
-# Ingestion pipeline
-# ---------------------------------------------------------------------------
-
-async def ingest_source(
-    session: AsyncSession,
-    source_id: uuid.UUID,
-    file_data: Optional[bytes] = None,
-    file_name: Optional[str] = None,
-) -> Source:
-    """
-    Ingest a Source into the wiki:
-      1. Upload original file to MinIO (if file)
-      2. Extract text per page
-      3. Extract images, caption with vision provider, inline captions
-      4. Build heading-based outline → Source.outline_json
-      5. Compile into wiki via LLM (creates/updates WikiPage rows)
-    """
-    source = await session.get(Source, source_id)
-    if not source:
-        raise ValueError(f"Source {source_id} not found")
-
-    try:
-        registry = ProviderRegistry(session)
-        vision_provider = await registry.get_vision()
-
-        source.status = "processing"
-        await session.flush()
-
-        # --- Step 1: Upload original file ---
-        if file_data and file_name:
-            minio_key = f"sources/{source_id}/original/{file_name}"
-            await storage_service.upload_file_async(
-                object_name=minio_key,
-                data=file_data,
-                content_type=_guess_content_type(file_name),
-            )
-            source.minio_key = minio_key
-            source.file_name = file_name
-            source.file_size = len(file_data)
-
-        # --- Step 2: Extract text per page ---
-        if file_data and file_name:
-            pages_data = await _extract_text_from_file(file_data, file_name)
-        elif source.url:
-            pages_data = await _extract_text_from_url(source.url)
-        else:
-            pages_data = []
-
-        if not pages_data or not any((p.get("content") or "").strip() for p in pages_data):
-            source.status = "error"
-            source.error_message = "Could not extract text content from source"
-            await session.flush()
-            return source
-
-        # --- Step 3: Extract & caption images, persist, inline markers ---
-        images: list[ImageInfo] = []
-        if file_data and file_name:
-            # extract_images decodes and re-encodes every embedded image through PyMuPDF
-            # and uploads each one to MinIO — CPU plus blocking I/O, per image.
-            images = await asyncio.to_thread(
-                extract_images, file_data, file_name, str(source_id)
-            )
-            if vision_provider and images:
-                for idx, img in enumerate(images, 1):
-                    try:
-                        if idx % 5 == 0 or idx == 1 or idx == len(images):
-                            logger.info(f"Vision AI analyzing image {idx}/{len(images)}...")
-                        img_bytes = await storage_service.download_file_async(img.minio_key)
-                        raw = await vision_provider.analyze_image(
-                            img_bytes, img.content_type, prompt=_VISION_PROMPT
-                        )
-                        img.caption = _parse_vision_response(raw)
-                    except Exception as e:
-                        logger.warning(f"Failed to analyze image {img.minio_key}: {e}")
-
-            # Clear stale rows from any previous ingest attempt before inserting.
-            await session.execute(
-                delete(SourceImage).where(SourceImage.source_id == source_id)
-            )
-            await session.flush()
-
-            # Persist source_images rows so wiki content_md can reference by uuid.
-            for img in images:
-                row = SourceImage(
-                    source_id=source_id,
-                    minio_key=img.minio_key,
-                    page_number=img.page_number,
-                    image_index=img.image_index,
-                    caption=img.caption,
-                    content_type=img.content_type,
-                    size_bytes=img.size_bytes,
-                )
-                session.add(row)
-                await session.flush()  # populate row.id
-                img.image_id = str(row.id)
-
-        _inline_image_markers(pages_data, images)
-
-        # --- Step 4: Build outline + assemble full_text ---
-        source.outline_json = build_outline(pages_data)
-        full_text, page_offsets = assemble_full_text(pages_data)
-        source.full_text = full_text
-        source.page_offsets = page_offsets
-
-        # --- Step 5: Resolve KnowledgeType context ---
-        kt_slug = kt_name = kt_desc = kt_hints = None
-        if source.knowledge_type_id:
-            kt = await session.get(KnowledgeType, source.knowledge_type_id)
-            if kt:
-                kt_slug = kt.slug
-                kt_name = kt.name
-                kt_desc = kt.description
-                from app.ai.knowledge_type_context import (
-                    build_effective_extraction_hints,
-                )
-                kt_hints = build_effective_extraction_hints(
-                    kt.slug, kt.name, kt.description, kt.extraction_hints,
-                )
-
-        # --- Step 6: Compile into wiki ---
-        result = await compile_source_into_wiki(
-            session=session,
-            source=source,
-            full_text=full_text,
-            knowledge_type_slug=kt_slug,
-            knowledge_type_name=kt_name,
-            knowledge_type_description=kt_desc,
-            knowledge_type_extraction_hints=kt_hints,
-        )
-
-        source.status = "ready"
-        source.error_message = None
-        await session.flush()
-        logger.success(
-            f"Source {source_id} ingested into wiki: "
-            f"+{result['pages_created']} pages, ~{result['pages_updated']} updated"
-        )
-        return source
-
-    except Exception as e:
-        logger.error(f"Ingestion failed for source {source_id}: {e}")
-        source.status = "error"
-        source.error_message = str(e)[:500]
-        await session.flush()
-        raise
-
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -196,28 +33,6 @@ def _guess_content_type(file_name: str) -> str:
         "csv": "text/csv",
         "xlsx": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
     }.get(ext, "application/octet-stream")
-
-
-def _parse_vision_response(raw: str) -> str:
-    """Parse structured vision response into a caption string.
-
-    Expected format:
-        RELEVANT: yes/no
-        CAPTION: <text>
-
-    Returns caption prefixed with '[decorative] ' when not relevant.
-    Falls back to raw text if the format is not recognized.
-    """
-    relevant = True
-    caption = raw.strip()
-    for line in raw.splitlines():
-        line = line.strip()
-        if line.upper().startswith("RELEVANT:"):
-            val = line.split(":", 1)[1].strip().lower()
-            relevant = val.startswith("y")
-        elif line.upper().startswith("CAPTION:"):
-            caption = line.split(":", 1)[1].strip()
-    return caption if relevant else f"[decorative] {caption}"
 
 
 def _sanitize_caption_for_alt(caption: str) -> str:

@@ -143,7 +143,7 @@ Without those, the worker will pick up jobs and fail during MAP/REFINE.
 
 ```bash
 # from repo root, venv active
-ruff check app/ tests/
+ruff check .
 pytest
 
 cd frontend

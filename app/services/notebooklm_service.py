@@ -57,12 +57,20 @@ async def get_client():
 
 
 async def is_authenticated() -> bool:
-    """Return True if a valid NotebookLM session exists."""
+    """Return True if a valid NotebookLM session exists.
+
+    ImportError propagates. A missing notebooklm-py package is a deployment fault, not an
+    auth state: reporting it as "not authenticated" sent admins to redo a Google login that
+    could never fix it, however many times they tried.
+    """
     try:
         async with await get_client() as client:
             await client.notebooks.list()
         return True
-    except Exception:
+    except ImportError:
+        raise
+    except Exception as exc:
+        logger.warning(f"NLM session check failed: {exc}")
         return False
 
 

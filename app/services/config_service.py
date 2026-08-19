@@ -19,6 +19,18 @@ from app.database.models import AppConfig
 # Encryption helpers
 # ---------------------------------------------------------------------------
 
+
+class ConfigDecryptionError(RuntimeError):
+    """A stored secret cannot be decrypted with the current SECRET_KEY.
+
+    Its own type because the recovery is specific and nothing else will do: re-enter the
+    affected key, or restore the SECRET_KEY it was encrypted under. `_decrypt` used to
+    swallow the Fernet error and return None from a function annotated `-> str`, so after a
+    key rotation every provider silently read as "no API key configured" — indistinguishable
+    from a fresh install, and the logs said nothing an admin would connect to it.
+    """
+
+
 def _derive_fernet_key(secret: str) -> bytes:
     """Derive a Fernet-compatible key from an arbitrary secret string."""
     digest = hashlib.sha256(secret.encode()).digest()
@@ -169,13 +181,15 @@ class ConfigService:
         """Encrypt a value for storage."""
         return self.fernet.encrypt(value.encode()).decode()
 
-    def _decrypt(self, value: str) -> str:
-        """Decrypt a stored value."""
+    def _decrypt(self, value: str, key: str) -> str:
+        """Decrypt a stored value. Raises ConfigDecryptionError if the key no longer fits."""
         try:
             return self.fernet.decrypt(value.encode()).decode()
-        except Exception:
-            logger.warning("Failed to decrypt config value — SECRET_KEY may have changed")
-            return None
+        except Exception as exc:
+            raise ConfigDecryptionError(
+                f"Config value '{key}' cannot be decrypted with the current SECRET_KEY. "
+                "Re-enter it in Admin Settings, or restore the SECRET_KEY it was saved under."
+            ) from exc
 
     async def get(self, key: str) -> Optional[str]:
         """
@@ -189,7 +203,7 @@ class ConfigService:
         if row and row.value:
             value = row.value
             if _is_sensitive(key):
-                value = self._decrypt(value)
+                value = self._decrypt(value, key)
             return value
 
         # 2. Fallback to env/settings
@@ -218,18 +232,37 @@ class ConfigService:
         await self.db.flush()
 
     async def get_all(self) -> dict[str, Optional[str]]:
-        """Get all config values (decrypted)."""
+        """Get all config values (decrypted).
+
+        Propagates ConfigDecryptionError: a caller asking for the effective config is going
+        to hand these values to a provider, and a secret that cannot be read is a failure
+        rather than an absence. `get_all_for_ui` is the one caller that degrades instead.
+        """
         result = {}
         for key in ALL_CONFIG_KEYS:
             result[key] = await self.get(key)
         return result
 
     async def get_all_for_ui(self) -> dict[str, Any]:
-        """Get all config values, masking sensitive ones for UI display."""
-        all_config = await self.get_all()
-        ui_config = {}
+        """Get all config values, masking sensitive ones for UI display.
 
-        for key, value in all_config.items():
+        Reads key by key rather than through get_all() so one undecryptable secret cannot
+        take down the settings page — which is the only place an admin can repair it. Such a
+        key comes back as `{key: None, key_configured: True, key_decrypt_error: True}`: a
+        stored value that exists and cannot be read, which is what actually happened.
+        """
+        ui_config: dict[str, Any] = {}
+
+        for key in ALL_CONFIG_KEYS:
+            try:
+                value = await self.get(key)
+            except ConfigDecryptionError as exc:
+                logger.error(str(exc))
+                ui_config[key] = None
+                ui_config[f"{key}_configured"] = True
+                ui_config[f"{key}_decrypt_error"] = True
+                continue
+
             if _is_sensitive(key) and value:
                 # Mask: show only last 4 chars
                 if len(value) > 8:

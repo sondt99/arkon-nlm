@@ -25,9 +25,6 @@ jobs:
       - uses: astral-sh/setup-uv@v5
         with:
           version: "0.9.21"
-        with:
-          python-version: "3.12"
-          cache: pip
 
       # `pip install -e ".[dev]"` resolved FRESH and ignored uv.lock, so CI tested a
       # different dependency graph than the image ships — Dockerfile installs from the
@@ -201,9 +198,6 @@ jobs:
       - uses: astral-sh/setup-uv@v5
         with:
           version: "0.9.21"
-        with:
-          python-version: "3.12"
-          cache: pip
 
       # `pip install -e ".[dev]"` resolved FRESH and ignored uv.lock, so CI tested a
       # different dependency graph than the image ships — Dockerfile installs from the

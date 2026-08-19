@@ -14,6 +14,7 @@ from typing import Optional
 from pgvector.sqlalchemy import HALFVEC, Vector
 from sqlalchemy import (
     Boolean,
+    CheckConstraint,
     DateTime,
     ForeignKey,
     Index,
@@ -22,6 +23,7 @@ from sqlalchemy import (
     String,
     Text,
     UniqueConstraint,
+    false,
     func,
 )
 from sqlalchemy.dialects.postgresql import ARRAY, JSONB, UUID
@@ -62,6 +64,56 @@ class SkillContributionStatus(str, PyEnum):
     PENDING = "pending"
     APPROVED = "approved"
     REJECTED = "rejected"
+
+
+# ---------------------------------------------------------------------------
+# Status vocabularies
+# ---------------------------------------------------------------------------
+# Six columns were plain String(n) free text compared against bare literals in ~30 places
+# (issue #85). A typo on either side — worker.py writing "erorr", or the plan_review /
+# plan_ready confusion the docs and the code disagree about — produced a row that no
+# listing filter matched, so the source disappeared from the UI with nothing logged
+# anywhere. `Skill.status` already used a PgEnum, so the pattern existed; these six never
+# got it.
+#
+# These tuples are the single definition of what each column may hold. Migration 034 turns
+# them into CHECK constraints, so a bad write is now an IntegrityError at the boundary
+# rather than a silently invisible row.
+#
+# Adding a value means editing the tuple here AND shipping a migration that replaces the
+# constraint. That friction is intended: the vocabulary is part of the schema, not a
+# convention. tests/test_migration_backfill.py enforces both halves.
+SOURCE_STATUSES: tuple[str, ...] = (
+    "pending", "processing", "plan_ready", "ready", "error",
+)
+SCOPE_TYPES: tuple[str, ...] = tuple(s.value for s in ScopeType)
+COMPILATION_PLAN_STATUSES: tuple[str, ...] = (
+    "pending_review", "approved", "in_progress", "done", "rejected",
+)
+WIKI_DRAFT_STATUSES: tuple[str, ...] = ("pending", "approved", "rejected")
+EMBEDDING_JOB_STATUSES: tuple[str, ...] = (
+    "pending", "running", "completed", "failed", "cancelled",
+)
+NLM_ARTIFACT_STATUSES: tuple[str, ...] = (
+    "pending", "processing", "completed", "failed",
+)
+
+
+def _one_of(name: str, column: str, values: tuple[str, ...]) -> CheckConstraint:
+    """`CHECK (column IN (...))`, rendered identically to migration 034's SQL.
+
+    A CHECK rather than a PgEnum on purpose. `Skill.status` shows the PgEnum pattern works,
+    but retrofitting one onto a populated varchar column needs CREATE TYPE plus an
+    `ALTER ... TYPE ... USING` rewrite that holds ACCESS EXCLUSIVE for a full table rewrite
+    — and `entrypoint.sh` runs `alembic upgrade head` unattended on container start, so a
+    long exclusive lock there is an outage. A CHECK can go on NOT VALID and be validated
+    separately, which is what migration 034 does.
+
+    NOTE: `Skill.scope_type` legitimately holds "department" and is deliberately NOT
+    constrained by SCOPE_TYPES — only `sources.scope_type` is. Do not "unify" them.
+    """
+    quoted = ", ".join(f"'{v}'" for v in values)
+    return CheckConstraint(f"{column} IN ({quoted})", name=name)
 
 
 class Base(DeclarativeBase):
@@ -138,6 +190,11 @@ class Source(Base):
     knowledge_type: Mapped[Optional["KnowledgeType"]] = relationship()
     contributor: Mapped[Optional["Employee"]] = relationship(
         foreign_keys=[contributed_by_employee_id]
+    )
+
+    __table_args__ = (
+        _one_of("ck_sources_status", "status", SOURCE_STATUSES),
+        _one_of("ck_sources_scope_type", "scope_type", SCOPE_TYPES),
     )
 
 
@@ -251,6 +308,9 @@ class SourceCompilationPlan(Base):
 
     __table_args__ = (
         Index("ix_scp_status", "status"),
+        _one_of(
+            "ck_source_compilation_plans_status", "status", COMPILATION_PLAN_STATUSES
+        ),
     )
 
     source: Mapped["Source"] = relationship()
@@ -292,7 +352,12 @@ class WikiPage(Base):
         ARRAY(UUID(as_uuid=True)), nullable=False, default=list,
     )
     provenance_complete: Mapped[bool] = mapped_column(
-        Boolean, nullable=False, default=True,
+        # models.py declared default=True while migration 023 shipped server_default=false,
+        # so the same page got opposite values depending on whether the ORM or raw SQL
+        # inserted it — and wiki_service.detach_source_from_wiki branches on this exact flag
+        # to choose between session.delete(page) and a non-destructive detach. Both sides
+        # now say false; the compiler sets it True explicitly once provenance is recorded.
+        Boolean, nullable=False, default=False, server_default=false(),
         comment="True when page content can be rebuilt from source contributions",
     )
     # Embeddings live in per-dimension tables (wiki_page_embeddings_<dim>) so
@@ -402,6 +467,7 @@ class WikiPageDraft(Base):
         Index("ix_wiki_drafts_page_id", "page_id"),
         Index("ix_wiki_drafts_status", "status"),
         Index("ix_wiki_drafts_author_id", "author_id"),
+        _one_of("ck_wiki_page_drafts_status", "status", WIKI_DRAFT_STATUSES),
     )
 
 
@@ -1031,6 +1097,7 @@ class EmbeddingJob(Base):
 
     __table_args__ = (
         Index("ix_embedding_jobs_status", "status", "created_at"),
+        _one_of("ck_embedding_jobs_status", "status", EMBEDDING_JOB_STATUSES),
     )
 
 
@@ -1211,6 +1278,7 @@ class NotebookLMArtifact(Base):
     __table_args__ = (
         Index("ix_notebooklm_artifacts_notebook_ref_id", "notebook_ref_id"),
         Index("ix_notebooklm_artifacts_status", "status"),
+        _one_of("ck_notebooklm_artifacts_status", "status", NLM_ARTIFACT_STATUSES),
     )
 
 

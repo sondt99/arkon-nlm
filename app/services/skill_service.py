@@ -4,6 +4,7 @@ import io
 import os
 import uuid
 import zipfile
+from dataclasses import dataclass
 from typing import Any, Dict, List, Optional, Tuple
 
 import sqlalchemy as sa
@@ -24,6 +25,90 @@ from app.database.models import (
 from app.services.storage_service import storage_service
 from app.utils.text import slugify
 from app.worker import get_arq_pool
+
+
+@dataclass(frozen=True)
+class _SkillPriorState:
+    """The part of a Skill row that upload_skills has to be able to put back."""
+
+    created: bool                     # the row itself was created by this upload
+    status: str
+    version_hash: Optional[str]
+
+
+@dataclass(frozen=True)
+class _PendingIngest:
+    """One committed skill upload waiting to be handed to the arq worker."""
+
+    skill_id: uuid.UUID
+    version_id: uuid.UUID
+    temp_path: str
+    filename: str
+    prior: _SkillPriorState
+
+
+def _discard_temp_zip(temp_path: str) -> None:
+    """Remove a staged upload whose ingest job is never going to run."""
+    try:
+        os.remove(temp_path)
+    except FileNotFoundError:
+        pass
+    except OSError as exc:
+        logger.warning(f"Could not remove staged skill upload {temp_path}: {exc}")
+
+
+async def _abandon_pending_ingest(db: AsyncSession, pending: _PendingIngest) -> None:
+    """Undo one committed-but-never-dispatched skill upload.
+
+    The rows must be committed as "processing" before the job is enqueued, because the worker
+    opens its own session and cannot see an uncommitted skill. When the enqueue then failed
+    there was no transaction left to roll back and `skills.status` has no error state, so the
+    skill stayed "processing" forever — hidden from every listing, its staged ZIP already
+    deleted by the cleanup handler — and re-uploading the same file took the "metadata_only"
+    path because version_hash had already been advanced. Manual DB surgery was the only exit.
+
+    Scope/department metadata is deliberately left as this upload set it: that half of the
+    request did succeed, and _upsert_skill_db_records already treats it as independent of the
+    version transition (it returns "metadata_only" and queues nothing when only scope moved).
+    """
+    await db.execute(sa.delete(SkillVersion).where(SkillVersion.id == pending.version_id))
+    if pending.prior.created:
+        await db.execute(
+            sa.delete(SkillDepartment).where(SkillDepartment.skill_id == pending.skill_id)
+        )
+        await db.execute(sa.delete(Skill).where(Skill.id == pending.skill_id))
+    else:
+        await db.execute(
+            sa.update(Skill)
+            .where(Skill.id == pending.skill_id)
+            .values(status=pending.prior.status, version_hash=pending.prior.version_hash)
+        )
+
+
+async def _discard_contribution_objects(storage_path: str) -> None:
+    """Best-effort removal of the objects written for a contribution that will not exist.
+
+    Object storage is not enrolled in the DB transaction. Entries are uploaded one at a time,
+    so a guard trip at entry 60 raised, the SkillContribution row rolled back, and the 59
+    objects already written stayed in MinIO forever — unreferenced and unfindable, since the
+    prefix was only ever derived from the row that no longer exists.
+    """
+    try:
+        from app.services.storage_service import storage_service
+
+        await storage_service.delete_prefix_async(storage_path)
+    except Exception as exc:
+        logger.warning(f"Could not clean up contribution objects at {storage_path}: {exc}")
+
+
+async def _abandon_undispatched(db: AsyncSession, pendings: List[_PendingIngest]) -> None:
+    """Roll back every upload that will not reach the worker, and persist that rollback."""
+    for pending in pendings:
+        _discard_temp_zip(pending.temp_path)
+        await _abandon_pending_ingest(db, pending)
+    # Committed here rather than left to request teardown: get_db() rolls the session back on
+    # the way out of a failed request, which would discard the compensation itself.
+    await db.commit()
 
 
 async def _lock_skill_for_versioning(db, skill_id) -> None:
@@ -113,10 +198,10 @@ class SkillService:
         scope_type: str,
         scope_id: Optional[uuid.UUID],
         force: bool
-    ) -> Tuple[Optional[Skill], Optional[int], Optional[str]]:
+    ) -> Tuple[Optional[Skill], Optional[int], Optional[str], Optional[_SkillPriorState]]:
         """
         Finds an existing skill or creates a new one, updating metadata and department links.
-        
+
         Args:
             db (AsyncSession): Database session.
             name (str): Skill name.
@@ -125,10 +210,14 @@ class SkillService:
             scope_type (str): 'global' or 'department'.
             scope_id (uuid.UUID): Primary scope ID.
             force (bool): Whether to overwrite if exists.
-            
+
         Returns:
-            Tuple[Optional[Skill], Optional[int], Optional[str]]: 
-                (Skill object, new version number, error/status message)
+            Tuple[Optional[Skill], Optional[int], Optional[str], Optional[_SkillPriorState]]:
+                (Skill object, new version number, error/status message, pre-upload state)
+
+        The fourth element is what the caller needs to undo the version transition if the
+        ingest job cannot be dispatched after the commit; it is None for the outcomes that
+        queue no job at all.
         """
         # Collect all unique department IDs from both legacy and new sources
         all_depts = list(set(filter(None, (department_ids or []) + ([scope_id] if scope_id else []))))
@@ -140,8 +229,14 @@ class SkillService:
 
         if existing_skill:
             if not force:
-                return None, None, "duplicate"
-            
+                return None, None, "duplicate", None
+
+            prior = _SkillPriorState(
+                created=False,
+                status=existing_skill.status,
+                version_hash=existing_skill.version_hash,
+            )
+
             # Update Visibility/Department Metadata
             if scope_type == "department" or all_depts:
                 existing_skill.scope_type = "department"
@@ -158,14 +253,14 @@ class SkillService:
 
             # Skip versioning if content hasn't changed
             if existing_skill.version_hash == file_hash:
-                return existing_skill, None, "metadata_only"
-            
+                return existing_skill, None, "metadata_only", None
+
             await _lock_skill_for_versioning(db, existing_skill.id)
             new_version_num = existing_skill.current_version + 1
             existing_skill.status = "processing"
             existing_skill.version_hash = file_hash
-            return existing_skill, new_version_num, "updated"
-        
+            return existing_skill, new_version_num, "updated", prior
+
         else:
             # Create a brand new Skill record
             new_skill = Skill(
@@ -180,8 +275,10 @@ class SkillService:
             if all_depts:
                 for d_id in all_depts:
                     db.add(SkillDepartment(skill_id=new_skill.id, department_id=d_id))
-            
-            return new_skill, 1, "created"
+
+            return new_skill, 1, "created", _SkillPriorState(
+                created=True, status="processing", version_hash=file_hash,
+            )
 
     @staticmethod
     def _save_temp_zip(file_data: bytes) -> str:
@@ -218,7 +315,7 @@ class SkillService:
         pool = await get_arq_pool()
         results = []
         duplicates = []
-        jobs_to_enqueue = []
+        pending_ingests: List[_PendingIngest] = []
 
         try:
             for file in files:
@@ -242,7 +339,7 @@ class SkillService:
                     continue
 
                 # 3. DB Upsert
-                skill, new_v_num, status = await SkillService._upsert_skill_db_records(
+                skill, new_v_num, status, prior = await SkillService._upsert_skill_db_records(
                     db, name, file_hash, department_ids, scope_type, scope_id, force
                 )
 
@@ -265,31 +362,61 @@ class SkillService:
                 # One blocking write of the entire upload; a slow or contended volume
                 # stalls every other request on this loop for its duration.
                 temp_path = await asyncio.to_thread(SkillService._save_temp_zip, file_data)
-                jobs_to_enqueue.append((str(skill.id), str(new_version.id), temp_path, file.filename))
-                
+                pending_ingests.append(_PendingIngest(
+                    skill_id=skill.id,
+                    version_id=new_version.id,
+                    temp_path=temp_path,
+                    filename=file.filename,
+                    prior=prior,
+                ))
+
                 results.append(skill)
 
             # Error handling for duplicates in non-force mode
             if duplicates and not force:
                 await db.rollback()
                 raise HTTPException(status_code=409, detail={"message": "Duplicate skill names detected", "conflicts": duplicates})
-                
+
             await db.commit()
-            
-            # Dispatch jobs to the background worker (arq)
-            for job_args in jobs_to_enqueue:
-                await pool.enqueue_job("ingest_skill_task", *job_args, _queue_name="skills_queue")
-                
-        except Exception as e:
-            # Cleanup any temp files if the whole transaction fails
-            for job_args in jobs_to_enqueue:
-                temp_path = job_args[2]
-                if os.path.exists(temp_path):
-                    try:
-                        os.remove(temp_path)
-                    except Exception:
-                        pass
-            raise e
+
+        except Exception:
+            # Nothing has been dispatched yet on this path, so every payload staged so far is
+            # unreachable garbage. Files belonging to *dispatched* jobs must survive, which is
+            # why this no longer runs over the whole list from inside the dispatch loop.
+            for pending in pending_ingests:
+                _discard_temp_zip(pending.temp_path)
+            raise
+
+        # Dispatch after the commit: the worker opens its own session and cannot see rows that
+        # are still in this transaction.
+        for index, pending in enumerate(pending_ingests):
+            try:
+                await pool.enqueue_job(
+                    "ingest_skill_task",
+                    str(pending.skill_id),
+                    str(pending.version_id),
+                    pending.temp_path,
+                    pending.filename,
+                    _queue_name="skills_queue",
+                )
+            except Exception as exc:
+                logger.error(f"Could not queue skill ingest for {pending.filename}: {exc}")
+                # This one and everything after it will never run, so undo them rather than
+                # leaving committed rows stuck at "processing" with their payloads deleted.
+                try:
+                    await _abandon_undispatched(db, pending_ingests[index:])
+                except Exception as undo_exc:
+                    logger.error(
+                        f"Could not roll back undispatched skill uploads "
+                        f"(skills stuck in 'processing'): {undo_exc}"
+                    )
+                raise HTTPException(
+                    status_code=503,
+                    detail=(
+                        "Skill ingestion could not be queued. The affected uploads were "
+                        "rolled back — please retry."
+                    ),
+                ) from exc
 
         return results
 
@@ -755,63 +882,50 @@ class SkillService:
             import re
             skill_slug = re.sub(r"[^a-z0-9]+", "-", title.lower()).strip("-")
 
-        # Fork from base version if provided
-        if skill_id and base_version:
-            # Find the storage path of the base version
-            stmt = select(SkillVersion).where(
-                SkillVersion.skill_id == skill_id,
-                SkillVersion.version_number == base_version
-            )
-            v_res = await db.execute(stmt)
-            v_obj = v_res.scalars().first()
-            if v_obj and v_obj.storage_path:
-                # The files are already inside a folder in the source, so we copy them as is
-                await storage_service.copy_prefix_async(
-                    v_obj.storage_path, contribution.storage_path
+        # Same storage-versus-transaction split as create_contribution_from_zip: whatever
+        # lands under contribution.storage_path is unreferenced the moment the row is rolled
+        # back, and nothing else records the prefix.
+        try:
+            # Fork from base version if provided
+            if skill_id and base_version:
+                # Find the storage path of the base version
+                stmt = select(SkillVersion).where(
+                    SkillVersion.skill_id == skill_id,
+                    SkillVersion.version_number == base_version
                 )
+                v_res = await db.execute(stmt)
+                v_obj = v_res.scalars().first()
+                if v_obj and v_obj.storage_path:
+                    # The files are already inside a folder in the source, so we copy them as is
+                    await storage_service.copy_prefix_async(
+                        v_obj.storage_path, contribution.storage_path
+                    )
+                else:
+                    logger.warning(f"Base version {base_version} for skill {skill_id} not found.")
             else:
-                logger.warning(f"Base version {base_version} for skill {skill_id} not found.")
-        else:
-            # New skill contribution - create folder structure with SKILL.md
-            readme_content = f"# {title}\n\nGenerated by contribution request."
-            await storage_service.upload_file_async(
-                f"{contribution.storage_path}{skill_slug}/SKILL.md",
-                readme_content.encode("utf-8"),
-                content_type="text/markdown"
-            )
-            
-        await db.commit()
+                # New skill contribution - create folder structure with SKILL.md
+                readme_content = f"# {title}\n\nGenerated by contribution request."
+                await storage_service.upload_file_async(
+                    f"{contribution.storage_path}{skill_slug}/SKILL.md",
+                    readme_content.encode("utf-8"),
+                    content_type="text/markdown"
+                )
+
+            await db.commit()
+        except Exception:
+            await _discard_contribution_objects(contribution.storage_path)
+            raise
+
         await db.refresh(contribution)
         return contribution
 
-    @staticmethod
-
-    async def bulk_change_scope(
-        db: AsyncSession, 
-        skill_ids: List[uuid.UUID], 
-        scope_type: str,
-        scope_id: Optional[uuid.UUID]
-    ) -> int:
-        if not skill_ids:
-            return 0
-        
-        # Sync department_ids for compatibility
-        dept_ids = [scope_id] if (scope_type == "department" and scope_id) else []
-        
-        stmt = sa.update(Skill).where(Skill.id.in_(skill_ids)).values(
-            scope_type=scope_type,
-            scope_id=scope_id
-        )
-        await db.execute(stmt)
-
-        # Update M2M for all skills
-        await db.execute(sa.delete(SkillDepartment).where(SkillDepartment.skill_id.in_(skill_ids)))
-        if dept_ids:
-            for skill_id in skill_ids:
-                for d_id in dept_ids:
-                    db.add(SkillDepartment(skill_id=skill_id, department_id=d_id))
-        await db.commit()
-        return len(skill_ids)
+    # bulk_change_scope used to sit here: no callers anywhere, and a privilege escalation if
+    # anything had ever wired it up. With scope_type="department" and scope_id=None it wrote
+    # scope_type="department" while deleting every SkillDepartment row, and a skill with no
+    # department rows matches `~Skill.departments.any()` in _apply_skill_filters — so a
+    # "restrict these skills to a department" call published them to the whole company.
+    # update_skill() is the live path and gets the same case right (it falls back to
+    # scope_type="global" when no department survives).
 
     @staticmethod
     async def submit_contribution(db: AsyncSession, contribution_id: uuid.UUID):
@@ -1003,23 +1117,25 @@ class SkillService:
                 # [Security] Zip Slip + zip bomb guards (same limits as worker.py)
                 MAX_UNCOMPRESSED_SIZE = 10 * 1024 * 1024  # 10 MB
                 MAX_FILE_COUNT = 100
-                file_count = 0
+
+                members = [m for m in zf.infolist() if not m.is_dir()]
+
+                # Every guard runs before the first put_object. Interleaved with the uploads, a
+                # trip at entry 60 raised only after 59 objects had already been written, and
+                # the rollback of the contribution row then made them unreachable for good.
+                if len(members) > MAX_FILE_COUNT:
+                    raise HTTPException(400, f"ZIP contains too many files (max {MAX_FILE_COUNT}).")
+
                 total_size = 0
-
-                for member in zf.infolist():
-                    if member.is_dir():
-                        continue
-
+                for member in members:
                     filename = member.filename
                     if filename.startswith(("/", "\\")) or "../" in filename or "..\\" in filename:
                         raise HTTPException(400, "ZIP contains an unsafe file path.")
-                    file_count += 1
-                    if file_count > MAX_FILE_COUNT:
-                        raise HTTPException(400, f"ZIP contains too many files (max {MAX_FILE_COUNT}).")
                     total_size += member.file_size
                     if total_size > MAX_UNCOMPRESSED_SIZE:
                         raise HTTPException(400, "ZIP uncompressed size too large (max 10MB).")
 
+                for member in members:
                     # Extract content
                     with zf.open(member) as f:
                         content = f.read()
@@ -1044,11 +1160,14 @@ class SkillService:
                     await storage_service.upload_file_async(
                         full_path, content, content_type=content_type
                     )
+
+            await db.commit()
         except HTTPException:
+            await _discard_contribution_objects(contribution.storage_path)
             raise
         except Exception as e:
             logger.error(f"Failed to ingest ZIP to contribution: {e}")
-            raise HTTPException(500, "ZIP extraction failed.")
-            
-        await db.commit()
+            await _discard_contribution_objects(contribution.storage_path)
+            raise HTTPException(500, "ZIP extraction failed.") from e
+
         return contribution

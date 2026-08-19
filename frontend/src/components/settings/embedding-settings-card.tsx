@@ -203,11 +203,14 @@ export function EmbeddingSettingsCard() {
     setFetchedModels(null);
     try {
       const key = isMaskedSecret(apiKey) ? "" : apiKey;
-      const res = await api<{ models: string[] }>("/api/settings/fetch-models", {
+      const res = await api<{ models?: string[] }>("/api/settings/fetch-models", {
         method: "POST",
         body: { base_url: baseUrl, api_key: key },
       });
-      setFetchedModels(res.models);
+      // The annotation is a claim about the response, not a guarantee. A body without
+      // `models` gave `undefined`, which passes a `!== null` guard and then throws on
+      // `.length` — a render crash, not a missing-data message.
+      setFetchedModels(Array.isArray(res.models) ? res.models : []);
       // Reset model selection after fresh fetch
       setSelectedSpecId(null);
       setCustomModel(false);
@@ -453,7 +456,7 @@ export function EmbeddingSettingsCard() {
                 {fetchError}
               </p>
             )}
-            {fetchedModels !== null && (
+            {Array.isArray(fetchedModels) && (
               <p className="text-xs text-green-600 dark:text-green-400 flex items-center gap-1">
                 <span className="material-symbols-outlined text-sm">check_circle</span>
                 {fetchedModels.length} models loaded — {providerSpecs.length} in catalog, {fetchedNotInCatalog.length} custom

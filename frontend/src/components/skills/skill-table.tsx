@@ -72,10 +72,9 @@ export function SkillTable({
   total,
   search,
 }: SkillTableProps) {
-  const { canAccess, hasPermission } = useAuth();
+  const { canAccess } = useAuth();
   const [editSkill, setEditSkill] = React.useState<Skill | null>(null);
   const [uploadSkill, setUploadSkill] = React.useState<Skill | null>(null);
-  const [searchInput, setSearchInput] = React.useState(search);
 
   return (
     <div className="flex flex-col gap-2">
@@ -88,19 +87,15 @@ export function SkillTable({
             </span>
             <input
               type="text"
-              value={searchInput}
-              onChange={(e) => {
-                const val = e.target.value;
-                setSearchInput(val);
-                onSearch(val);
-              }}
+              value={search}
+              onChange={(e) => onSearch(e.target.value)}
               placeholder="Search skills..."
               className="h-9 pl-9 pr-3 text-sm rounded-lg border border-border bg-background focus:outline-none focus:ring-2 focus:ring-primary/30 focus:border-primary/50 w-[280px] placeholder:text-muted-foreground/60"
             />
-            {searchInput && (
+            {search && (
               <button
                 type="button"
-                onClick={() => { setSearchInput(""); onSearch(""); }}
+                onClick={() => onSearch("")}
                 className="absolute right-2 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
               >
                 <span className="material-symbols-outlined text-sm">close</span>
@@ -149,12 +144,13 @@ export function SkillTable({
                         <span className="material-symbols-outlined text-muted-foreground/40 text-[16px] group-hover:scale-110 transition-transform duration-300">auto_awesome</span>
                       </div>
                       <div className="flex items-center gap-2 min-w-0">
-                        <span
-                          className="text-sm font-medium text-foreground truncate max-w-[400px] group-hover:text-primary transition-colors font-manrope cursor-pointer hover:underline underline-offset-4 decoration-primary/30"
+                        <button
+                          type="button"
+                          className="text-left text-sm font-medium text-foreground truncate max-w-[400px] group-hover:text-primary transition-colors font-manrope cursor-pointer hover:underline underline-offset-4 decoration-primary/30 rounded-sm outline-none focus-visible:ring-3 focus-visible:ring-ring/50"
                           onClick={() => onClick(skill.slug)}
                         >
                           {skill.name}
-                        </span>
+                        </button>
                         {skill.is_system && (
                           <span className="inline-flex items-center gap-1 text-[10px] font-bold uppercase tracking-wider px-1.5 py-0.5 rounded-md bg-amber-500/10 text-amber-600 border border-amber-500/20 shrink-0">
                             <span className="material-symbols-outlined text-[11px]">lock</span>

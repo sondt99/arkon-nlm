@@ -64,6 +64,14 @@ export function SkillEditor({ contributionId, onSubmitted, onStatusChange, mode 
     }
   }, [contributionId]);
 
+  // `loadContent` reads the diff status through this ref instead of the state: listing
+  // `diffStatus` in its deps would rebuild `loadContent` on every post-save refresh, and the
+  // selection effect below would then re-fetch the open file and clobber in-flight typing.
+  const diffStatusRef = useRef<Record<string, string>>({});
+  useEffect(() => {
+    diffStatusRef.current = diffStatus;
+  }, [diffStatus]);
+
   const buildTree = (files: SkillFile[]): TreeNode[] => {
     const root: TreeNode[] = [];
     files.forEach((file) => {
@@ -225,7 +233,7 @@ export function SkillEditor({ contributionId, onSubmitted, onStatusChange, mode 
     setOriginalContent(null);
 
     // If file is marked as deleted, don't even try to fetch its content
-    if (diffStatus[path] === "D") {
+    if (diffStatusRef.current[path] === "D") {
       setContent("");
       setLastSavedContent("");
     } else {
@@ -319,47 +327,77 @@ export function SkillEditor({ contributionId, onSubmitted, onStatusChange, mode 
     }
   }, [selectedPath, loadContent]); // Removed displayFiles to prevent flickering after auto-save
 
-  // Use a ref to always have access to the latest content without re-creating handleSave
-  const contentRef = useRef<string | null>(null);
+  // `selectedPath` and `content` are separate states that are transiently inconsistent: the
+  // path moves the moment a file is clicked, while `content` still holds the outgoing file
+  // until its GET resolves. A pending auto-save therefore carries the path and body it was
+  // armed for, and switching files flushes it first, so an edit can never be written to the
+  // path of the file the user just opened.
+  const selectedPathRef = useRef<string | null>(null);
   useEffect(() => {
-    contentRef.current = content;
-  }, [content]);
+    selectedPathRef.current = selectedPath;
+  }, [selectedPath]);
 
-  const handleSave = useCallback(async () => {
-    const currentContent = contentRef.current;
-    if (!selectedPath || mode !== "edit" || currentContent === null || currentContent === lastSavedContent) return;
+  const pendingSaveRef = useRef<{ path: string; content: string } | null>(null);
+  const saveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
+  const handleSave = useCallback(async (path: string, body: string) => {
     setSaveStatus("saving");
     try {
       await api(`/api/skill-contributions/${contributionId}/files`, {
         method: "PUT",
-        body: {
-          path: selectedPath,
-          content: currentContent,
-        },
+        body: { path, content: body },
       });
-      setLastSavedContent(currentContent);
-      setSaveStatus("saved");
+      // Adopt the new baseline only while that file is still open: a flush that lands after
+      // the user moved on must not describe the buffer now on screen as saved.
+      if (selectedPathRef.current === path) {
+        setLastSavedContent(body);
+        setSaveStatus("saved");
+      }
       loadDiffStatus();
     } catch (err) {
       console.error("[AutoSave] Failed to save file:", err);
       setSaveStatus("error");
     }
-  }, [contributionId, selectedPath, mode, lastSavedContent, loadDiffStatus]);
+  }, [contributionId, loadDiffStatus]);
 
-  // Auto-save effect
-  useEffect(() => {
-    if (content === null || content === lastSavedContent) {
+  const cancelPendingSave = useCallback(() => {
+    if (saveTimerRef.current) {
+      clearTimeout(saveTimerRef.current);
+      saveTimerRef.current = null;
+    }
+    pendingSaveRef.current = null;
+  }, []);
+
+  const flushPendingSave = useCallback(async () => {
+    const pending = pendingSaveRef.current;
+    cancelPendingSave();
+    if (pending) await handleSave(pending.path, pending.content);
+  }, [cancelPendingSave, handleSave]);
+
+  const handleContentChange = useCallback((next: string) => {
+    setContent(next);
+    if (mode !== "edit" || !selectedPath) return;
+
+    if (next === lastSavedContent) {
+      cancelPendingSave();
       setSaveStatus("idle");
       return;
     }
 
-    const timer = setTimeout(() => {
-      handleSave();
+    const path = selectedPath;
+    pendingSaveRef.current = { path, content: next };
+    if (saveTimerRef.current) clearTimeout(saveTimerRef.current);
+    saveTimerRef.current = setTimeout(() => {
+      cancelPendingSave();
+      void handleSave(path, next);
     }, 500); // 0.5 seconds debounce
+  }, [mode, selectedPath, lastSavedContent, cancelPendingSave, handleSave]);
 
-    return () => clearTimeout(timer);
-  }, [content, handleSave, lastSavedContent]);
+  const selectFile = useCallback((path: string) => {
+    if (path === selectedPath) return;
+    void flushPendingSave();
+    setSelectedPath(path);
+  }, [selectedPath, flushPendingSave]);
 
 
   const handleCreateFile = async (parentPath?: string) => {
@@ -382,7 +420,7 @@ export function SkillEditor({ contributionId, onSubmitted, onStatusChange, mode 
         },
       });
       await loadFiles();
-      setSelectedPath(fullPath);
+      selectFile(fullPath);
       setIsEditMode(true);
     } catch (err) {
       console.error("Failed to create file:", err);
@@ -428,7 +466,7 @@ export function SkillEditor({ contributionId, onSubmitted, onStatusChange, mode 
       await apiUpload(`/api/skill-contributions/${contributionId}/upload?path=${queryPath}`, formData);
 
       await loadFiles();
-      setSelectedPath(fullPath);
+      selectFile(fullPath);
       setUploadTargetPath(null);
       e.target.value = "";
     } catch (err) {
@@ -461,6 +499,8 @@ export function SkillEditor({ contributionId, onSubmitted, onStatusChange, mode 
       });
       await loadFiles();
       if (selectedPath === path || selectedPath?.startsWith(path + "/")) {
+        // Drop the debounced write instead of flushing it — it would recreate what was deleted.
+        cancelPendingSave();
         setSelectedPath(null);
         setContent(null);
       }
@@ -489,6 +529,9 @@ export function SkillEditor({ contributionId, onSubmitted, onStatusChange, mode 
     const newPath = [...pathParts, newName].join("/");
 
     try {
+      // Write out any debounced edit while the old path still exists, otherwise the rename
+      // moves the file out from under it and the write recreates it at the stale path.
+      await flushPendingSave();
       await api(`/api/skill-contributions/${contributionId}/rename?old_path=${encodeURIComponent(oldPath)}&new_path=${encodeURIComponent(newPath)}`, {
         method: "POST"
       });
@@ -597,7 +640,7 @@ export function SkillEditor({ contributionId, onSubmitted, onStatusChange, mode 
           )}
         >
           <button
-            onClick={() => setSelectedPath(node.path)}
+            onClick={() => selectFile(node.path)}
             className={cn(
               "flex items-center gap-2 flex-1 px-2 py-1.5 text-[13px] text-left transition-all",
               isSelected ? "text-primary font-semibold" : "text-muted-foreground"
@@ -754,7 +797,7 @@ export function SkillEditor({ contributionId, onSubmitted, onStatusChange, mode 
                         <textarea
                           className="w-full h-full p-6 md:p-8 font-mono text-[13px] bg-transparent outline-none resize-none no-scrollbar"
                           value={content}
-                          onChange={(e) => setContent(e.target.value)}
+                          onChange={(e) => handleContentChange(e.target.value)}
                           placeholder="Enter markdown here..."
                         />
                       </div>
@@ -768,7 +811,7 @@ export function SkillEditor({ contributionId, onSubmitted, onStatusChange, mode 
                     <textarea
                       className="w-full h-full p-6 md:p-8 font-mono text-[13px] bg-transparent outline-none resize-none no-scrollbar"
                       value={content}
-                      onChange={(e) => setContent(e.target.value)}
+                      onChange={(e) => handleContentChange(e.target.value)}
                       placeholder="Enter code or markdown here..."
                     />
                   ) : (

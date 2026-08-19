@@ -185,6 +185,7 @@ export function WikiDetailInline({
         <div className="mb-6">
           <WikiDraftBanner
             drafts={drafts}
+            currentContentMd={page.content_md}
             onApproved={handleDraftApproved}
             onRejected={handleDraftRejected}
           />

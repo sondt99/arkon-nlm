@@ -34,13 +34,16 @@ export function SkillCard({
   onEdit,
   onClick
 }: SkillCardProps) {
-  const { canAccess, hasPermission } = useAuth();
+  const { canAccess } = useAuth();
   const dateStr = (() => {
     const d = new Date(skill.updated_at);
     return `${String(d.getDate()).padStart(2, '0')}/${String(d.getMonth() + 1).padStart(2, '0')}/${d.getFullYear()}`;
   })();
 
   return (
+    // The card-wide click is a mouse convenience only — it must not get `role="button"`,
+    // since the card already contains real buttons. Keyboard/AT users reach the skill
+    // through the name button below or the "Details" action.
     <div
       onClick={() => skill.status !== "deleting" && onClick?.(skill.slug)}
       className={cn(
@@ -56,17 +59,21 @@ export function SkillCard({
             <span className="material-symbols-outlined text-muted-foreground/40 text-[16px] group-hover:scale-110 transition-transform duration-300">auto_awesome</span>
           </div>
           <div>
-            <h3
-              className={cn(
-                "text-sm font-medium text-foreground transition-colors line-clamp-1 font-manrope",
-                skill.status !== "deleting" && "group-hover:text-primary"
-              )}
-              onClick={(e) => {
-                e.stopPropagation();
-                if (skill.status !== "deleting") onClick?.(skill.slug);
-              }}
-            >
-              {skill.name}
+            <h3 className="min-w-0">
+              <button
+                type="button"
+                disabled={skill.status === "deleting"}
+                onClick={(e) => {
+                  e.stopPropagation();
+                  onClick?.(skill.slug);
+                }}
+                className={cn(
+                  "w-full text-left text-sm font-medium text-foreground transition-colors line-clamp-1 font-manrope rounded-sm outline-none focus-visible:ring-3 focus-visible:ring-ring/50",
+                  skill.status === "deleting" ? "cursor-not-allowed" : "cursor-pointer group-hover:text-primary"
+                )}
+              >
+                {skill.name}
+              </button>
             </h3>
             <div className="flex flex-wrap items-center gap-2 mt-1">
               <Badge variant="secondary" className="text-[10px] px-1.5 py-0 font-bold bg-secondary/50">v{skill.current_version}</Badge>

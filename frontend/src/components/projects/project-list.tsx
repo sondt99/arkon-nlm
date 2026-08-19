@@ -79,6 +79,9 @@ export function ProjectList({ projects, loading, isAdmin, onEdit, onOpen, onRefr
       )}
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
         {projects.map((project) => (
+          // The card-wide click is a mouse convenience only — it must not get `role="button"`,
+          // since the card already contains a real menu button. Keyboard/AT users open the
+          // workspace through the name button below.
           <div
             key={project.id}
             onClick={() => onOpen(project)}
@@ -88,7 +91,15 @@ export function ProjectList({ projects, loading, isAdmin, onEdit, onOpen, onRefr
               <div className="flex flex-col gap-1 flex-1 min-w-0">
                 <div className="flex items-center gap-2">
                   <span className="material-symbols-outlined text-primary text-base">{project.workspace_type === 'customer' ? 'domain' : 'folder_special'}</span>
-                  <h3 className="font-semibold text-sm truncate group-hover:text-primary transition-colors">{project.name}</h3>
+                  <h3 className="min-w-0">
+                    <button
+                      type="button"
+                      onClick={(e) => { e.stopPropagation(); onOpen(project); }}
+                      className="block w-full truncate text-left font-semibold text-sm cursor-pointer group-hover:text-primary transition-colors rounded-sm outline-none focus-visible:ring-3 focus-visible:ring-ring/50"
+                    >
+                      {project.name}
+                    </button>
+                  </h3>
                 </div>
                 {project.description && (
                   <p className="text-xs text-muted-foreground line-clamp-2">{project.description}</p>

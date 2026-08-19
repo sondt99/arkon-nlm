@@ -724,17 +724,51 @@ function sourceStatusDot(status: number) {
   return null;
 }
 
+/** Wiki-ingest statuses that no longer move on their own — stop polling on these. */
+function isIngestSettled(status: string): boolean {
+  return status === "ready" || status === "error" || status === "plan_ready";
+}
+
+/* ─── Load failure panel ─────────────────────────────────────────────────────
+   A failed load must never fall through to an empty state: "no notebooks yet" /
+   "no sources yet" reads as an answer, and the user acts on it (creates a
+   duplicate, or walks away) instead of retrying. */
+
+function LoadErrorPanel({
+  title,
+  message,
+  onRetry,
+}: {
+  title: string;
+  message: string;
+  onRetry: () => void;
+}) {
+  return (
+    <div className="flex flex-col items-center justify-center px-4 py-8 text-center">
+      <span className="material-symbols-outlined text-[36px] text-red-400/70 mb-3">cloud_off</span>
+      <p className="text-[13px] font-medium text-foreground">{title}</p>
+      <p className="text-[12px] text-muted-foreground/80 mt-1 max-w-sm break-words">{message}</p>
+      <Button variant="outline" size="sm" className="mt-4 gap-1.5" onClick={onRetry}>
+        <span className="material-symbols-outlined text-[13px]">refresh</span>
+        Retry
+      </Button>
+    </div>
+  );
+}
+
 /* ─── Sources tab ────────────────────────────────────────────────────────── */
 
 function SourcesTab({
   notebookId,
   sources,
   loading,
+  error,
   onRefresh,
 }: {
   notebookId: string;
   sources: NLMSourceNative[];
   loading: boolean;
+  error: string | null;
   onRefresh: () => void;
 }) {
   const [showAdd, setShowAdd] = useState(false);
@@ -757,7 +791,7 @@ function SourcesTab({
     <div className="flex-1 flex flex-col min-h-0">
       <div className="flex items-center justify-between px-6 py-3 border-b border-border shrink-0">
         <span className="text-[12px] text-muted-foreground">
-          {sources.length} source{sources.length !== 1 ? "s" : ""}
+          {error ? "Sources unavailable" : `${sources.length} source${sources.length !== 1 ? "s" : ""}`}
         </span>
         <Button size="sm" className="gap-1.5 h-7 px-3 text-[12px]" onClick={() => setShowAdd(true)}>
           <span className="material-symbols-outlined text-[13px]">add</span>
@@ -771,6 +805,8 @@ function SourcesTab({
             <span className="material-symbols-outlined text-[14px] animate-spin">progress_activity</span>
             Loading…
           </div>
+        ) : error ? (
+          <LoadErrorPanel title="Could not load sources" message={error} onRetry={onRefresh} />
         ) : sources.length === 0 ? (
           <div className="flex flex-col items-center justify-center py-12 text-center">
             <span className="material-symbols-outlined text-[40px] text-muted-foreground/20 mb-3">attach_file</span>
@@ -880,36 +916,55 @@ function PreviewDialog({
     setFlipped(false);
     setLoadingPreview(true);
 
+    // Previews are opened one after another and a report can take far longer than a
+    // video. Without this, the earlier response still lands: it kills the spinner and
+    // paints the previous artifact's content inside the current artifact's dialog.
+    const controller = new AbortController();
+    let objectUrl: string | null = null;
+
     const load = async () => {
       try {
         if (TEXT_ARTIFACT_KINDS.has(artifact.kind)) {
           const data = await api<PreviewPayload>(
-            `/api/notebooklm/nlm/notebooks/${notebookId}/artifacts/${artifact.id}/preview-data`
+            `/api/notebooklm/nlm/notebooks/${notebookId}/artifacts/${artifact.id}/preview-data`,
+            { signal: controller.signal }
           );
+          if (controller.signal.aborted) return;
           setPreviewData(data);
         } else if (PREVIEWABLE_BINARY_KINDS.has(artifact.kind)) {
           const token = getToken();
           const base = process.env.NEXT_PUBLIC_API_URL ?? "";
           const resp = await fetch(
             `${base}/api/notebooklm/nlm/notebooks/${notebookId}/artifacts/${artifact.id}/download`,
-            { headers: token ? { Authorization: `Bearer ${token}` } : {} }
+            { headers: token ? { Authorization: `Bearer ${token}` } : {}, signal: controller.signal }
           );
           if (!resp.ok) throw new Error(`Download failed: HTTP ${resp.status}`);
+          const buffer = await resp.arrayBuffer();
+          if (controller.signal.aborted) return;
           const mimeMap: Partial<Record<string, string>> = {
             audio: "audio/mpeg", video: "video/mp4", infographic: "image/png", slide_deck: "application/pdf",
           };
-          const blob = new Blob([await resp.arrayBuffer()], {
+          const blob = new Blob([buffer], {
             type: mimeMap[artifact.kind] ?? "application/octet-stream",
           });
-          setBlobUrl(URL.createObjectURL(blob));
+          objectUrl = URL.createObjectURL(blob);
+          setBlobUrl(objectUrl);
         }
       } catch (e: unknown) {
+        if (controller.signal.aborted) return;
         setPreviewError(e instanceof Error ? e.message : "Preview failed");
       } finally {
-        setLoadingPreview(false);
+        if (!controller.signal.aborted) setLoadingPreview(false);
       }
     };
     load();
+
+    return () => {
+      controller.abort();
+      // A blob created in the same tick the dialog closed never reaches state, so the
+      // [blobUrl] cleanup below would never free it — revoke it here instead.
+      if (objectUrl) URL.revokeObjectURL(objectUrl);
+    };
   }, [artifact, notebookId]);
 
   useEffect(() => {
@@ -1159,11 +1214,13 @@ function StudioTab({
   notebookId,
   artifacts,
   loading,
+  error,
   onRefresh,
 }: {
   notebookId: string;
   artifacts: NLMArtifactNative[];
   loading: boolean;
+  error: string | null;
   onRefresh: () => void;
 }) {
   type IngestTrack = { sourceId: string; title: string; status: string };
@@ -1182,13 +1239,11 @@ function StudioTab({
 
   useEffect(() => {
     if (ingestPollRef.current) clearInterval(ingestPollRef.current);
-    const hasActive = [...ingestTracks.values()].some(
-      (t) => t.status !== "ready" && t.status !== "error" && t.status !== "plan_ready"
-    );
+    const hasActive = [...ingestTracks.values()].some((t) => !isIngestSettled(t.status));
     if (!hasActive) return;
     ingestPollRef.current = setInterval(async () => {
       for (const [artId, track] of ingestTracksRef.current) {
-        if (track.status === "ready" || track.status === "error" || track.status === "plan_ready") continue;
+        if (isIngestSettled(track.status)) continue;
         try {
           const res = await api<{ status: string }>(`/api/sources/${track.sourceId}/progress`);
           setIngestTracks((prev) => {
@@ -1249,7 +1304,7 @@ function StudioTab({
     <div className="flex-1 flex flex-col min-h-0">
       <div className="flex items-center justify-between px-6 py-3 border-b border-border shrink-0">
         <span className="text-[12px] text-muted-foreground">
-          {artifacts.length} artifact{artifacts.length !== 1 ? "s" : ""}
+          {error ? "Content unavailable" : `${artifacts.length} artifact${artifacts.length !== 1 ? "s" : ""}`}
         </span>
         <div className="flex items-center gap-2">
           <Button size="sm" variant="ghost" className="h-7 px-2 text-[12px] gap-1" onClick={onRefresh}>
@@ -1268,6 +1323,8 @@ function StudioTab({
             <span className="material-symbols-outlined text-[14px] animate-spin">progress_activity</span>
             Loading…
           </div>
+        ) : error ? (
+          <LoadErrorPanel title="Could not load Studio content" message={error} onRetry={onRefresh} />
         ) : artifacts.length === 0 ? (
           <div className="flex flex-col items-center justify-center py-12 text-center">
             <span className="material-symbols-outlined text-[40px] text-muted-foreground/20 mb-3">auto_awesome</span>
@@ -1423,37 +1480,48 @@ function StudioTab({
   );
 }
 
-/* ─── Chat tab ───────────────────────────────────────────────────────────── */
+/* ─── Chat state ─────────────────────────────────────────────────────────────
+   Owned by the page, not by `ChatTab`, because `ChatTab` unmounts on every tab
+   switch. While the tab owned this state, stepping over to Sources threw away the
+   transcript *and* `conversationId` — the NotebookLM thread handle — so the next
+   question silently opened a brand-new conversation with no memory of the earlier
+   turns, and an answer still in flight (a turn can take 120 s) was written to a
+   dead component and lost. */
 
-function ChatTab({ notebookId, notebookTitle, sourceCount }: { notebookId: string; notebookTitle: string; sourceCount: number }) {
-  type IngestTrack = { sourceId: string; status: string };
+type ChatIngestTrack = { sourceId: string; status: string };
 
+function useNotebookChat(notebookId: string | null, notebookTitle: string) {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [input, setInput] = useState("");
   const [sending, setSending] = useState(false);
   const [conversationId, setConversationId] = useState<string | null>(null);
   const [addingToWiki, setAddingToWiki] = useState(false);
-  const [ingestTrack, setIngestTrack] = useState<IngestTrack | null>(null);
-  const [reviewOpen, setReviewOpen] = useState(false);
-  const ingestTrackRef = useRef<IngestTrack | null>(null);
+  const [ingestTrack, setIngestTrack] = useState<ChatIngestTrack | null>(null);
+  const ingestTrackRef = useRef<ChatIngestTrack | null>(null);
   const ingestPollRef = useRef<ReturnType<typeof setInterval> | null>(null);
-  const bottomRef = useRef<HTMLDivElement>(null);
+  // Now that a turn outlives the tab, it can also outlive the notebook it was
+  // asked in. Its answer and thread handle belong to that notebook only, so a
+  // late reply must never land in whichever notebook the user moved on to.
+  const activeNotebookRef = useRef(notebookId);
 
   useEffect(() => { ingestTrackRef.current = ingestTrack; }, [ingestTrack]);
 
   useEffect(() => {
+    activeNotebookRef.current = notebookId;
     setIngestTrack(null);
     setMessages([]);
     setConversationId(null);
     setInput("");
+    setSending(false);
+    setAddingToWiki(false);
   }, [notebookId]);
 
   useEffect(() => {
     if (ingestPollRef.current) clearInterval(ingestPollRef.current);
-    if (!ingestTrack || ingestTrack.status === "ready" || ingestTrack.status === "error" || ingestTrack.status === "plan_ready") return;
+    if (!ingestTrack || isIngestSettled(ingestTrack.status)) return;
     ingestPollRef.current = setInterval(async () => {
       const track = ingestTrackRef.current;
-      if (!track || track.status === "ready" || track.status === "error" || track.status === "plan_ready") return;
+      if (!track || isIngestSettled(track.status)) return;
       try {
         const res = await api<{ status: string }>(`/api/sources/${track.sourceId}/progress`);
         setIngestTrack((prev) => prev ? { ...prev, status: res.status } : null);
@@ -1462,12 +1530,8 @@ function ChatTab({ notebookId, notebookTitle, sourceCount }: { notebookId: strin
     return () => { if (ingestPollRef.current) clearInterval(ingestPollRef.current); };
   }, [ingestTrack]);
 
-  useEffect(() => {
-    bottomRef.current?.scrollIntoView({ behavior: "smooth" });
-  }, [messages]);
-
-  const handleAddToWiki = async () => {
-    if (messages.length === 0) return;
+  const addToWiki = useCallback(async () => {
+    if (!notebookId || messages.length === 0) return;
     setAddingToWiki(true);
     try {
       const lines: string[] = [`# Chat: ${notebookTitle}`, ""];
@@ -1482,17 +1546,19 @@ function ChatTab({ notebookId, notebookTitle, sourceCount }: { notebookId: strin
         `/api/notebooklm/nlm/notebooks/${notebookId}/chat/ingest`,
         { method: "POST", body: { title: `Chat: ${notebookTitle}`, content: lines.join("\n") } }
       );
+      if (activeNotebookRef.current !== notebookId) return;
       setIngestTrack({ sourceId: res.source_id, status: "processing" });
     } catch (e: unknown) {
       alert(e instanceof Error ? e.message : "Failed to add to wiki");
     } finally {
-      setAddingToWiki(false);
+      if (activeNotebookRef.current === notebookId) setAddingToWiki(false);
     }
-  };
+  }, [messages, notebookId, notebookTitle]);
 
-  const sendMessage = async () => {
+  const sendMessage = useCallback(async () => {
     const q = input.trim();
-    if (!q || sending) return;
+    if (!notebookId || !q || sending) return;
+    const askedIn = notebookId;
     setInput("");
     setSending(true);
 
@@ -1504,11 +1570,12 @@ function ChatTab({ notebookId, notebookTitle, sourceCount }: { notebookId: strin
         answer: string;
         conversation_id: string;
         references: ChatReference[];
-      }>(`/api/notebooklm/nlm/notebooks/${notebookId}/chat`, {
+      }>(`/api/notebooklm/nlm/notebooks/${askedIn}/chat`, {
         method: "POST",
         body: { question: q, conversation_id: conversationId },
         timeoutMs: 120_000,
       });
+      if (activeNotebookRef.current !== askedIn) return;
       setConversationId(res.conversation_id);
       const assistantMsg: ChatMessage = {
         id: genId(),
@@ -1518,6 +1585,7 @@ function ChatTab({ notebookId, notebookTitle, sourceCount }: { notebookId: strin
       };
       setMessages((prev) => [...prev, assistantMsg]);
     } catch (e: unknown) {
+      if (activeNotebookRef.current !== askedIn) return;
       const errMsg: ChatMessage = {
         id: genId(),
         role: "assistant",
@@ -1525,14 +1593,64 @@ function ChatTab({ notebookId, notebookTitle, sourceCount }: { notebookId: strin
       };
       setMessages((prev) => [...prev, errMsg]);
     } finally {
-      setSending(false);
+      if (activeNotebookRef.current === askedIn) setSending(false);
     }
+  }, [conversationId, input, notebookId, sending]);
+
+  const startNewConversation = useCallback(() => {
+    setMessages([]);
+    setConversationId(null);
+  }, []);
+
+  const markIngestProcessing = useCallback(() => {
+    setIngestTrack((prev) => prev ? { ...prev, status: "processing" } : null);
+  }, []);
+
+  return {
+    messages,
+    input,
+    setInput,
+    sending,
+    conversationId,
+    addingToWiki,
+    ingestTrack,
+    sendMessage,
+    addToWiki,
+    startNewConversation,
+    markIngestProcessing,
   };
+}
+
+type NotebookChat = ReturnType<typeof useNotebookChat>;
+
+/* ─── Chat tab ───────────────────────────────────────────────────────────── */
+
+function ChatTab({ chat, notebookTitle, sourceCount }: { chat: NotebookChat; notebookTitle: string; sourceCount: number }) {
+  const {
+    messages,
+    input,
+    setInput,
+    sending,
+    conversationId,
+    addingToWiki,
+    ingestTrack,
+    sendMessage,
+    addToWiki,
+    startNewConversation,
+    markIngestProcessing,
+  } = chat;
+
+  const [reviewOpen, setReviewOpen] = useState(false);
+  const bottomRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    bottomRef.current?.scrollIntoView({ behavior: "smooth" });
+  }, [messages]);
 
   const wikiButton = messages.length > 0 && (
     !ingestTrack ? (
       <Button size="sm" variant="outline" className="h-7 px-2.5 text-[12px] gap-1.5"
-        onClick={handleAddToWiki} disabled={addingToWiki}>
+        onClick={addToWiki} disabled={addingToWiki}>
         {addingToWiki
           ? <span className="material-symbols-outlined text-[13px] animate-spin">progress_activity</span>
           : <span className="material-symbols-outlined text-[13px]" style={{ fontVariationSettings: "'FILL' 0" }}>library_add</span>
@@ -1641,7 +1759,7 @@ function ChatTab({ notebookId, notebookTitle, sourceCount }: { notebookId: strin
         {conversationId && (
           <button
             className="shrink-0 text-muted-foreground/50 hover:text-muted-foreground text-[11px] underline underline-offset-2"
-            onClick={() => { setMessages([]); setConversationId(null); }}
+            onClick={startNewConversation}
             title="Start a new conversation"
           >
             New chat
@@ -1674,7 +1792,7 @@ function ChatTab({ notebookId, notebookTitle, sourceCount }: { notebookId: strin
           onClose={() => setReviewOpen(false)}
           onDone={() => {
             setReviewOpen(false);
-            setIngestTrack((prev) => prev ? { ...prev, status: "processing" } : null);
+            markIngestProcessing();
           }}
         />
       )}
@@ -1699,6 +1817,9 @@ export default function NotebookLMPage() {
   const [artifacts, setArtifacts] = useState<NLMArtifactNative[]>([]);
   const [sourcesLoading, setSourcesLoading] = useState(false);
   const [artifactsLoading, setArtifactsLoading] = useState(false);
+  const [notebooksError, setNotebooksError] = useState<string | null>(null);
+  const [sourcesError, setSourcesError] = useState<string | null>(null);
+  const [artifactsError, setArtifactsError] = useState<string | null>(null);
 
   const [loading, setLoading] = useState(true);
   const [authOk, setAuthOk] = useState<boolean | null>(null);
@@ -1714,6 +1835,8 @@ export default function NotebookLMPage() {
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   const selectedNotebook = notebooks.find((n) => n.id === selectedId) ?? null;
+
+  const chat = useNotebookChat(selectedId, selectedNotebook?.title ?? "");
 
   /* ── Auth ── */
   const checkAuth = useCallback(async () => {
@@ -1772,12 +1895,14 @@ export default function NotebookLMPage() {
   /* ── Notebooks ── */
   const loadNotebooks = useCallback(async () => {
     setLoading(true);
+    setNotebooksError(null);
     try {
       const data = await api<NLMNotebookNative[]>("/api/notebooklm/nlm/notebooks");
       setNotebooks(data);
       if (data.length > 0 && !selectedId) setSelectedId(data[0].id);
     } catch (e: unknown) {
       if (isSessionExpired(e)) setAuthOk(false);
+      else setNotebooksError(e instanceof Error ? e.message : "Request failed");
     } finally {
       setLoading(false);
     }
@@ -1802,12 +1927,14 @@ export default function NotebookLMPage() {
   /* ── Sources ── */
   const loadSources = useCallback(async (nbId: string) => {
     setSourcesLoading(true);
+    setSourcesError(null);
     try {
       const data = await api<NLMSourceNative[]>(`/api/notebooklm/nlm/notebooks/${nbId}/sources`);
       setSources(data);
     } catch (e: unknown) {
       if (isSessionExpired(e)) setAuthOk(false);
-      else setSources([]);
+      else setSourcesError(e instanceof Error ? e.message : "Request failed");
+      setSources([]);
     } finally {
       setSourcesLoading(false);
     }
@@ -1819,9 +1946,15 @@ export default function NotebookLMPage() {
     try {
       const data = await api<NLMArtifactNative[]>(`/api/notebooklm/nlm/notebooks/${nbId}/artifacts`);
       setArtifacts(data);
+      setArtifactsError(null);
     } catch (e: unknown) {
       if (isSessionExpired(e)) setAuthOk(false);
-      else if (!silent) setArtifacts([]);
+      // A failed background poll keeps the list it already has; only a foreground
+      // load can leave the panel with nothing to show, and that needs the error.
+      else if (!silent) {
+        setArtifactsError(e instanceof Error ? e.message : "Request failed");
+        setArtifacts([]);
+      }
     } finally {
       if (!silent) setArtifactsLoading(false);
     }
@@ -1829,7 +1962,11 @@ export default function NotebookLMPage() {
 
   /* ── Load data when notebook or tab changes ── */
   useEffect(() => {
-    if (!selectedId) { setSources([]); setArtifacts([]); return; }
+    if (!selectedId) {
+      setSources([]); setArtifacts([]);
+      setSourcesError(null); setArtifactsError(null);
+      return;
+    }
     if (tab === "sources") loadSources(selectedId);
     if (tab === "studio") loadArtifacts(selectedId);
   }, [selectedId, tab, loadSources, loadArtifacts]);
@@ -1932,6 +2069,12 @@ export default function NotebookLMPage() {
                 <span className="material-symbols-outlined text-[32px] text-muted-foreground/30 block mb-2">lock</span>
                 <p className="text-[12px] text-muted-foreground">Connect to view notebooks</p>
               </div>
+            ) : notebooksError ? (
+              <LoadErrorPanel
+                title="Could not load notebooks"
+                message={notebooksError}
+                onRetry={loadNotebooks}
+              />
             ) : notebooks.length === 0 ? (
               <div className="px-4 py-6 text-center">
                 <span className="material-symbols-outlined text-[32px] text-muted-foreground/30 block mb-2">book_2</span>
@@ -2023,6 +2166,7 @@ export default function NotebookLMPage() {
                   notebookId={selectedId!}
                   sources={sources}
                   loading={sourcesLoading}
+                  error={sourcesError}
                   onRefresh={() => loadSources(selectedId!)}
                 />
               )}
@@ -2031,12 +2175,13 @@ export default function NotebookLMPage() {
                   notebookId={selectedId!}
                   artifacts={artifacts}
                   loading={artifactsLoading}
+                  error={artifactsError}
                   onRefresh={() => loadArtifacts(selectedId!)}
                 />
               )}
               {tab === "chat" && (
                 <ChatTab
-                  notebookId={selectedId!}
+                  chat={chat}
                   notebookTitle={selectedNotebook?.title ?? ""}
                   sourceCount={selectedNotebook?.sources_count ?? 0}
                 />

@@ -282,23 +282,24 @@ export default function SkillsPage() {
 
           <div className="bg-background/40 rounded-2xl border border-border/50 p-6">
             <div className="flex flex-col gap-4">
-              {loading && skills.length === 0 ? (
-                <div className="flex items-center justify-center py-24">
-                  <span className="material-symbols-outlined text-3xl text-muted-foreground animate-spin">progress_activity</span>
-                </div>
-              ) : (
-                <SkillTable
-                  skills={skills}
-                  departments={allDepartments}
-                  loading={loading}
-                  onDelete={handleDelete}
-                  onRefresh={loadSkills}
-                  onClick={(slug) => router.push(`/skills/${slug}`)}
-                  onSearch={handleSearch}
-                  total={total}
-                  search={search}
-                />
-              )}
+              {/*
+                SkillTable owns the search box, so it must stay mounted while a query is in
+                flight. Swapping it for a spinner (the old `loading && skills.length === 0`
+                gate) unmounted the focused input the moment a search returned zero results,
+                which killed the caret and dropped every keystroke typed during the request.
+                SkillTable renders its own loading state inside the results area instead.
+              */}
+              <SkillTable
+                skills={skills}
+                departments={allDepartments}
+                loading={loading}
+                onDelete={handleDelete}
+                onRefresh={loadSkills}
+                onClick={(slug) => router.push(`/skills/${slug}`)}
+                onSearch={handleSearch}
+                total={total}
+                search={search}
+              />
             </div>
           </div>
         </div>

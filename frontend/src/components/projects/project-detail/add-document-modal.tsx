@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from "react";
+import { useState } from "react";
 import { api, apiUpload } from "@/lib/api";
 import { Button } from "@/components/ui/button";
 import {
@@ -116,7 +116,6 @@ export function AddDocumentModal({
   const [linking, setLinking] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [tokenWarning, setTokenWarning] = useState<TokenWarning | null>(null);
-  const fileInputRef = React.useRef<HTMLInputElement>(null);
 
   const reset = () => {
     setSelectedFile(null);
@@ -222,8 +221,11 @@ export function AddDocumentModal({
             /* ---- Upload tab ---- */
             <div className="flex flex-col gap-4">
               {/* Drop zone */}
-              <div
-                onClick={() => fileInputRef.current?.click()}
+              {/*
+                A <label> wrapping the input is what makes this keyboard-reachable: the whole zone
+                still opens the picker on click, but activation no longer depends on a div's onClick.
+              */}
+              <label
                 onDragOver={(e) => { e.preventDefault(); setDragOver(true); }}
                 onDragLeave={() => setDragOver(false)}
                 onDrop={(e) => {
@@ -232,17 +234,17 @@ export function AddDocumentModal({
                   const file = e.dataTransfer.files?.[0];
                   if (file) handleFile(file);
                 }}
-                className={`cursor-pointer rounded-xl border-2 border-dashed p-8 flex flex-col items-center gap-3 transition-all ${dragOver
+                className={`cursor-pointer rounded-xl border-2 border-dashed p-8 flex flex-col items-center gap-3 transition-all has-[input:focus-visible]:border-primary has-[input:focus-visible]:ring-3 has-[input:focus-visible]:ring-ring/50 ${dragOver
                   ? "border-primary bg-primary/5"
                   : selectedFile
                     ? "border-green-400/50 bg-green-500/5"
                     : "border-border hover:border-primary/40 hover:bg-primary/5"
                   }`}
               >
+                {/* sr-only, not hidden: display:none drops the input out of the tab order and the a11y tree. */}
                 <input
-                  ref={fileInputRef}
                   type="file"
-                  className="hidden"
+                  className="sr-only"
                   accept={ALLOWED_EXTS.join(",")}
                   onChange={(e) => {
                     const file = e.target.files?.[0];
@@ -278,7 +280,7 @@ export function AddDocumentModal({
                     </div>
                   </>
                 )}
-              </div>
+              </label>
 
               {/* Token estimation warning */}
               {tokenWarning && (

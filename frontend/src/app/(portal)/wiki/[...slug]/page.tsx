@@ -30,6 +30,15 @@ function roleAtLeast(role: string | null, min: string): boolean {
   return (WORKSPACE_ROLE_LEVEL[role] ?? -1) >= (WORKSPACE_ROLE_LEVEL[min] ?? 999);
 }
 
+function loadErrorMessage(err: unknown): string {
+  if ((err as { status?: number } | null)?.status === 403) {
+    return "You don't have permission to view this wiki page.";
+  }
+  return err instanceof Error && err.message
+    ? err.message
+    : "Something went wrong while loading this page.";
+}
+
 export default function WikiPageViewer() {
   const params = useParams();
   const searchParams = useSearchParams();
@@ -43,7 +52,9 @@ export default function WikiPageViewer() {
 
   const [page, setPage] = React.useState<WikiPageDetail | null>(null);
   const [notFound, setNotFound] = React.useState(false);
+  const [loadError, setLoadError] = React.useState<string | null>(null);
   const [loading, setLoading] = React.useState(true);
+  const [reloadKey, setReloadKey] = React.useState(0);
   const [searchOpen, setSearchOpen] = React.useState(false);
 
   // Edit mode
@@ -84,19 +95,35 @@ export default function WikiPageViewer() {
     if (!fullSlug) return;
     setLoading(true);
     setNotFound(false);
+    setLoadError(null);
     setPage(null);
     setMode("view");
 
+    // Clicking page A then quickly page B let A's slower response win, leaving
+    // the URL on B and the body on A.
+    let active = true;
+
     const scopeParams = isScoped ? `?scope_type=${encodeURIComponent(scopeType ?? "")}&scope_id=${encodeURIComponent(scopeId ?? "")}` : "";
     api<WikiPageDetail>(`/api/wiki/pages/${encodeURIComponent(fullSlug)}${scopeParams}`)
-      .then((data) => setPage(data))
+      .then((data) => {
+        if (active) setPage(data);
+      })
       .catch((err) => {
+        if (!active) return;
         if (err?.status === 404 || err?.message?.includes("404")) {
           setNotFound(true);
+          return;
         }
+        setLoadError(loadErrorMessage(err));
       })
-      .finally(() => setLoading(false));
-  }, [fullSlug, scopeType, scopeId, isScoped]);
+      .finally(() => {
+        if (active) setLoading(false);
+      });
+
+    return () => {
+      active = false;
+    };
+  }, [fullSlug, scopeType, scopeId, isScoped, reloadKey]);
 
   // ---------------------------------------------------------------------------
   // Load pending drafts (editors/admins only, after page loaded)
@@ -158,11 +185,10 @@ export default function WikiPageViewer() {
 
   const handleDraftApproved = (draftId: string) => {
     setDrafts((prev) => prev.filter((d) => d.id !== draftId));
-    // Reload page content — the approved draft has been applied
-    const scopeParams = isScoped ? `?scope_type=${encodeURIComponent(scopeType ?? "")}&scope_id=${encodeURIComponent(scopeId ?? "")}` : "";
-    api<WikiPageDetail>(`/api/wiki/pages/${encodeURIComponent(fullSlug)}${scopeParams}`)
-      .then(setPage)
-      .catch(() => {});
+    // Reload page content — the approved draft has been applied. Going through
+    // the loader keeps the error/staleness handling instead of silently keeping
+    // the pre-approval content on screen.
+    setReloadKey((k) => k + 1);
   };
 
   const handleDraftRejected = (draftId: string) => {
@@ -302,6 +328,7 @@ export default function WikiPageViewer() {
                 <div className="mb-6">
                   <WikiDraftBanner
                     drafts={drafts}
+                    currentContentMd={page.content_md}
                     onApproved={handleDraftApproved}
                     onRejected={handleDraftRejected}
                   />
@@ -326,7 +353,28 @@ export default function WikiPageViewer() {
                 <WikiContent markdown={page.content_md} />
               )}
             </div>
-          ) : null}
+          ) : (
+            // Terminal branch on purpose: every non-404 failure (500, timeout,
+            // 403) used to fall through to `null` and leave an empty pane with
+            // no message and no way to retry.
+            <div className="px-8 py-12">
+              <EmptyState
+                icon="error"
+                title="Couldn't load this page"
+                description={loadError ?? "Something went wrong while loading this page."}
+                action={
+                  <Button
+                    variant="outline"
+                    onClick={() => setReloadKey((k) => k + 1)}
+                    className="gap-2"
+                  >
+                    <span className="material-symbols-outlined text-base">refresh</span>
+                    Try again
+                  </Button>
+                }
+              />
+            </div>
+          )}
         </div>
 
         {/* Right: Sidebar (hidden on < lg, only in view mode) */}

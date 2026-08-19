@@ -162,6 +162,13 @@ export function ProviderConfigCard({ capability, testEndpoint }: Props) {
   const [testing, setTesting] = useState(false);
   const [testResult, setTestResult] = useState<{ success: boolean; message: string } | null>(null);
 
+  const def = providers.find((p) => p.value === provider) ?? null;
+  const apiKey = apiKeys[provider] ?? "";
+  const isMasked = apiKey.includes("•");
+  const modelList = fetchedModels ?? def?.staticModels ?? [];
+  const isModelInList = modelList.includes(model);
+  const showCustomInput = customModel || (model.length > 0 && !isModelInList);
+
   useEffect(() => { void load(); }, []);
 
   async function load() {
@@ -188,18 +195,34 @@ export function ProviderConfigCard({ capability, testEndpoint }: Props) {
 
   async function handleFetchModels() {
     if (!baseUrl) return;
+
+    // A saved key only ever comes back masked and the endpoint has no access to the stored
+    // secret, so posting the mask (or an empty string over it) just returns 401. Ask for the
+    // key instead of firing a request that is guaranteed to fail.
+    const plainKey = isMasked ? "" : apiKey;
+    if (def?.needsKey && !plainKey) {
+      setFetchError(
+        isMasked
+          ? "Re-enter the API key to list models — the saved key is stored masked and cannot be reused here."
+          : "Enter the API key above to list models."
+      );
+      return;
+    }
+
     setFetching(true);
     setFetchError("");
     setFetchedModels(null);
     try {
-      const apiKey = apiKeys[provider] ?? "";
       const res = await api<{ models: string[] }>("/api/settings/fetch-models", {
         method: "POST",
-        body: { base_url: baseUrl, api_key: apiKey.startsWith("••••") ? "" : apiKey },
+        body: { base_url: baseUrl, api_key: plainKey },
       });
       setFetchedModels(res.models);
-      setModel("");
       setCustomModel(false);
+      // Keep the saved model id unless this endpoint no longer offers it; clearing it
+      // unconditionally meant a look at the model list persisted an empty model on the
+      // next Save.
+      if (model && !res.models.includes(model)) setModel("");
     } catch (e) {
       setFetchError(e instanceof Error ? e.message : "Failed to fetch models");
     } finally {
@@ -248,13 +271,6 @@ export function ProviderConfigCard({ capability, testEndpoint }: Props) {
   if (loading) {
     return <p className="text-sm text-muted-foreground">Loading…</p>;
   }
-
-  const def = providers.find((p) => p.value === provider) ?? null;
-  const apiKey = apiKeys[provider] ?? "";
-  const isMasked = apiKey.includes("•");
-  const modelList = fetchedModels ?? def?.staticModels ?? [];
-  const isModelInList = modelList.includes(model);
-  const showCustomInput = customModel || (model.length > 0 && !isModelInList);
 
   function handleProviderSelect(val: string) {
     const next = providers.find((p) => p.value === val)!;
@@ -419,7 +435,11 @@ export function ProviderConfigCard({ capability, testEndpoint }: Props) {
             <Label className="text-xs">Model</Label>
             {def.canFetch && fetchedModels === null ? (
               <div className="h-9 rounded-md border border-dashed border-border bg-background/50 px-3 flex items-center text-xs text-muted-foreground">
-                {baseUrl ? "Click \"Fetch Models\" to load available models" : "Enter Base URL above first"}
+                {!baseUrl
+                  ? "Enter Base URL above first"
+                  : model
+                    ? `Saved: ${model} — click "Fetch Models" to change it`
+                    : "Click \"Fetch Models\" to load available models"}
               </div>
             ) : !showCustomInput ? (
               <select

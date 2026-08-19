@@ -8,7 +8,6 @@ import { PageHeader } from "@/components/shared/page-header";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { SkillEditor } from "@/components/skills/skill-editor";
-import { cn } from "@/lib/utils";
 
 type Contribution = {
   id: string;
@@ -27,16 +26,21 @@ export default function AdminContributionsPage() {
   const { user } = useAuth();
   const [contributions, setContributions] = useState<Contribution[]>([]);
   const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
   const [activeContributionId, setActiveContributionId] = useState<string | null>(null);
 
   const loadContributions = useCallback(async () => {
     setLoading(true);
+    setError(null);
     try {
       // Fetch all pending contributions using the new admin endpoint
       const data = await api<Contribution[]>("/api/admin/skill-contributions");
       setContributions(data);
     } catch (err) {
-      console.error("Failed to load contributions:", err);
+      // This screen must never render a failed load as "nothing to review": an admin
+      // reads that as an answer and leaves a real queue of proposals unreviewed.
+      setError(err instanceof Error ? err.message : "Failed to load contributions");
+      setContributions([]);
     } finally {
       setLoading(false);
     }
@@ -85,6 +89,18 @@ export default function AdminContributionsPage() {
         {loading ? (
           <div className="flex items-center justify-center py-24">
             <span className="material-symbols-outlined text-3xl text-muted-foreground animate-spin">progress_activity</span>
+          </div>
+        ) : error ? (
+          <div className="flex flex-col items-center justify-center py-24 gap-4 text-center px-6">
+            <span className="material-symbols-outlined text-6xl text-destructive/30">cloud_off</span>
+            <div>
+              <p className="font-medium">Could not load the review queue</p>
+              <p className="text-sm text-muted-foreground mt-1 max-w-md break-words">{error}</p>
+            </div>
+            <Button variant="outline" onClick={loadContributions} className="gap-2">
+              <span className="material-symbols-outlined text-sm">refresh</span>
+              Retry
+            </Button>
           </div>
         ) : contributions.length === 0 ? (
           <div className="flex flex-col items-center justify-center py-24 text-muted-foreground gap-4">

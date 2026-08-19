@@ -2,7 +2,7 @@
 
 import React from "react";
 import Link from "next/link";
-import ReactMarkdown from "react-markdown";
+import ReactMarkdown, { type ExtraProps } from "react-markdown";
 import remarkGfm from "remark-gfm";
 import {
   Table,
@@ -14,6 +14,7 @@ import {
 } from "@/components/ui/table";
 import { WikiImage } from "@/components/wiki/wiki-image";
 import { useImageResolver } from "@/lib/hooks/use-image-resolver";
+import { extractHeadings } from "@/lib/markdown-headings";
 
 const IMAGE_REF_RE = /image:\/\/([0-9a-fA-F-]{36})/g;
 
@@ -25,10 +26,13 @@ function wikiUrlTransform(url: string): string {
   return "";
 }
 
+// Newlines are excluded from the link target on purpose: heading anchors are
+// matched to rendered nodes by source line, so this rewrite must never add or
+// drop a line (`[[a\nb|c]]` used to collapse two lines into one).
 function preprocessWikilinks(md: string): string {
   return md
-    .replace(/\[\[([^\]|]+)\|([^\]]+)\]\]/g, "[$2](/wiki/$1)")
-    .replace(/\[\[([^\]]+)\]\]/g, "[$1](/wiki/$1)");
+    .replace(/\[\[([^\]|\n]+)\|([^\]\n]+)\]\]/g, "[$2](/wiki/$1)")
+    .replace(/\[\[([^\]\n]+)\]\]/g, "[$1](/wiki/$1)");
 }
 
 function CopyButton({ text }: { text: string }) {
@@ -50,38 +54,17 @@ function CopyButton({ text }: { text: string }) {
   );
 }
 
-function extractHeadings(md: string): { id: string; text: string; level: number }[] {
-  const headings: { id: string; text: string; level: number }[] = [];
-  const seen = new Map<string, number>();
-  const lines = md.split("\n");
-  for (const line of lines) {
-    const match = line.match(/^(#{2,4})\s+(.+)$/);
-    if (match) {
-      const level = match[1].length;
-      const text = match[2].trim();
-      // Non-ASCII text (e.g. Vietnamese diacritics) strips down to nothing or
-      // to the same base for distinct headings — dedupe and fall back to a
-      // stable placeholder so ids/keys never collide.
-      const base =
-        text
-          .toLowerCase()
-          .replace(/[^\w\s-]/g, "")
-          .replace(/\s+/g, "-") || "section";
-      const occurrence = seen.get(base) ?? 0;
-      seen.set(base, occurrence + 1);
-      const id = occurrence === 0 ? base : `${base}-${occurrence}`;
-      headings.push({ id, text, level });
-    }
-  }
-  return headings;
-}
-
 export function WikiContent({
   markdown,
   onWikiLinkClick,
+  anchors = true,
 }: {
   markdown: string;
   onWikiLinkClick?: (slug: string) => void;
+  /** Preview panes (draft banner, editor preview) show a second copy of nearly
+   * the same markdown; emitting its heading ids again would make the article's
+   * TOC scroll into the preview instead. */
+  anchors?: boolean;
 }) {
   const processed = preprocessWikilinks(markdown);
   const headings = React.useMemo(() => extractHeadings(markdown), [markdown]);
@@ -96,7 +79,7 @@ export function WikiContent({
 
   // Intersection observer for active heading tracking
   React.useEffect(() => {
-    if (headings.length === 0) return;
+    if (!anchors || headings.length === 0) return;
     const observer = new IntersectionObserver(
       (entries) => {
         for (const entry of entries) {
@@ -112,19 +95,26 @@ export function WikiContent({
       if (el) observer.observe(el);
     }
     return () => observer.disconnect();
-  }, [headings]);
+  }, [anchors, headings]);
 
-  // h2/h3/h4 render in the same document order as extractHeadings() parsed
-  // them, so a cursor over that (already deduped) list keeps DOM ids and TOC
-  // links in sync instead of re-deriving (and potentially colliding on) ids
-  // independently in each renderer.
-  let headingCursor = 0;
-  const nextHeadingId = () => headings[headingCursor++]?.id ?? "";
+  const headingIdsByLine = React.useMemo(
+    () => new Map(headings.map((h) => [h.line, h.id])),
+    [headings]
+  );
+
+  // Look the id up by the heading's source line rather than by render order: a
+  // cursor over the extracted list desynced permanently as soon as the two
+  // disagreed about what a heading is (a `##` comment inside a code fence), and
+  // it is not safe under StrictMode / React Compiler re-invocation either.
+  const headingId = (node: ExtraProps["node"]) => {
+    const line = node?.position?.start.line;
+    return anchors && line !== undefined ? headingIdsByLine.get(line) : undefined;
+  };
 
   return (
     <div className="relative">
       {/* Table of Contents — only show when enough headings */}
-      {headings.length >= 3 && (
+      {anchors && headings.length >= 3 && (
         <div className="mb-8 rounded-xl border border-border bg-card/50 px-5 py-4">
           <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-2.5 flex items-center gap-1.5">
             <span className="material-symbols-outlined" style={{ fontSize: 13 }}>toc</span>
@@ -163,25 +153,25 @@ export function WikiContent({
                 {children}
               </h1>
             ),
-            h2: ({ children }) => (
+            h2: ({ children, node }) => (
               <h2
-                id={nextHeadingId()}
+                id={headingId(node)}
                 className="font-heading text-2xl font-normal mt-10 mb-3 pb-2 border-b border-border text-foreground scroll-mt-20"
               >
                 {children}
               </h2>
             ),
-            h3: ({ children }) => (
+            h3: ({ children, node }) => (
               <h3
-                id={nextHeadingId()}
+                id={headingId(node)}
                 className="font-heading text-xl font-normal mt-7 mb-2 text-foreground scroll-mt-20"
               >
                 {children}
               </h3>
             ),
-            h4: ({ children }) => (
+            h4: ({ children, node }) => (
               <h4
-                id={nextHeadingId()}
+                id={headingId(node)}
                 className="font-heading text-lg font-normal mt-5 mb-1.5 text-foreground scroll-mt-20"
               >
                 {children}

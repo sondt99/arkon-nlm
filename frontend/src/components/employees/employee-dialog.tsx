@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { api } from "@/lib/api";
 import { useAuth } from "@/lib/auth";
 import { Button } from "@/components/ui/button";
@@ -59,8 +59,8 @@ export function EmployeeDialog({
   const [customRoleId, setCustomRoleId] = useState("");
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
-  const [localRoles, setLocalRoles] = useState<Role[]>([]);
-  const [localDepartments, setLocalDepartments] = useState<Department[]>([]);
+  const [createdRoles, setCreatedRoles] = useState<Role[]>([]);
+  const [createdDepartments, setCreatedDepartments] = useState<Department[]>([]);
   const [inlinePrompt, setInlinePrompt] = useState({
     open: false,
     title: "",
@@ -71,13 +71,19 @@ export function EmployeeDialog({
     onSubmit: async (val: string) => {},
   });
 
-  useEffect(() => {
-    setLocalRoles(roles.filter(r => !r.is_system));
-  }, [roles]);
+  // Derived, not mirrored into state: the lists arrive asynchronously, and anything created
+  // inline here lives only client-side until the parent refetches — copying the props over the
+  // local list would drop it and leave the Select rendering a raw UUID.
+  const localRoles = useMemo(() => {
+    const fromProps = roles.filter(r => !r.is_system);
+    const known = new Set(fromProps.map(r => r.id));
+    return [...fromProps, ...createdRoles.filter(r => !known.has(r.id))];
+  }, [roles, createdRoles]);
 
-  useEffect(() => {
-    setLocalDepartments(departments);
-  }, [departments]);
+  const localDepartments = useMemo(() => {
+    const known = new Set(departments.map(d => d.id));
+    return [...departments, ...createdDepartments.filter(d => !known.has(d.id))];
+  }, [departments, createdDepartments]);
 
   const handleCreateDepartment = () => {
     setInlinePrompt({
@@ -92,7 +98,7 @@ export function EmployeeDialog({
           method: "POST",
           body: { name: val, description: "" }
         });
-        setLocalDepartments(prev => [...prev, newDept]);
+        setCreatedDepartments(prev => [...prev, newDept]);
         setDeptId(newDept.id);
         setInlinePrompt(p => ({ ...p, open: false }));
       }
@@ -112,7 +118,7 @@ export function EmployeeDialog({
           method: "POST",
           body: { name: val, permissions: [] }
         });
-        setLocalRoles(prev => [...prev, newRole]);
+        setCreatedRoles(prev => [...prev, newRole]);
         setCustomRoleId(newRole.id);
         setInlinePrompt(p => ({ ...p, open: false }));
       }
@@ -129,6 +135,10 @@ export function EmployeeDialog({
     }
   };
 
+  // Keyed on the employee identity and `open` only. Depending on the `departments` prop meant
+  // that the async fetch landing while the dialog was already open re-ran this and wiped the
+  // name, email and password the user had typed. The default department is derived below
+  // instead, so a late-arriving list can fill an untouched field without resetting anything.
   useEffect(() => {
     if (employee) {
       setName(employee.name);
@@ -142,11 +152,14 @@ export function EmployeeDialog({
       setEmail("");
       setPassword("");
       setRole("employee");
-      setDeptId(departments[0]?.id || "");
+      setDeptId("");
       setCustomRoleId("");
     }
     setError("");
-  }, [employee, open, departments]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [employee?.id, open]);
+
+  const effectiveDeptId = deptId || localDepartments[0]?.id || "";
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -157,7 +170,7 @@ export function EmployeeDialog({
       const body: Record<string, string | null> = {
         name,
         email,
-        department_id: deptId,
+        department_id: effectiveDeptId,
         custom_role_id: customRoleId || null,
       };
       if (isAdmin) {
@@ -258,8 +271,8 @@ export function EmployeeDialog({
 
             <div className="flex flex-col gap-2">
               <Label>Department</Label>
-              <Select 
-                value={deptId} 
+              <Select
+                value={effectiveDeptId}
                 onValueChange={(v) => {
                   if (v === "__new__") {
                     handleCreateDepartment();
@@ -269,7 +282,7 @@ export function EmployeeDialog({
                 }}
               >
                 <SelectTrigger className="bg-background">
-                  {deptId ? (localDepartments.find(d => d.id === deptId)?.name || deptId) : <SelectValue placeholder="Select" />}
+                  {effectiveDeptId ? (localDepartments.find(d => d.id === effectiveDeptId)?.name || effectiveDeptId) : <SelectValue placeholder="Select" />}
                 </SelectTrigger>
                 <SelectContent className="!w-max min-w-(--anchor-width)">
                   {localDepartments.map((d) => (

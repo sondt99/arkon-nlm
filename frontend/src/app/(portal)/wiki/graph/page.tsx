@@ -12,6 +12,16 @@ import { Button } from "@/components/ui/button";
 
 const PAGE_TYPES = ["entity", "concept", "topic", "source", "synthesis", "index", "log"];
 
+// `/api/wiki/graph` caps `limit` at 500; a bigger batch means fewer full-array state
+// updates, and every one of those restarts the d3-force simulation.
+const BATCH_SIZE = 250;
+// Hard bounds, not tuning knobs: the backend derives `has_more` from `offset + limit < total`,
+// so a wrong `total` — or an endpoint that ignores `offset` — used to turn this into an endless
+// request storm. Past ~5k nodes the force layout is unreadable anyway, so stopping there costs
+// nothing a user can see.
+const MAX_BATCHES = 40;
+const MAX_NODES = 5_000;
+
 export default function WikiGraphPage() {
   const router = useRouter();
   const searchParams = useSearchParams();
@@ -29,10 +39,13 @@ export default function WikiGraphPage() {
   const [previewData, setPreviewData] = React.useState<WikiPageDetail | null>(null);
   const [previewLoading, setPreviewLoading] = React.useState(false);
 
-  // Progressive loading — fetch graph in batches
+  // Progressive loading — fetch graph in bounded batches
   React.useEffect(() => {
-    let cancelled = false;
-    const BATCH_SIZE = 10;
+    // The loop is bounded and abortable: an unmount cancels the request in flight and stops
+    // any further page being requested. Previously this was `while (true)` with no signal,
+    // so navigating away left it paging the whole wiki into a dead component.
+    const controller = new AbortController();
+    const { signal } = controller;
 
     async function loadAll() {
       setLoading(true);
@@ -45,39 +58,51 @@ export default function WikiGraphPage() {
       let offset = 0;
       let allNodes: WikiGraphData["nodes"] = [];
       let allEdges: WikiGraphData["edges"] = [];
+      const seenSlugs = new Set<string>();
 
-      // eslint-disable-next-line no-constant-condition
-      while (true) {
-        if (cancelled) return;
+      for (let batchCount = 0; batchCount < MAX_BATCHES; batchCount += 1) {
+        let batch: WikiGraphData;
         try {
-          const batch = await api<WikiGraphData>(
-            `${baseUrl}?offset=${offset}&limit=${BATCH_SIZE}`
+          batch = await api<WikiGraphData>(
+            `${baseUrl}?offset=${offset}&limit=${BATCH_SIZE}`,
+            { signal }
           );
-
-          allNodes = [...allNodes, ...batch.nodes];
-          allEdges = [...allEdges, ...batch.edges];
-
-          setGraphData({ nodes: allNodes, edges: allEdges });
-          setLoadProgress({
-            loaded: allNodes.length,
-            total: batch.total ?? allNodes.length,
-          });
-
-          if (!batch.has_more) break;
-          offset += BATCH_SIZE;
         } catch {
           break;
         }
+        // Re-checked after the await: unmounting mid-request must not push state into a
+        // torn-down tree, and must not queue the next page.
+        if (signal.aborted) return;
+
+        const freshNodes = batch.nodes.filter((n) => !seenSlugs.has(n.slug));
+        // No new nodes means the tail is empty or the cursor is not advancing — either way
+        // there is nothing left to page through.
+        if (freshNodes.length === 0) break;
+        freshNodes.forEach((n) => seenSlugs.add(n.slug));
+
+        allNodes = [...allNodes, ...freshNodes];
+        allEdges = [...allEdges, ...batch.edges];
+
+        setGraphData({ nodes: allNodes, edges: allEdges });
+        setLoadProgress({
+          loaded: allNodes.length,
+          total: batch.total ?? allNodes.length,
+        });
+
+        if (!batch.has_more || allNodes.length >= MAX_NODES) break;
+        // Advance by what the server actually returned, not by BATCH_SIZE — a short page
+        // followed by `has_more: true` would otherwise skip rows.
+        offset += batch.nodes.length;
       }
 
-      if (!cancelled) {
+      if (!signal.aborted) {
         setLoading(false);
         setLoadProgress(null);
       }
     }
 
     loadAll();
-    return () => { cancelled = true; };
+    return () => controller.abort();
   }, [projectId]);
 
   // Fetch preview data when a node is clicked
@@ -92,7 +117,7 @@ export default function WikiGraphPage() {
       .then(setPreviewData)
       .catch(() => setPreviewData(null))
       .finally(() => setPreviewLoading(false));
-  }, [previewSlug]);
+  }, [previewSlug, projectId]);
 
   const filteredData = React.useMemo(() => {
     if (graphData.nodes.length === 0) return null;

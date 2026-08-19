@@ -10,6 +10,10 @@ type RequestOptions = {
   method?: string;
   body?: unknown;
   headers?: Record<string, string>;
+  /** Caller-owned cancellation. Without this, an effect that "aborted" could only discard
+   *  a response it had already paid for — the socket stayed open and the server kept
+   *  working. Progressive loaders and preview panes rely on it to actually stop. */
+  signal?: AbortSignal;
   timeoutMs?: number;
 };
 
@@ -72,11 +76,32 @@ export function __resetUnauthorizedGuard() {
 }
 
 async function request(path: string, options: RequestOptions = {}): Promise<Response> {
-  const { method = "GET", body, headers = {}, timeoutMs = REQUEST_TIMEOUT_MS } = options;
+  const {
+    method = "GET",
+    body,
+    headers = {},
+    timeoutMs = REQUEST_TIMEOUT_MS,
+    signal,
+  } = options;
   const token = getToken();
 
   const controller = new AbortController();
-  const timerId = setTimeout(() => controller.abort(), timeoutMs);
+  let timedOut = false;
+  const timerId = setTimeout(() => {
+    timedOut = true;
+    controller.abort();
+  }, timeoutMs);
+
+  // A caller's signal and the timeout share one controller, because fetch takes only one.
+  // `timedOut` keeps them distinguishable: a timeout must keep its ApiError(0, "Request
+  // timed out") contract, while a caller-initiated abort has to surface a real AbortError
+  // so `if (err.name === "AbortError") return` guards in effect cleanups still work —
+  // reporting a user-cancelled request as a timeout would render a spurious error panel.
+  const forwardAbort = () => controller.abort();
+  if (signal) {
+    if (signal.aborted) controller.abort();
+    else signal.addEventListener("abort", forwardAbort, { once: true });
+  }
 
   const config: RequestInit = {
     method,
@@ -97,12 +122,13 @@ async function request(path: string, options: RequestOptions = {}): Promise<Resp
   try {
     res = await fetch(fullUrl, config);
   } catch (err) {
-    if (err instanceof DOMException && err.name === "AbortError") {
+    if (err instanceof DOMException && err.name === "AbortError" && timedOut) {
       throw new ApiError(0, "Request timed out");
     }
     throw err;
   } finally {
     clearTimeout(timerId);
+    signal?.removeEventListener("abort", forwardAbort);
   }
 
   if (!res.ok) {
@@ -201,10 +227,25 @@ export async function apiUpload<T = unknown>(
 }
 
 /** Fetch a binary resource with the auth header (not the URL) carrying the token. */
-export async function fetchAuthedBlob(path: string, timeoutMs = 30_000): Promise<Blob> {
+export async function fetchAuthedBlob(
+  path: string,
+  timeoutMs = 30_000,
+  signal?: AbortSignal
+): Promise<Blob> {
   const token = getToken();
   const controller = new AbortController();
-  const timerId = setTimeout(() => controller.abort(), timeoutMs);
+  let timedOut = false;
+  const timerId = setTimeout(() => {
+    timedOut = true;
+    controller.abort();
+  }, timeoutMs);
+
+  // See request(): one controller for both, `timedOut` keeps the two causes apart.
+  const forwardAbort = () => controller.abort();
+  if (signal) {
+    if (signal.aborted) controller.abort();
+    else signal.addEventListener("abort", forwardAbort, { once: true });
+  }
 
   let res: Response;
   try {
@@ -215,12 +256,13 @@ export async function fetchAuthedBlob(path: string, timeoutMs = 30_000): Promise
       },
     });
   } catch (err) {
-    if (err instanceof DOMException && err.name === "AbortError") {
+    if (err instanceof DOMException && err.name === "AbortError" && timedOut) {
       throw new ApiError(0, "Request timed out");
     }
     throw err;
   } finally {
     clearTimeout(timerId);
+    signal?.removeEventListener("abort", forwardAbort);
   }
 
   if (!res.ok) {

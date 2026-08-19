@@ -1,7 +1,7 @@
 "use client";
 
 import React from "react";
-import ReactMarkdown from "react-markdown";
+import ReactMarkdown, { type Components } from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { Check, Copy } from "lucide-react";
 import { api } from "@/lib/api";
@@ -28,6 +28,8 @@ type Message = {
 
 const CHAT_REQUEST_TIMEOUT_MS = 285_000;
 const CHAT_RECOVERY_DELAYS_MS = [0, 1_500, 3_000, 6_000, 12_000, 20_000];
+/** How close to the bottom counts as "following along" for autoscroll purposes. */
+const SCROLL_PIN_THRESHOLD_PX = 120;
 
 async function recoverCompletedReply(conversationId: string, userContent: string): Promise<Message[] | null> {
   for (const delay of CHAT_RECOVERY_DELAYS_MS) {
@@ -118,98 +120,104 @@ function CodeBlock({ code, language = "code" }: { code: string; language?: strin
   );
 }
 
-function ChatMarkdown({ content }: { content: string }) {
-  return (
-    <ReactMarkdown
-      remarkPlugins={[remarkGfm]}
-      components={{
-        h1: ({ children }) => (
-          <h1 className="mb-2 mt-5 text-lg font-bold tracking-tight text-foreground first:mt-0">{children}</h1>
-        ),
-        h2: ({ children }) => (
-          <h2 className="mb-1.5 mt-4 text-base font-bold tracking-tight text-foreground first:mt-0">{children}</h2>
-        ),
-        h3: ({ children }) => (
-          <h3 className="mb-1 mt-3 text-sm font-semibold text-foreground first:mt-0">{children}</h3>
-        ),
-        p: ({ children }) => (
-          <p className="mb-3 text-sm leading-7 last:mb-0">{children}</p>
-        ),
-        ul: ({ children }) => (
-          <ul className="mb-3 ml-5 list-disc space-y-1 text-sm leading-6 marker:text-primary/70">{children}</ul>
-        ),
-        ol: ({ children }) => (
-          <ol className="mb-3 ml-5 list-decimal space-y-1 text-sm leading-6 marker:font-mono marker:text-primary/70">{children}</ol>
-        ),
-        li: ({ children }) => <li className="leading-relaxed">{children}</li>,
-        strong: ({ children }) => <strong className="font-semibold text-foreground">{children}</strong>,
-        em: ({ children }) => <em className="italic">{children}</em>,
-        a: ({ href, children }) => (
-          <a
-            href={href}
-            target="_blank"
-            rel="noopener noreferrer"
-            className="text-primary underline underline-offset-2 hover:text-primary/80"
-          >
-            {children}
-          </a>
-        ),
-        code: ({ className, children, ...props }) => {
-          const isBlock = !!className;
-          if (isBlock) {
-            const code = String(children).replace(/\n$/, "");
-            const language = className?.replace("language-", "") || "code";
-            return <CodeBlock code={code} language={language} />;
-          }
-          return (
-            <code
-              className="rounded-md border border-primary/15 bg-primary/[0.07] px-1.5 py-0.5 font-mono text-xs text-primary"
-              {...props}
-            >
-              {children}
-            </code>
-          );
-        },
-        pre: ({ children }) => {
-          const child = React.Children.toArray(children)[0];
-          if (React.isValidElement<{ className?: string; children?: React.ReactNode }>(child) && !child.props.className) {
-            return <CodeBlock code={String(child.props.children ?? "").replace(/\n$/, "")} />;
-          }
-          return <>{children}</>;
-        },
-        blockquote: ({ children }) => (
-          <blockquote className="my-3 rounded-r-lg border-l-2 border-primary/50 bg-primary/[0.045] py-2 pl-3 pr-3 text-sm italic text-muted-foreground">
-            {children}
-          </blockquote>
-        ),
-        hr: () => <hr className="my-3 border-border" />,
-        table: ({ children }) => (
-          <div className="overflow-x-auto my-2">
-            <table className="text-xs w-full border-collapse border border-border rounded">
-              {children}
-            </table>
-          </div>
-        ),
-        thead: ({ children }) => <thead className="bg-muted/50">{children}</thead>,
-        th: ({ children }) => (
-          <th className="border border-border px-2 py-1.5 text-left font-semibold text-foreground">
-            {children}
-          </th>
-        ),
-        td: ({ children }) => (
-          <td className="border border-border px-2 py-1.5 text-muted-foreground">{children}</td>
-        ),
-      }}
+const MARKDOWN_PLUGINS = [remarkGfm];
+
+const MARKDOWN_COMPONENTS: Components = {
+  h1: ({ children }) => (
+    <h1 className="mb-2 mt-5 text-lg font-bold tracking-tight text-foreground first:mt-0">{children}</h1>
+  ),
+  h2: ({ children }) => (
+    <h2 className="mb-1.5 mt-4 text-base font-bold tracking-tight text-foreground first:mt-0">{children}</h2>
+  ),
+  h3: ({ children }) => (
+    <h3 className="mb-1 mt-3 text-sm font-semibold text-foreground first:mt-0">{children}</h3>
+  ),
+  p: ({ children }) => (
+    <p className="mb-3 text-sm leading-7 last:mb-0">{children}</p>
+  ),
+  ul: ({ children }) => (
+    <ul className="mb-3 ml-5 list-disc space-y-1 text-sm leading-6 marker:text-primary/70">{children}</ul>
+  ),
+  ol: ({ children }) => (
+    <ol className="mb-3 ml-5 list-decimal space-y-1 text-sm leading-6 marker:font-mono marker:text-primary/70">{children}</ol>
+  ),
+  li: ({ children }) => <li className="leading-relaxed">{children}</li>,
+  strong: ({ children }) => <strong className="font-semibold text-foreground">{children}</strong>,
+  em: ({ children }) => <em className="italic">{children}</em>,
+  a: ({ href, children }) => (
+    <a
+      href={href}
+      target="_blank"
+      rel="noopener noreferrer"
+      className="text-primary underline underline-offset-2 hover:text-primary/80"
     >
+      {children}
+    </a>
+  ),
+  code: ({ className, children, ...props }) => {
+    const isBlock = !!className;
+    if (isBlock) {
+      const code = String(children).replace(/\n$/, "");
+      const language = className?.replace("language-", "") || "code";
+      return <CodeBlock code={code} language={language} />;
+    }
+    return (
+      <code
+        className="rounded-md border border-primary/15 bg-primary/[0.07] px-1.5 py-0.5 font-mono text-xs text-primary"
+        {...props}
+      >
+        {children}
+      </code>
+    );
+  },
+  pre: ({ children }) => {
+    const child = React.Children.toArray(children)[0];
+    if (React.isValidElement<{ className?: string; children?: React.ReactNode }>(child) && !child.props.className) {
+      return <CodeBlock code={String(child.props.children ?? "").replace(/\n$/, "")} />;
+    }
+    return <>{children}</>;
+  },
+  blockquote: ({ children }) => (
+    <blockquote className="my-3 rounded-r-lg border-l-2 border-primary/50 bg-primary/[0.045] py-2 pl-3 pr-3 text-sm italic text-muted-foreground">
+      {children}
+    </blockquote>
+  ),
+  hr: () => <hr className="my-3 border-border" />,
+  table: ({ children }) => (
+    <div className="overflow-x-auto my-2">
+      <table className="text-xs w-full border-collapse border border-border rounded">
+        {children}
+      </table>
+    </div>
+  ),
+  thead: ({ children }) => <thead className="bg-muted/50">{children}</thead>,
+  th: ({ children }) => (
+    <th className="border border-border px-2 py-1.5 text-left font-semibold text-foreground">
+      {children}
+    </th>
+  ),
+  td: ({ children }) => (
+    <td className="border border-border px-2 py-1.5 text-muted-foreground">{children}</td>
+  ),
+};
+
+// Memoized because react-markdown re-parses its input on every render: a reveal animation
+// re-renders the transcript ~120 times, and without this every tick re-parsed every answer.
+const ChatMarkdown = React.memo(function ChatMarkdown({ content }: { content: string }) {
+  return (
+    <ReactMarkdown remarkPlugins={MARKDOWN_PLUGINS} components={MARKDOWN_COMPONENTS}>
       {content}
     </ReactMarkdown>
   );
-}
+});
 
 // ---------------------------------------------------------------------------
 // Message bubble
 // ---------------------------------------------------------------------------
-function MessageBubble({
+// Memoized so a reveal tick only re-renders the message being revealed. Every prop below is
+// either a primitive or a stable callback — passing an inline arrow or the shared edit buffer
+// to all bubbles would defeat this and bring back the whole-transcript re-parse.
+const MessageBubble = React.memo(function MessageBubble({
   msg,
   isEditing,
   editContent,
@@ -217,18 +225,22 @@ function MessageBubble({
   onEditChange,
   onEditSave,
   onEditCancel,
-  isStreaming = false,
+  revealLength,
 }: {
   msg: Message;
   isEditing?: boolean;
   editContent?: string;
-  onEditStart?: () => void;
+  onEditStart?: (msg: Message) => void;
   onEditChange?: (val: string) => void;
   onEditSave?: () => void;
   onEditCancel?: () => void;
-  isStreaming?: boolean;
+  /** Characters of `msg.content` to show while the reveal animation runs; undefined = show all. */
+  revealLength?: number;
 }) {
   const isUser = msg.role === "user";
+  const isStreaming = revealLength !== undefined;
+  const visibleContent = isStreaming ? msg.content.slice(0, revealLength) : msg.content;
+  const canEdit = isUser && !!onEditStart && !msg.id.startsWith("temp-");
   const editRef = React.useRef<HTMLTextAreaElement>(null);
 
   React.useEffect(() => {
@@ -298,9 +310,9 @@ function MessageBubble({
           /* ── Normal display ── */
           <div className={cn("group/msg relative", isUser ? "flex flex-col items-end" : "")}>
             {/* Edit icon — only for user messages */}
-            {isUser && onEditStart && (
+            {canEdit && (
               <button
-                onClick={onEditStart}
+                onClick={() => onEditStart?.(msg)}
                 className="absolute -left-6 top-2.5 opacity-0 group-hover/msg:opacity-100 transition-opacity text-muted-foreground hover:text-foreground"
                 title="Edit message"
               >
@@ -316,10 +328,10 @@ function MessageBubble({
               )}
             >
               {isUser ? (
-                <p className="text-sm leading-relaxed whitespace-pre-wrap">{msg.content}</p>
+                <p className="text-sm leading-relaxed whitespace-pre-wrap">{visibleContent}</p>
               ) : (
                 <div className="min-w-0">
-                  <ChatMarkdown content={msg.content} />
+                  <ChatMarkdown content={visibleContent} />
                   {isStreaming && (
                     <span className="ml-0.5 inline-block h-4 w-1 animate-pulse rounded-full bg-primary align-middle" aria-label="AI is writing" />
                   )}
@@ -334,8 +346,8 @@ function MessageBubble({
           </div>
         )}
 
-        {/* Sources */}
-        {!isEditing && !isUser && msg.sources && msg.sources.length > 0 && (
+        {/* Sources — held back until the reveal finishes */}
+        {!isEditing && !isUser && !isStreaming && msg.sources && msg.sources.length > 0 && (
           <div className="flex flex-wrap gap-1 mt-1">
             {msg.sources.map((s) => (
               <a
@@ -356,7 +368,7 @@ function MessageBubble({
       </div>
     </div>
   );
-}
+});
 
 function useConvSidebarCollapse() {
   const key = "chat-conv-sidebar-collapsed";
@@ -385,7 +397,7 @@ export default function ChatPage() {
   const [loadingConvs, setLoadingConvs] = React.useState(true);
   const [loadingMsgs, setLoadingMsgs] = React.useState(false);
   const [sending, setSending] = React.useState(false);
-  const [revealingId, setRevealingId] = React.useState<string | null>(null);
+  const [reveal, setReveal] = React.useState<{ convId: string; msgId: string; length: number } | null>(null);
   const [input, setInput] = React.useState("");
   const [persona, setPersona] = React.useState<"victor" | "ashley">("ashley");
   const [deletingId, setDeletingId] = React.useState<string | null>(null);
@@ -396,36 +408,52 @@ export default function ChatPage() {
   const [wikiDialogOpen, setWikiDialogOpen] = React.useState(false);
   const [clearAllOpen, setClearAllOpen] = React.useState(false);
   const bottomRef = React.useRef<HTMLDivElement>(null);
+  const messagesScrollRef = React.useRef<HTMLDivElement>(null);
+  const pinnedToBottomRef = React.useRef(true);
   const textareaRef = React.useRef<HTMLTextAreaElement>(null);
   const editInputRef = React.useRef<HTMLInputElement>(null);
   const skipMessageLoadRef = React.useRef<string | null>(null);
   const revealVersionRef = React.useRef(0);
   const [convSidebarCollapsed, toggleConvSidebar] = useConvSidebarCollapse();
 
-  const revealAssistantMessage = React.useCallback(async (message: Message) => {
+  // A reveal belongs to one conversation. Keying it that way means switching conversations
+  // mid-animation can never leave a half-revealed bubble behind — no reset effect needed.
+  const activeReveal = reveal?.convId === activeConvId ? reveal : null;
+
+  // The full message is already in `messages`; the reveal only advances how much of it the
+  // bubble shows. Rewriting `messages` per tick re-rendered — and re-parsed — the whole
+  // transcript ~120 times per answer.
+  const revealAssistantMessage = React.useCallback(async (convId: string, message: Message) => {
     const version = ++revealVersionRef.current;
     const content = message.content || "";
     const reduceMotion = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
 
-    setRevealingId(message.id);
     if (reduceMotion || content.length < 32) {
-      setMessages((prev) => prev.map((m) => (m.id === message.id ? message : m)));
-      setRevealingId(null);
+      setReveal(null);
       return;
     }
 
+    setReveal({ convId, msgId: message.id, length: 0 });
     const chunkSize = Math.max(3, Math.ceil(content.length / 120));
     for (let end = chunkSize; end < content.length; end += chunkSize) {
-      if (revealVersionRef.current !== version) return;
-      const visible = content.slice(0, end);
-      setMessages((prev) => prev.map((m) => (m.id === message.id ? { ...m, content: visible } : m)));
       await new Promise((resolve) => window.setTimeout(resolve, 16));
+      // Guards a newer reveal, a conversation switch, and unmount.
+      if (revealVersionRef.current !== version) return;
+      setReveal({ convId, msgId: message.id, length: end });
     }
 
-    if (revealVersionRef.current === version) {
-      setMessages((prev) => prev.map((m) => (m.id === message.id ? message : m)));
-      setRevealingId(null);
-    }
+    if (revealVersionRef.current === version) setReveal(null);
+  }, []);
+
+  // Unmounting has to stop an in-flight reveal too: the version ref only ever guarded against
+  // a *newer* reveal, so the timer chain kept writing state into a torn-down tree.
+  React.useEffect(() => () => { revealVersionRef.current += 1; }, []);
+
+  const handleMessagesScroll = React.useCallback(() => {
+    const el = messagesScrollRef.current;
+    if (!el) return;
+    pinnedToBottomRef.current =
+      el.scrollHeight - el.scrollTop - el.clientHeight <= SCROLL_PIN_THRESHOLD_PX;
   }, []);
 
   const loadConversations = React.useCallback(() => {
@@ -449,21 +477,25 @@ export default function ChatPage() {
 
   React.useEffect(() => {
     revealVersionRef.current += 1;
-    setRevealingId(null);
-    if (activeConvId) {
-      if (skipMessageLoadRef.current === activeConvId) {
-        skipMessageLoadRef.current = null;
-        setLoadingMsgs(false);
-        return;
-      }
-      loadMessages(activeConvId);
-    } else setMessages([]);
+    pinnedToBottomRef.current = true;
+    // Deselecting a conversation always clears the transcript at the call site, so there is
+    // nothing to reset here.
+    if (!activeConvId) return;
+    if (skipMessageLoadRef.current === activeConvId) {
+      skipMessageLoadRef.current = null;
+      setLoadingMsgs(false);
+      return;
+    }
+    loadMessages(activeConvId);
   }, [activeConvId, loadMessages]);
 
-  // Scroll to bottom when messages change
+  // Follow the transcript only while the user is parked at the bottom. Unconditionally
+  // scrolling here yanked the viewport back down on every reveal tick, so re-reading an
+  // earlier answer while an answer was still revealing was impossible.
   React.useEffect(() => {
-    bottomRef.current?.scrollIntoView({ behavior: "smooth" });
-  }, [messages, sending]);
+    if (!pinnedToBottomRef.current) return;
+    bottomRef.current?.scrollIntoView({ behavior: activeReveal ? "instant" : "smooth" });
+  }, [messages, sending, activeReveal]);
 
   const handleNewConversation = async () => {
     try {
@@ -529,7 +561,16 @@ export default function ChatPage() {
     }
   }, [editingConvId]);
 
-  const handleEditMsgSave = async () => {
+  const handleMsgEditStart = React.useCallback((msg: Message) => {
+    setEditingMsgId(msg.id);
+    setEditingMsgContent(msg.content);
+  }, []);
+
+  const handleMsgEditCancel = React.useCallback(() => setEditingMsgId(null), []);
+
+  // Stable identity keeps `React.memo` on MessageBubble effective — a fresh closure per render
+  // would re-render every bubble on every reveal tick.
+  const handleEditMsgSave = React.useCallback(async () => {
     const text = editingMsgContent.trim();
     if (!text || sending || !activeConvId) return;
 
@@ -556,9 +597,9 @@ export default function ChatPage() {
       setMessages((prev) => [
         ...prev.slice(0, msgIndex),
         result.user_message,
-        { ...result.assistant_message, content: "", sources: null },
+        result.assistant_message,
       ]);
-      await revealAssistantMessage(result.assistant_message);
+      await revealAssistantMessage(activeConvId, result.assistant_message);
     } catch {
       const recovered = await recoverCompletedReply(activeConvId, text);
       if (recovered) setMessages(recovered);
@@ -567,7 +608,7 @@ export default function ChatPage() {
       setSending(false);
       textareaRef.current?.focus();
     }
-  };
+  }, [activeConvId, editingMsgContent, editingMsgId, loadMessages, messages, persona, revealAssistantMessage, sending]);
 
   // Dismiss delete arm on outside click
   React.useEffect(() => {
@@ -636,9 +677,9 @@ export default function ChatPage() {
       setMessages((prev) => [
         ...prev.filter((m) => m.id !== tempUserMsg.id),
         result.user_message,
-        { ...result.assistant_message, content: "", sources: null },
+        result.assistant_message,
       ]);
-      await revealAssistantMessage(result.assistant_message);
+      await revealAssistantMessage(convId, result.assistant_message);
 
       // Update conversation title in sidebar
       setConversations((prev) =>
@@ -925,7 +966,11 @@ export default function ChatPage() {
           </div>
 
           {/* Messages */}
-          <div className="min-h-0 flex-1 overflow-y-auto px-4 py-5 sm:px-6 sm:py-6">
+          <div
+            ref={messagesScrollRef}
+            onScroll={handleMessagesScroll}
+            className="min-h-0 flex-1 overflow-y-auto px-4 py-5 sm:px-6 sm:py-6"
+          >
             {!activeConvId && messages.length === 0 ? (
               <div className="h-full flex flex-col items-center justify-center gap-4 text-center">
                 <div className="w-16 h-16 rounded-2xl bg-primary/10 flex items-center justify-center">
@@ -977,22 +1022,17 @@ export default function ChatPage() {
                     key={msg.id}
                     msg={msg}
                     isEditing={editingMsgId === msg.id}
-                    editContent={editingMsgContent}
-                    onEditStart={
-                      msg.role === "user" && !msg.id.startsWith("temp-")
-                        ? () => {
-                            setEditingMsgId(msg.id);
-                            setEditingMsgContent(msg.content);
-                          }
-                        : undefined
-                    }
+                    // Scoped to the bubble being edited: handing the shared buffer to every
+                    // bubble would re-render the transcript on each keystroke.
+                    editContent={editingMsgId === msg.id ? editingMsgContent : undefined}
+                    onEditStart={handleMsgEditStart}
                     onEditChange={setEditingMsgContent}
                     onEditSave={handleEditMsgSave}
-                     onEditCancel={() => setEditingMsgId(null)}
-                    isStreaming={revealingId === msg.id}
+                    onEditCancel={handleMsgEditCancel}
+                    revealLength={activeReveal?.msgId === msg.id ? activeReveal.length : undefined}
                   />
                 ))}
-                {sending && !revealingId && (
+                {sending && !activeReveal && (
                   <div className="flex gap-3 max-w-3xl">
                     <div className="w-7 h-7 shrink-0 rounded-full flex items-center justify-center bg-muted border border-border">
                       <span className="material-symbols-outlined text-sm">smart_toy</span>

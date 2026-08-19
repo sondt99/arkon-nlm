@@ -8,11 +8,14 @@ import { Button } from "@/components/ui/button";
 
 type Props = {
   drafts: DraftResponse[];
+  /** Live page body, so a reviewer can diff the draft against what is published.
+   * Callers that do not have it hide the tab rather than show a blank panel. */
+  currentContentMd?: string;
   onApproved: (draftId: string) => void;
   onRejected: (draftId: string) => void;
 };
 
-export function WikiDraftBanner({ drafts, onApproved, onRejected }: Props) {
+export function WikiDraftBanner({ drafts, currentContentMd, onApproved, onRejected }: Props) {
   const [idx, setIdx] = React.useState(0);
   const [tab, setTab] = React.useState<"proposed" | "current">("proposed");
   const [rejecting, setRejecting] = React.useState(false);
@@ -61,6 +64,10 @@ export function WikiDraftBanner({ drafts, onApproved, onRejected }: Props) {
       setBusy(false);
     }
   };
+
+  const tabs: Array<"proposed" | "current"> =
+    currentContentMd === undefined ? ["proposed"] : ["proposed", "current"];
+  const previewMd = tab === "current" ? currentContentMd ?? "" : draft.content_md;
 
   const authorLabel = draft.author_name ?? "Unknown";
   const dateLabel = new Date(draft.created_at).toLocaleDateString(undefined, {
@@ -112,7 +119,7 @@ export function WikiDraftBanner({ drafts, onApproved, onRejected }: Props) {
 
       {/* Tab toggle */}
       <div className="flex gap-1 px-4 pt-3">
-        {(["proposed", "current"] as const).map((t) => (
+        {tabs.map((t) => (
           <button
             key={t}
             type="button"
@@ -130,13 +137,13 @@ export function WikiDraftBanner({ drafts, onApproved, onRejected }: Props) {
 
       {/* Content preview */}
       <div className="px-4 py-3 max-h-72 overflow-y-auto">
-        {tab === "proposed" ? (
-          draft.content_md.trim() ? (
-            <WikiContent markdown={draft.content_md} />
-          ) : (
-            <p className="text-sm text-amber-700/60 italic">Empty content.</p>
-          )
-        ) : null}
+        {previewMd.trim() ? (
+          <WikiContent markdown={previewMd} anchors={false} />
+        ) : (
+          <p className="text-sm text-amber-700/60 italic">
+            {tab === "proposed" ? "Empty content." : "This page has no content yet."}
+          </p>
+        )}
       </div>
 
       {/* Reject note field */}

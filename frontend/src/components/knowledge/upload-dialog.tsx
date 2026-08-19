@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, useRef, useCallback } from "react";
+import { useState, useEffect, useCallback } from "react";
 import { api, apiUpload } from "@/lib/api";
 import { Button } from "@/components/ui/button";
 import { Label } from "@/components/ui/label";
@@ -80,7 +80,6 @@ export function UploadDialog({ open, onOpenChange, types, departments, onUploade
   const [projects,      setProjects]      = useState<{ id: string; name: string }[]>([]);
   const [uploading,     setUploading]     = useState(false);
   const [dragOver,      setDragOver]      = useState(false);
-  const fileInputRef = useRef<HTMLInputElement>(null);
 
   const reset = useCallback(() => {
     setEntries([]); setAddError(""); setTypeId("");
@@ -186,13 +185,17 @@ export function UploadDialog({ open, onOpenChange, types, departments, onUploade
         <div className="flex-1 min-h-0 overflow-y-auto flex flex-col gap-3 py-3">
 
           {/* Dropzone — compact when files exist */}
-          <div
+          {/*
+            A <label> wrapping the input is what makes this keyboard-reachable: the whole zone
+            still opens the picker on click, but activation no longer depends on a div's onClick.
+          */}
+          <label
             onDrop={handleDrop}
             onDragOver={handleDragOver}
             onDragLeave={handleDragLeave}
-            onClick={() => !uploading && fileInputRef.current?.click()}
             className={cn(
               "flex items-center gap-3 rounded-lg border-2 border-dashed transition-all duration-200 cursor-pointer select-none",
+              "has-[input:focus-visible]:border-primary has-[input:focus-visible]:ring-3 has-[input:focus-visible]:ring-ring/50",
               entries.length > 0 ? "px-3 py-2.5" : "flex-col justify-center px-4 py-8",
               dragOver    ? "border-primary bg-primary/5"
               : entries.length > 0 ? "border-border hover:border-primary/50 hover:bg-accent/20"
@@ -200,13 +203,14 @@ export function UploadDialog({ open, onOpenChange, types, departments, onUploade
               uploading && "pointer-events-none opacity-60"
             )}
           >
+            {/* sr-only, not hidden: display:none drops the input out of the tab order and the a11y tree. */}
             <input
-              ref={fileInputRef}
               type="file"
               multiple
               accept={ACCEPT_STRING}
+              disabled={uploading}
               onChange={(e) => { if (e.target.files) addFiles(Array.from(e.target.files)); e.target.value = ""; }}
-              className="hidden"
+              className="sr-only"
             />
             <div className={cn(
               "rounded-full flex items-center justify-center shrink-0 transition-colors",
@@ -235,7 +239,7 @@ export function UploadDialog({ open, onOpenChange, types, departments, onUploade
                 </p>
               </div>
             )}
-          </div>
+          </label>
 
           {/* Validation error */}
           {addError && (

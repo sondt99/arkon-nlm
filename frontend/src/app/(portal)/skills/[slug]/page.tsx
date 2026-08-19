@@ -166,9 +166,13 @@ export default function SkillDetailPage() {
       setReviewContributionId(null);
       window.location.reload(); // Reload to see changes
     } catch (err) {
+      // Do NOT remove the item here. The error path used to run the same optimistic
+      // removal as success, so a 500 or 403 showed an alert and then made the
+      // contribution vanish from the queue anyway — the reviewer dismissed the alert, saw
+      // an empty queue, and the still-pending contribution was silently dropped from
+      // review until someone reloaded.
       alert("Approval failed: " + (err instanceof Error ? err.message : "Unknown error"));
       setReviewContributionId(null);
-      setPendingContributions(prev => prev.filter(c => c.id !== id));
     }
   };
 
@@ -180,9 +184,9 @@ export default function SkillDetailPage() {
       setReviewContributionId(null);
       setPendingContributions(prev => prev.filter(c => c.id !== id));
     } catch (err) {
+      // See handleApprove: the failure path must not remove the item.
       alert("Rejection failed: " + (err instanceof Error ? err.message : "Unknown error"));
       setReviewContributionId(null);
-      setPendingContributions(prev => prev.filter(c => c.id !== id));
     }
   };
 

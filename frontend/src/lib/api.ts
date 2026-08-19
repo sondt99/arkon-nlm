@@ -37,6 +37,40 @@ export function clearToken() {
   localStorage.removeItem("arkon_token");
 }
 
+/**
+ * Session-expiry handling.
+ *
+ * De-duplicated on purpose: a page that fires several requests in parallel gets several
+ * 401s, and without the guard each one would trigger its own redirect — cancelling the
+ * others mid-navigation and, in the worst case, looping.
+ */
+let unauthorizedHandled = false;
+
+export function onUnauthorized() {
+  if (unauthorizedHandled) return;
+  if (typeof window === "undefined") return;
+
+  unauthorizedHandled = true;
+  clearToken();
+
+  // Let anything interested (AuthProvider, banners) react before we navigate.
+  window.dispatchEvent(new CustomEvent("arkon:unauthorized"));
+
+  // Preserve where the user was so login can send them back.
+  const next = encodeURIComponent(
+    window.location.pathname + window.location.search
+  );
+  const target = `/login?next=${next}`;
+  if (!window.location.pathname.startsWith("/login")) {
+    window.location.assign(target);
+  }
+}
+
+/** Test hook — lets a suite assert the de-dupe without reloading the page. */
+export function __resetUnauthorizedGuard() {
+  unauthorizedHandled = false;
+}
+
 async function request(path: string, options: RequestOptions = {}): Promise<Response> {
   const { method = "GET", body, headers = {}, timeoutMs = REQUEST_TIMEOUT_MS } = options;
   const token = getToken();
@@ -80,6 +114,16 @@ async function request(path: string, options: RequestOptions = {}): Promise<Resp
     }
     const message =
       (data as { detail?: string })?.detail || `API Error ${res.status}`;
+
+    if (res.status === 401) {
+      // Every non-ok response used to become a generic ApiError, and the only 401 reaction
+      // in the app ran once at mount. So when a 24-hour JWT expired overnight the app kept
+      // rendering as logged in: lists showed empty, several call sites swallowed the error
+      // entirely, and the skill editor's autosave failed on every keystroke with only a
+      // 1.5px dot turning red — the user kept typing and lost the work.
+      onUnauthorized();
+    }
+
     throw new ApiError(res.status, message, data);
   }
 

@@ -50,14 +50,30 @@ export function PendingContributionsSidebar({
       console.error("Failed to load pending contributions:", err);
       // If we get a 403 or 401, we might want to stop polling or handle it
     }
-  }, [canAccess, hasPermission]);
+  }, [canAccess, hasPermission, skillId]);
 
   // Initial load
   useEffect(() => {
     loadPending();
   }, [loadPending]);
 
-  // Polling logic removed by user request
+  // Poll on the interval both call sites pass.
+  //
+  // `refreshInterval` was destructured, defaulted to 30000, and then never referenced —
+  // the polling had been deleted and replaced with a comment. Both call sites pass
+  // refreshInterval={15000} and therefore believed the queue auto-refreshed. It never did:
+  // a reviewer never saw a colleague's new submission, and the list kept showing
+  // already-approved contributions — clicking one of those was what triggered the editor's
+  // infinite reload loop.
+  useEffect(() => {
+    if (!refreshInterval || refreshInterval <= 0) return;
+    // Skip polling while the tab is hidden; there is no reviewer to inform.
+    const id = setInterval(() => {
+      if (typeof document !== "undefined" && document.hidden) return;
+      loadPending();
+    }, refreshInterval);
+    return () => clearInterval(id);
+  }, [refreshInterval, loadPending]);
 
   if (contributions.length === 0) return null;
 

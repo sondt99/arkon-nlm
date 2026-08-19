@@ -279,12 +279,16 @@ async def create_nlm_notebook(title: str) -> dict:
 
 
 async def delete_nlm_notebook(notebook_id: str) -> bool:
-    try:
-        async with await get_client() as client:
-            return await client.notebooks.delete(notebook_id)
-    except Exception as e:
-        logger.warning(f"NLM delete notebook {notebook_id}: {e}")
-        return False
+    """Delete a notebook from the shared NotebookLM account.
+
+    Errors propagate. This used to catch Exception and return False, which collapsed an
+    expired Google session, a network failure and a genuine refusal into one
+    indistinguishable falsey value — and the route answered 204 regardless, so the UI
+    removed the notebook from the list while it still existed in Google. The caller needs
+    the exception to tell 401-reconnect apart from 502-upstream-failed.
+    """
+    async with await get_client() as client:
+        return await client.notebooks.delete(notebook_id)
 
 
 async def list_nlm_sources(notebook_id: str) -> list[dict]:

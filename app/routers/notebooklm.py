@@ -22,7 +22,7 @@ from typing import Optional
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Response, UploadFile
 from loguru import logger
 from pydantic import BaseModel
-from sqlalchemy import select
+from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
@@ -31,6 +31,7 @@ from app.database.models import (
     Employee,
     NotebookLMArtifact,
     NotebookLMNotebook,
+    NotebookLMPassthroughOwner,
     Source,
 )
 from app.services.audit_service import log_audit
@@ -787,7 +788,11 @@ async def download_artifact(
     # If already in MinIO, redirect via presigned URL
     if art.minio_key:
         from app.services.storage_service import storage_service
-        url = storage_service.get_presigned_url(art.minio_key)
+
+        # Presigning is local HMAC work, but minio's client can reach for bucket region
+        # metadata over a synchronous socket on first use — enough to stall the event loop
+        # for every other request when MinIO is slow or unreachable.
+        url = await storage_service.get_presigned_url_async(art.minio_key)
         from fastapi.responses import RedirectResponse
         return RedirectResponse(url=url)
 
@@ -890,18 +895,103 @@ def _nlm_error(e: Exception) -> HTTPException:
     return HTTPException(status_code=502, detail=f"NotebookLM API error: {e}")
 
 
+# ---------------------------------------------------------------------------
+# Passthrough ownership boundary
+#
+# Every notebook below lives in ONE shared Google account, so NotebookLM's own per-user
+# isolation gives us nothing: the client Arkon builds from storage_state.json can reach
+# every notebook in the company. Ownership therefore has to be enforced here, against
+# Arkon's own record, before any nlm_id is forwarded to Google.
+#
+# Two tables count as a record of ownership:
+#   * notebooklm_passthrough_owners — written when this router creates a notebook.
+#   * notebooklm_notebooks          — written by the DB-backed /notebooklm/notebooks
+#                                     endpoints, which also create a real NLM notebook.
+# Ignoring the second would make a notebook created by "Send to NotebookLM" invisible on
+# the passthrough page the user is redirected to immediately afterwards, so both are
+# consulted rather than dual-writing the same fact into two tables.
+#
+# Notebooks with no record in either table — everything that predates this boundary, plus
+# anything created directly in the Google account — resolve for admins only. The two
+# alternatives were both rejected: hiding them from every list while still honouring a
+# guessed id in DELETE leaves them invisible-but-deletable, and treating "unowned" as
+# "public" re-creates the exact company-wide read that this code exists to stop. Admin-only
+# keeps them reachable for cleanup by someone who is already trusted with every notebook.
+# ---------------------------------------------------------------------------
+
+async def _owned_nlm_ids(db: AsyncSession, current_user: Employee) -> set[str]:
+    """Return the Google notebook ids this employee is recorded as having created."""
+    passthrough = await db.execute(
+        select(NotebookLMPassthroughOwner.nlm_id).where(
+            NotebookLMPassthroughOwner.owner_employee_id == current_user.id
+        )
+    )
+    db_backed = await db.execute(
+        select(NotebookLMNotebook.notebook_id).where(
+            NotebookLMNotebook.created_by_employee_id == current_user.id
+        )
+    )
+    return set(passthrough.scalars().all()) | set(db_backed.scalars().all())
+
+
+async def _resolve_nlm_notebook(
+    db: AsyncSession, current_user: Employee, nlm_id: str
+) -> str:
+    """Return nlm_id if the caller may act on it, else 404.
+
+    Admins pass unconditionally, matching require_permission(), which short-circuits on
+    `role == "admin"` before consulting any grant.
+
+    A foreign notebook answers 404 and not 403 on purpose: 403 confirms that the id names a
+    real notebook in the shared account, which is enough to enumerate other employees'
+    notebooks one id at a time.
+    """
+    if current_user.role == "admin":
+        return nlm_id
+
+    owned = await db.execute(
+        select(NotebookLMPassthroughOwner.id).where(
+            NotebookLMPassthroughOwner.nlm_id == nlm_id,
+            NotebookLMPassthroughOwner.owner_employee_id == current_user.id,
+        )
+    )
+    if owned.scalar_one_or_none() is not None:
+        return nlm_id
+
+    db_backed = await db.execute(
+        select(NotebookLMNotebook.id).where(
+            NotebookLMNotebook.notebook_id == nlm_id,
+            NotebookLMNotebook.created_by_employee_id == current_user.id,
+        )
+    )
+    if db_backed.scalars().first() is not None:
+        return nlm_id
+
+    raise HTTPException(status_code=404, detail="Notebook not found")
+
+
 @router.get("/notebooklm/nlm/notebooks")
-async def nlm_list_notebooks(current_user=Depends(get_current_user)):
+async def nlm_list_notebooks(
+    db: AsyncSession = Depends(get_db),
+    current_user=Depends(get_current_user),
+):
     from app.services.notebooklm_service import list_nlm_notebooks
     try:
-        return await list_nlm_notebooks()
+        notebooks = await list_nlm_notebooks()
     except Exception as e:
         raise _nlm_error(e)
+
+    if current_user.role == "admin":
+        return notebooks
+
+    owned = await _owned_nlm_ids(db, current_user)
+    return [nb for nb in notebooks if nb.get("id") in owned]
 
 
 @router.post("/notebooklm/nlm/notebooks", status_code=201)
 async def nlm_create_notebook(
     body: NLMNotebookCreate,
+    db: AsyncSession = Depends(get_db),
     current_user=Depends(get_current_user),
 ):
     from app.services.notebooklm_service import create_nlm_notebook
@@ -909,23 +999,61 @@ async def nlm_create_notebook(
     if not title:
         raise HTTPException(status_code=400, detail="title is required")
     try:
-        return await create_nlm_notebook(title)
+        nb = await create_nlm_notebook(title)
     except Exception as e:
         raise _nlm_error(e)
+
+    # The notebook now exists in the shared Google account and is reachable by every
+    # request Arkon makes. Claim it before returning, or it is born unowned — which means
+    # admin-only, i.e. the creator immediately loses the notebook they just made.
+    db.add(
+        NotebookLMPassthroughOwner(
+            nlm_id=nb["id"], owner_employee_id=current_user.id
+        )
+    )
+    await db.commit()
+
+    return nb
 
 
 @router.delete("/notebooklm/nlm/notebooks/{nlm_id}", status_code=204)
-async def nlm_delete_notebook(nlm_id: str, current_user=Depends(get_current_user)):
+async def nlm_delete_notebook(
+    nlm_id: str,
+    db: AsyncSession = Depends(get_db),
+    current_user=Depends(get_current_user),
+):
     from app.services.notebooklm_service import delete_nlm_notebook
+    await _resolve_nlm_notebook(db, current_user, nlm_id)
     try:
-        await delete_nlm_notebook(nlm_id)
+        deleted = await delete_nlm_notebook(nlm_id)
     except Exception as e:
         raise _nlm_error(e)
 
+    # A falsey return means Google refused the delete. Answering 204 here — as this route
+    # did unconditionally — made the UI drop a notebook from the list that still existed,
+    # so the user believed confidential content was gone when it was not.
+    if not deleted:
+        raise HTTPException(
+            status_code=502,
+            detail="NotebookLM did not confirm the delete; the notebook still exists.",
+        )
+
+    await db.execute(
+        delete(NotebookLMPassthroughOwner).where(
+            NotebookLMPassthroughOwner.nlm_id == nlm_id
+        )
+    )
+    await db.commit()
+
 
 @router.get("/notebooklm/nlm/notebooks/{nlm_id}/sources")
-async def nlm_list_sources(nlm_id: str, current_user=Depends(get_current_user)):
+async def nlm_list_sources(
+    nlm_id: str,
+    db: AsyncSession = Depends(get_db),
+    current_user=Depends(get_current_user),
+):
     from app.services.notebooklm_service import list_nlm_sources
+    await _resolve_nlm_notebook(db, current_user, nlm_id)
     try:
         return await list_nlm_sources(nlm_id)
     except Exception as e:
@@ -940,6 +1068,7 @@ async def nlm_add_source(
     current_user=Depends(get_current_user),
 ):
     from app.services.notebooklm_service import add_nlm_source_text, add_nlm_source_url
+    await _resolve_nlm_notebook(db, current_user, nlm_id)
     try:
         if body.kind == "url":
             if not body.url:
@@ -986,9 +1115,11 @@ async def nlm_add_source(
 async def nlm_delete_source(
     nlm_id: str,
     source_id: str,
+    db: AsyncSession = Depends(get_db),
     current_user=Depends(get_current_user),
 ):
     from app.services.notebooklm_service import delete_nlm_source
+    await _resolve_nlm_notebook(db, current_user, nlm_id)
     try:
         await delete_nlm_source(nlm_id, source_id)
     except Exception as e:
@@ -1000,6 +1131,7 @@ async def nlm_upload_source(
     nlm_id: str,
     file: UploadFile = File(...),
     title: Optional[str] = Form(None),
+    db: AsyncSession = Depends(get_db),
     current_user=Depends(get_current_user),
 ):
     """Upload a file (PDF, DOCX, markdown, CSV, EPUB, image) as a notebook source."""
@@ -1009,6 +1141,7 @@ async def nlm_upload_source(
     from app.services.notebooklm_service import add_nlm_source_file
     from app.services.upload_guard import read_upload_bounded
 
+    await _resolve_nlm_notebook(db, current_user, nlm_id)
     content = await read_upload_bounded(file, what="Upload")
     suffix = Path(file.filename or "upload").suffix or ".bin"
     tmp_path = None
@@ -1030,8 +1163,13 @@ async def nlm_upload_source(
 
 
 @router.get("/notebooklm/nlm/notebooks/{nlm_id}/artifacts")
-async def nlm_list_artifacts(nlm_id: str, current_user=Depends(get_current_user)):
+async def nlm_list_artifacts(
+    nlm_id: str,
+    db: AsyncSession = Depends(get_db),
+    current_user=Depends(get_current_user),
+):
     from app.services.notebooklm_service import list_nlm_artifacts
+    await _resolve_nlm_notebook(db, current_user, nlm_id)
     try:
         return await list_nlm_artifacts(nlm_id)
     except Exception as e:
@@ -1042,9 +1180,11 @@ async def nlm_list_artifacts(nlm_id: str, current_user=Depends(get_current_user)
 async def nlm_generate_artifact(
     nlm_id: str,
     body: NLMArtifactGenerate,
+    db: AsyncSession = Depends(get_db),
     current_user=Depends(get_current_user),
 ):
     from app.services.notebooklm_service import generate_nlm_artifact
+    await _resolve_nlm_notebook(db, current_user, nlm_id)
     if body.artifact_type not in VALID_ARTIFACT_TYPES:
         raise HTTPException(
             status_code=400,
@@ -1060,6 +1200,7 @@ async def nlm_generate_artifact(
 async def nlm_artifact_preview_data(
     nlm_id: str,
     artifact_id: str,
+    db: AsyncSession = Depends(get_db),
     current_user=Depends(get_current_user),
 ):
     """Return structured preview data for a completed artifact."""
@@ -1069,6 +1210,7 @@ async def nlm_artifact_preview_data(
         list_nlm_artifacts,
     )
 
+    await _resolve_nlm_notebook(db, current_user, nlm_id)
     try:
         artifacts = await list_nlm_artifacts(nlm_id)
     except Exception as e:
@@ -1117,6 +1259,7 @@ async def nlm_ingest_artifact(
 
     INGESTABLE_TYPES = TEXT_ARTIFACT_TYPES | {"slide_deck"}
 
+    await _resolve_nlm_notebook(db, current_user, nlm_id)
     try:
         artifacts = await list_nlm_artifacts(nlm_id)
     except Exception as e:
@@ -1151,7 +1294,10 @@ async def nlm_ingest_artifact(
         mime = ARTIFACT_MIME.get(kind, "application/pdf")
         file_name = f"{title}.{ext}".replace("/", "-")
         minio_key = f"notebooklm/{artifact_id}/{file_name}"
-        storage_service.upload_file(minio_key, data, mime)
+        # minio's client is synchronous sockets, so calling it directly from an async
+        # handler blocks the whole event loop for the length of a multi-megabyte PDF
+        # upload — every other request on this worker stalls behind it.
+        await storage_service.upload_file_async(minio_key, data, mime)
 
         source = Source(
             title=title,
@@ -1208,6 +1354,7 @@ async def nlm_ingest_artifact(
 async def nlm_download_artifact(
     nlm_id: str,
     artifact_id: str,
+    db: AsyncSession = Depends(get_db),
     current_user=Depends(get_current_user),
 ):
     from app.services.notebooklm_service import (
@@ -1217,6 +1364,7 @@ async def nlm_download_artifact(
         get_artifact_bytes,
         list_nlm_artifacts,
     )
+    await _resolve_nlm_notebook(db, current_user, nlm_id)
     try:
         artifacts = await list_nlm_artifacts(nlm_id)
     except Exception as e:
@@ -1257,10 +1405,14 @@ async def nlm_download_artifact(
 async def nlm_chat(
     nlm_id: str,
     body: NLMChatAsk,
+    db: AsyncSession = Depends(get_db),
     current_user=Depends(get_current_user),
 ):
     from app.services.notebooklm_service import nlm_chat_ask
     logger.info(f"NLM chat: notebook={nlm_id} question={body.question[:60]!r}")
+    # NotebookLM answers from the notebook's own sources, so an unguarded chat is a full
+    # read of someone else's documents laundered through Google's RAG.
+    await _resolve_nlm_notebook(db, current_user, nlm_id)
     if not body.question.strip():
         raise HTTPException(status_code=400, detail="question is required")
     try:
@@ -1288,6 +1440,10 @@ async def nlm_ingest_chat(
 ):
     """Save a NotebookLM chat conversation as a wiki source."""
     from app.worker import get_arq_pool
+
+    # The body is client-supplied, so the guard does not protect the content itself — it
+    # stops a foreign notebook id being laundered into the wiki as provenance.
+    await _resolve_nlm_notebook(db, current_user, nlm_id)
 
     if not body.content.strip():
         raise HTTPException(status_code=400, detail="Chat content is empty")

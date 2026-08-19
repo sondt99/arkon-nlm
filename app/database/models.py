@@ -1139,6 +1139,9 @@ class NotebookLMNotebook(Base):
     __table_args__ = (
         Index("ix_notebooklm_notebooks_source_id", "source_id"),
         Index("ix_notebooklm_notebooks_created_by", "created_by_employee_id"),
+        # The passthrough endpoints resolve ownership by the Google-side id, which is the
+        # only identifier they ever receive, so this column is on a per-request path.
+        Index("ix_notebooklm_notebooks_notebook_id", "notebook_id"),
     )
 
 
@@ -1208,5 +1211,54 @@ class NotebookLMArtifact(Base):
     __table_args__ = (
         Index("ix_notebooklm_artifacts_notebook_ref_id", "notebook_ref_id"),
         Index("ix_notebooklm_artifacts_status", "status"),
+    )
+
+
+class NotebookLMPassthroughOwner(Base):
+    """Who created a notebook through the `/notebooklm/nlm/*` passthrough endpoints.
+
+    Every Arkon deployment talks to NotebookLM through ONE Google account
+    (`storage_state.json` is process-wide), so Google's own per-user isolation does not
+    apply: every notebook in that account is reachable by every request Arkon makes. This
+    table is therefore the entire access-control boundary for the passthrough surface —
+    without a row here there is nothing that distinguishes employee A's notebook from
+    employee B's, and the passthrough endpoints degraded to "any authenticated employee
+    may read, chat with, and delete every notebook in the company".
+
+    Deliberately separate from NotebookLMNotebook: that table models a notebook Arkon
+    *manages* (title, linked Source, artifact rows, status lifecycle), whereas this one
+    records nothing but a claim of ownership over an opaque Google id. Both are consulted
+    when resolving a passthrough id, because both record a truthful creator.
+
+    owner_employee_id is NOT NULL with ON DELETE CASCADE rather than SET NULL: a row whose
+    owner is gone answers no question this table exists to answer, and dropping it lands
+    the notebook in the same admin-only bucket as the pre-existing notebooks that were in
+    the shared account before this table existed.
+    """
+    __tablename__ = "notebooklm_passthrough_owners"
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
+    )
+    nlm_id: Mapped[str] = mapped_column(
+        String(200), nullable=False,
+        comment="Opaque NotebookLM notebook ID (from Google API)",
+    )
+    owner_employee_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("employees.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
+
+    # Relationships
+    owner: Mapped["Employee"] = relationship()
+
+    __table_args__ = (
+        # One owner per notebook. A second row would silently grant a second employee full
+        # access to the first employee's notebook, which is the bug this table prevents.
+        UniqueConstraint("nlm_id", name="uq_notebooklm_passthrough_owners_nlm_id"),
+        Index("ix_notebooklm_passthrough_owners_owner", "owner_employee_id"),
     )
 

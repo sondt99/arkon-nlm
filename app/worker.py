@@ -800,7 +800,50 @@ async def reembed_all_pages_task(ctx: dict, job_id: str) -> None:
     On success, atomically flips `app_config.active_embedding_model_spec_id`
     to the new spec — search keeps using the OLD model until that flip lands,
     so there is no zero-result window during the migration.
+
+    The body lives in `_run_reembed_job`; this wrapper exists only to guarantee a terminal
+    status. Every abort has to land one, including the CancelledError arq raises when the
+    job exceeds its timeout: this job used to inherit `worker_job_timeout` with no
+    BaseException handler, so a timed-out migration left `status="running"` forever. After
+    that, `POST /settings/embeddings/switch` answered 409 "another embedding job is
+    already running" on *every* subsequent attempt while the admin UI polled a progress
+    bar that could never move, and vectors for the half-written spec kept accumulating
+    while search silently went on using the old model.
     """
+    job_uuid = uuid.UUID(job_id)
+
+    try:
+        await _run_reembed_job(job_uuid, job_id)
+    except BaseException as e:
+        # `str(CancelledError())` is empty, and a blank error_message renders in the admin
+        # UI as a failed migration with no reason at all.
+        error_msg = (str(e).strip() or type(e).__name__)[:500]
+        logger.error(f"reembed: job {job_id} aborted — {error_msg}")
+
+        async def _mark_job_failed() -> None:
+            from datetime import datetime as _dt
+            from datetime import timezone as _tz
+
+            from app.database import async_session_factory as _sf
+            from app.database.models import EmbeddingJob as _Job
+            async with _sf() as err_session:
+                job = await err_session.get(_Job, job_uuid)
+                # A user-initiated cancel already wrote a terminal status; don't relabel it.
+                if job is not None and job.status in ("pending", "running"):
+                    job.status = "failed"
+                    job.error_message = error_msg
+                    job.finished_at = _dt.now(_tz.utc)
+                    await err_session.commit()
+
+        try:
+            await asyncio.shield(_mark_job_failed())
+        except Exception:
+            pass
+        raise
+
+
+async def _run_reembed_job(job_uuid: uuid.UUID, job_id: str) -> None:
+    """The re-embed loop itself. See `reembed_all_pages_task` for the failure contract."""
     from datetime import datetime, timezone
 
     from sqlalchemy import select
@@ -817,10 +860,10 @@ async def reembed_all_pages_task(ctx: dict, job_id: str) -> None:
         cleanup_stale_embeddings,
         compute_content_hash,
         embedding_input_text,
+        get_existing_hashes,
         upsert_page_embedding,
     )
 
-    job_uuid = uuid.UUID(job_id)
     BATCH = 50
 
     async with async_session_factory() as session:
@@ -855,14 +898,14 @@ async def reembed_all_pages_task(ctx: dict, job_id: str) -> None:
             return
 
         # Count work and mark running.
-        total = (
+        page_ids = (
             await session.execute(
                 select(WikiPage.id).where(
                     WikiPage.slug.notin_(["_index", "_log"])
                 )
             )
         ).scalars().all()
-        job.total_pages = len(total)
+        job.total_pages = len(page_ids)
         job.done_pages = 0
         job.status = "running"
         job.started_at = datetime.now(timezone.utc)
@@ -870,12 +913,15 @@ async def reembed_all_pages_task(ctx: dict, job_id: str) -> None:
 
     logger.info(
         f"reembed: starting job {job_id} model={spec.id} dim={spec.dimension} "
-        f"total={len(total)}"
+        f"total={len(page_ids)}"
     )
 
+    processed = 0
+    reused = 0
+
     # Process batches in independent sessions so progress is visible to UI poll.
-    for offset in range(0, len(total), BATCH):
-        batch_ids = total[offset : offset + BATCH]
+    for offset in range(0, len(page_ids), BATCH):
+        batch_ids = page_ids[offset : offset + BATCH]
         async with async_session_factory() as session:
             # Re-check cancellation flag.
             job = await session.get(EmbeddingJob, job_uuid)
@@ -888,32 +934,58 @@ async def reembed_all_pages_task(ctx: dict, job_id: str) -> None:
                     select(WikiPage).where(WikiPage.id.in_(batch_ids))
                 )
             ).scalars().all()
-            inputs = [
-                embedding_input_text(p.title, p.summary or "", p.content_md or "")
-                for p in pages
-            ]
-            try:
-                vectors = await provider.embed_batch(inputs)
-            except Exception as e:
-                job.status = "failed"
-                job.error_message = f"Embedding API failed: {e}"
-                job.finished_at = datetime.now(timezone.utc)
-                await session.commit()
-                logger.exception(f"reembed: job {job_id} failed at offset={offset}")
-                return
 
-            for page, vec in zip(pages, vectors):
-                await upsert_page_embedding(
-                    session,
-                    page_id=page.id,
-                    spec=spec,
-                    vector=list(vec),
-                    content_hash=compute_content_hash(
-                        page.title, page.summary or "", page.content_md or ""
-                    ),
+            # Resume. arq re-delivers the same job id up to max_tries times and the row is
+            # still status="running" from the previous attempt, so without this the retry
+            # restarted at offset=0: it re-paid the embedding API for every page already
+            # done and then hit the same timeout at the same page, three times over. A row
+            # already carrying this spec *and* this content hash is exactly the work we
+            # would redo, so skip it.
+            already = await get_existing_hashes(
+                session, [p.id for p in pages], spec.id, spec.dimension
+            )
+            pending = [
+                p for p in pages
+                if already.get(p.id) != compute_content_hash(
+                    p.title, p.summary or "", p.content_md or ""
                 )
-            job.done_pages = min(offset + len(pages), job.total_pages)
+            ]
+            reused += len(pages) - len(pending)
+
+            if pending:
+                inputs = [
+                    embedding_input_text(p.title, p.summary or "", p.content_md or "")
+                    for p in pending
+                ]
+                try:
+                    vectors = await provider.embed_batch(inputs)
+                except Exception as e:
+                    job.status = "failed"
+                    job.error_message = f"Embedding API failed: {e}"
+                    job.finished_at = datetime.now(timezone.utc)
+                    await session.commit()
+                    logger.exception(f"reembed: job {job_id} failed at offset={offset}")
+                    return
+
+                for page, vec in zip(pending, vectors):
+                    await upsert_page_embedding(
+                        session,
+                        page_id=page.id,
+                        spec=spec,
+                        vector=list(vec),
+                        content_hash=compute_content_hash(
+                            page.title, page.summary or "", page.content_md or ""
+                        ),
+                    )
+            processed += len(pages)
+            job.done_pages = min(processed, job.total_pages)
             await session.commit()
+
+    if reused:
+        logger.info(
+            f"reembed: job {job_id} resumed — {reused} page(s) were already embedded "
+            f"with {spec.id} at their current content"
+        )
 
     # Atomic flip + cleanup of old model's vectors.
     async with async_session_factory() as session:
@@ -1132,6 +1204,13 @@ async def caption_images_task(ctx: dict, source_id: str):
 
     Each image opens its own DB session for the UPDATE so concurrent coroutines
     never share session state.
+
+    Resumable and honest about the outcome, which it was not before:
+      * only rows with `caption IS NULL` are selected, so an arq retry (max_tries = 3)
+        continues where the previous attempt stopped instead of re-paying the vision API
+        for every image already captioned and then dying at the same place;
+      * a run in which every vision call failed raises, instead of logging
+        `logger.success("N images processed")` and reporting completion to arq.
     """
     from sqlalchemy import update as sa_update
 
@@ -1156,23 +1235,28 @@ async def caption_images_task(ctx: dict, source_id: str):
             return
 
         rows = (await session.execute(
-            select(SourceImage).where(SourceImage.source_id == sid)
+            select(SourceImage).where(
+                SourceImage.source_id == sid,
+                # The resume filter. Without it a retry re-captioned the whole document.
+                SourceImage.caption.is_(None),
+            )
         )).scalars().all()
 
         # Snapshot only the fields we need — session closes after this block.
         image_records = [(row.id, row.minio_key, row.content_type) for row in rows]
 
     if not image_records:
-        return
+        logger.info(f"caption_images_task: nothing left to caption for {source_id}")
+        return {"total": 0, "captioned": 0, "failed": 0}
 
     logger.info(f"caption_images_task: captioning {len(image_records)} images for {source_id}")
 
-    MAX_CONCURRENCY = 4
-    PER_IMAGE_TIMEOUT = 120
-    sem = asyncio.Semaphore(MAX_CONCURRENCY)
+    sem = asyncio.Semaphore(settings.caption_max_concurrency)
+    per_image_timeout = settings.caption_per_image_timeout
     total = len(image_records)
+    failures: list[str] = []
 
-    async def _caption_one(image_id, minio_key: str, content_type: str, idx: int) -> None:
+    async def _caption_one(image_id, minio_key: str, content_type: str, idx: int) -> bool:
         async with sem:
             try:
                 img_bytes = await storage_service.download_file_async(minio_key)
@@ -1185,7 +1269,7 @@ async def caption_images_task(ctx: dict, source_id: str):
                 )
                 caption = await asyncio.wait_for(
                     vision_provider.analyze_image(img_bytes, content_type, prompt=vision_prompt),
-                    timeout=PER_IMAGE_TIMEOUT,
+                    timeout=per_image_timeout,
                 )
                 # Each image gets its own session — no concurrent session access.
                 async with async_session_factory() as upd_session:
@@ -1194,26 +1278,54 @@ async def caption_images_task(ctx: dict, source_id: str):
                     )
                     await upd_session.commit()
                 logger.info(f"caption_images_task: image {idx}/{total} done for {source_id}")
+                return True
             except Exception as e:
-                logger.warning(f"caption_images_task: failed {minio_key}: {type(e).__name__}: {e}")
+                reason = f"{type(e).__name__}: {e}".strip().rstrip(":")
+                failures.append(reason)
+                logger.warning(f"caption_images_task: failed {minio_key}: {reason}")
+                return False
 
-    await asyncio.gather(*[
+    results = await asyncio.gather(*[
         _caption_one(img_id, mkey, ctype, idx)
         for idx, (img_id, mkey, ctype) in enumerate(image_records, 1)
     ])
-    logger.success(f"caption_images_task: {total} images processed for {source_id}")
+    captioned = sum(1 for ok in results if ok)
+    failed = total - captioned
+
+    if captioned == 0:
+        # Systemic: a revoked key, an exhausted quota, an unreachable provider. Raising
+        # gives arq a retry (cheap now that the run resumes) and a dead-letter record;
+        # `logger.success` here claimed the document was captioned when nothing was.
+        raise RuntimeError(
+            f"caption_images_task: all {total} vision call(s) failed for {source_id} — "
+            f"first reason: {failures[0] if failures else 'unknown'}"
+        )
+    if failed:
+        logger.warning(
+            f"caption_images_task: {captioned}/{total} images captioned for {source_id} "
+            f"({failed} failed; a retry will re-attempt only those)"
+        )
+    else:
+        logger.success(f"caption_images_task: {total} images captioned for {source_id}")
+    return {"total": total, "captioned": captioned, "failed": failed}
 
 
 class WorkerSettings:
     """arq worker configuration."""
 
+    # Two of these need a timeout longer than `job_timeout`, because their runtime scales
+    # with corpus size rather than with one document: a wiki-wide re-embed is one API
+    # round-trip per 50 pages, and captioning is one vision call per image. Both used to
+    # be pinned to 3600 s, which an image-heavy document or a large wiki simply cannot
+    # finish inside — and arq's cancellation at the timeout is a BaseException, which is
+    # why both handlers catch that rather than Exception.
     functions = [
         ingest_file_task,
         ingest_url_task,
-        arq_func(caption_images_task, timeout=3600),
+        arq_func(caption_images_task, timeout=settings.caption_job_timeout),
         ingest_map_reduce_task,
         ingest_refine_task,
-        reembed_all_pages_task,
+        arq_func(reembed_all_pages_task, timeout=settings.reembed_job_timeout),
         arq_func(notebooklm_generate_task, timeout=3600),
         notebooklm_ingest_artifact_task,
     ]

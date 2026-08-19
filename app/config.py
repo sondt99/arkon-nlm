@@ -121,6 +121,38 @@ class Settings(BaseSettings):
                     "MCPAuthService.verify_token; expired tokens are rejected.",
     )
 
+    # --- MCP pagination caps (app/mcp/tools.py) ---
+    # The list tools take `limit`/`offset` straight from an LLM-generated tool call, so
+    # they are attacker- *and* accident-controlled. Four of them passed the value through
+    # unbounded: `limit=1_000_000` issued a real `LIMIT 1000000` inside the same 2 GB
+    # container that serves the API, and `limit=-1` reached Postgres as a syntax error.
+    mcp_max_page_size: int = Field(
+        default=200,
+        ge=1,
+        le=1_000,
+        description="Largest `limit` an MCP list tool will accept. A larger request is "
+                    "rejected with an explanatory message rather than clamped, so the "
+                    "caller knows it has to paginate instead of silently seeing a "
+                    "truncated page it believes is complete.",
+    )
+    mcp_max_offset: int = Field(
+        default=10_000,
+        ge=0,
+        le=1_000_000,
+        description="Largest `offset` an MCP list tool will accept. Deep offsets are a "
+                    "sequential scan in Postgres, and list_pending_drafts multiplies the "
+                    "window before it hits the database.",
+    )
+    mcp_max_draft_scan: int = Field(
+        default=1_000,
+        ge=50,
+        le=20_000,
+        description="Hard ceiling on rows list_pending_drafts pre-fetches before "
+                    "per-draft permission filtering. The prefetch is (offset+limit)*4 "
+                    "because filtering drops rows; this bounds it. Hitting the ceiling "
+                    "is reported in the tool output, never silently truncated.",
+    )
+
     # --- CORS ---
     # Empty = same-origin only (safe default for the nginx-fronted setup).
     # Set to explicit origin(s) only if the API is called cross-origin.
@@ -133,6 +165,43 @@ class Settings(BaseSettings):
     redis_db: int = Field(default=0)
     worker_max_jobs: int = Field(default=3, description="Max concurrent ingestion jobs")
     worker_job_timeout: int = Field(default=3600, description="Job timeout in seconds")
+
+    # --- Per-job timeout overrides (app/worker.py WorkerSettings.functions) ---
+    # worker_job_timeout is the default for every job. These two jobs are bulk loops whose
+    # runtime scales with corpus size rather than with one document, so inheriting the
+    # default made them unable to finish at all on a large input: arq cancels at the
+    # timeout, and before the BaseException handlers below existed that cancellation left
+    # no terminal status anywhere.
+    reembed_job_timeout: int = Field(
+        default=14_400,
+        ge=600,
+        le=86_400,
+        description="Timeout for reembed_all_pages_task. Re-embedding the whole wiki is "
+                    "one HTTP round-trip per 50 pages against an external embedding API, "
+                    "so the wall time is a function of page count, not of any one page.",
+    )
+    caption_job_timeout: int = Field(
+        default=14_400,
+        ge=300,
+        le=86_400,
+        description="Timeout for caption_images_task. At the default concurrency and "
+                    "per-image timeout, 400 images is ~3.3 h — longer than the 3600 s "
+                    "this job used to be pinned to, which meant an image-heavy document "
+                    "could never finish captioning.",
+    )
+    caption_max_concurrency: int = Field(
+        default=4,
+        ge=1,
+        le=16,
+        description="Concurrent vision calls inside caption_images_task. Raise it (and "
+                    "watch the provider's rate limit) to shorten a large document's run.",
+    )
+    caption_per_image_timeout: int = Field(
+        default=120,
+        ge=10,
+        le=600,
+        description="Per-image ceiling on one vision call inside caption_images_task.",
+    )
 
     # --- MRP Pipeline ---
     mrp_auto_approve_plan: bool = Field(

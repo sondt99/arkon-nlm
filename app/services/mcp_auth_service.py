@@ -20,7 +20,7 @@ from typing import Optional
 from fastapi import Depends, HTTPException
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from loguru import logger
-from sqlalchemy import exists, or_, select, update
+from sqlalchemy import and_, exists, or_, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
@@ -80,11 +80,57 @@ def hash_mcp_token(token: str) -> str:
     return hashlib.sha256(token.encode("utf-8")).hexdigest()
 
 
+def _department_source_clause(
+    department_id: uuid.UUID,
+    project_source_ids: Optional[list[str]] = None,
+):
+    """SQL predicate for an `own_dept` document scope.
+
+    A source is in scope when it is *global* (no `source_departments` rows and not a
+    workspace-private source), or explicitly linked to this department, or — when
+    `project_source_ids` is supplied — reachable through one of the employee's active
+    projects.
+
+    One clause, two uses, deliberately: `_resolve_scope` needs the same rule to materialise
+    `allowed_source_ids` and to derive the visible KnowledgeType slugs. Expressing it twice
+    is how the two paths drifted into "SELECT every global source id, then inline all of
+    them back into the next query as a literal `IN (...)`".
+    """
+    conditions = [
+        # Global: no department rows at all, and not workspace-private.
+        and_(
+            Source.scope_type != "project",
+            ~exists(
+                select(SourceDepartment.source_id)
+                .where(SourceDepartment.source_id == Source.id)
+            ),
+        ),
+        # Explicitly shared with this department. Intentionally *not* filtered by
+        # scope_type: an explicit department grant on a workspace source still counts.
+        exists(
+            select(SourceDepartment.source_id).where(
+                SourceDepartment.source_id == Source.id,
+                SourceDepartment.department_id == department_id,
+            )
+        ),
+    ]
+    if project_source_ids:
+        conditions.append(
+            Source.id.in_([uuid.UUID(s) for s in project_source_ids])
+        )
+    return or_(*conditions)
+
+
 class MCPAuthService:
     """Handles MCP token auth and knowledge scope resolution."""
 
     def __init__(self, db: AsyncSession):
         self.db = db
+        # Set by verify_token when it actually dirtied the session, so the caller knows
+        # whether it has to commit. Callers on the MCP read path committed unconditionally,
+        # which cost a round-trip on every single tool call even though the throttle below
+        # means there is nothing to write 99% of the time.
+        self.wrote_last_connected = False
 
     async def verify_token(self, token: str) -> Optional[ResolvedIdentity]:
         """
@@ -128,6 +174,7 @@ class MCPAuthService:
         ):
             employee.last_connected = now
             await self.db.flush()
+            self.wrote_last_connected = True
 
         # Resolve knowledge scope
         identity = await self._resolve_scope(employee)
@@ -170,7 +217,7 @@ class MCPAuthService:
         if scope == "all":
             allowed_kts = None if wiki_level == "all" else (
                 [] if wiki_level is None
-                else await self._knowledge_types_for_sources(None)
+                else await self._knowledge_type_slugs(None)
             )
             return ResolvedIdentity(
                 employee_id=employee.id,
@@ -185,14 +232,22 @@ class MCPAuthService:
             )
 
         if scope == "own_dept":
-            allowed_ids = await self._get_department_source_ids(employee.department_id)
-            visible_ids = list(dict.fromkeys(allowed_ids + project_source_ids))
+            dept_clause = _department_source_clause(employee.department_id)
+            allowed_ids = await self._source_ids_matching(dept_clause)
             if wiki_level is None:
                 allowed_kts: Optional[list[str]] = []
             elif wiki_level == "all":
                 allowed_kts = None
             else:
-                allowed_kts = await self._knowledge_types_for_sources(visible_ids)
+                # The clause, not the materialised id list. Passing the list re-inlined
+                # every globally-visible source UUID as a literal `IN (...)`, so this
+                # second query alone shipped 50k UUIDs to Postgres on an installation
+                # that size — before any tool had done useful work.
+                allowed_kts = await self._knowledge_type_slugs(
+                    _department_source_clause(
+                        employee.department_id, project_source_ids
+                    )
+                )
             return ResolvedIdentity(
                 employee_id=employee.id,
                 employee_name=employee.name,
@@ -218,10 +273,11 @@ class MCPAuthService:
             permissions=permissions,
         )
 
-    async def _knowledge_types_for_sources(
-        self, source_ids: Optional[list[str]]
-    ) -> list[str]:
-        """Distinct KnowledgeType slugs of the given sources (all global sources if None)."""
+    async def _knowledge_type_slugs(self, source_clause=None) -> list[str]:
+        """Distinct KnowledgeType slugs of the non-project sources matching `source_clause`.
+
+        `None` means "every non-project source", which is the `doc:read:all` case.
+        """
         from app.database.models import KnowledgeType
 
         stmt = (
@@ -230,40 +286,22 @@ class MCPAuthService:
             .where(Source.scope_type != "project")
             .distinct()
         )
-        if source_ids is not None:
-            if not source_ids:
-                return []
-            stmt = stmt.where(Source.id.in_([uuid.UUID(s) for s in source_ids]))
+        if source_clause is not None:
+            stmt = stmt.where(source_clause)
         result = await self.db.execute(stmt)
         return [row[0] for row in result.all() if row[0]]
 
-    async def _get_department_source_ids(self, department_id: uuid.UUID) -> list[str]:
-        """Get IDs of sources that are global (no departments) or in the given department."""
-        # Sources with no department entries (global)
-        # "Global" means no department rows AND not a workspace-private source.
-        # Project-scoped files are added separately via membership.
-        global_stmt = (
-            select(Source.id)
-            .where(
-                Source.scope_type != "project",
-                ~exists(
-                    select(SourceDepartment.source_id)
-                    .where(SourceDepartment.source_id == Source.id)
-                )
-            )
-        )
-        global_result = await self.db.execute(global_stmt)
-        global_ids = [str(r[0]) for r in global_result.all()]
+    async def _source_ids_matching(self, source_clause) -> list[str]:
+        """Materialise the source ids matching a scope clause.
 
-        # Sources in this department
-        dept_stmt = (
-            select(SourceDepartment.source_id)
-            .where(SourceDepartment.department_id == department_id)
-        )
-        dept_result = await self.db.execute(dept_stmt)
-        dept_ids = [str(r[0]) for r in dept_result.all()]
-
-        return global_ids + dept_ids
+        Still one big list, because `ResolvedIdentity.allowed_source_ids` is consumed
+        element-wise downstream (`WikiPage.source_ids.overlap(...)` in wiki_service, the
+        export API, the chat RAG path). Collapsing that into a predicate is a separate,
+        cross-cutting change; what this does fix is the *number* of scans — the department
+        scope used to cost two queries plus a Python concatenation.
+        """
+        result = await self.db.execute(select(Source.id).where(source_clause))
+        return [str(r[0]) for r in result.all()]
 
     async def _resolve_project_sources(self, employee_id: uuid.UUID) -> list[str]:
         """Collect source IDs from all active projects the employee is a member of."""

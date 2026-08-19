@@ -72,6 +72,33 @@ async def get_existing_hash(
     return row
 
 
+async def get_existing_hashes(
+    session: AsyncSession,
+    page_ids: list[uuid.UUID],
+    spec_id: str,
+    dimension: int,
+) -> dict[uuid.UUID, str]:
+    """Batched twin of `get_existing_hash`: {page_id: content_hash} for one spec.
+
+    Lets a bulk loop answer "is this page already embedded with this model, at this exact
+    content?" for a whole batch in one round-trip instead of one per page. The re-embed
+    job uses it to resume: arq re-delivers the same job id up to max_tries times, and
+    without a resume check every retry re-paid for every page already done.
+    """
+    if not page_ids:
+        return {}
+    Model = get_embedding_model_for_dim(dimension)
+    rows = (
+        await session.execute(
+            select(Model.page_id, Model.content_hash).where(
+                Model.model_spec_id == spec_id,
+                Model.page_id.in_(page_ids),
+            )
+        )
+    ).all()
+    return {row[0]: row[1] for row in rows}
+
+
 async def cleanup_stale_embeddings(
     session: AsyncSession, keep_spec_id: str
 ) -> int:

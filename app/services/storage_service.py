@@ -95,6 +95,20 @@ class StorageService:
         """
         await asyncio.to_thread(self.ensure_bucket_sync)
 
+    def bucket_exists_sync(self) -> bool:
+        """Read-only probe: does the configured bucket exist? Raises if MinIO is down.
+
+        Deliberately not `ensure_bucket`: a health probe must not *create* anything.
+        `/health` used to call `ensure_bucket()`, so the container's 15-second liveness
+        check silently made the bucket — which masked a misconfigured MINIO_BUCKET and
+        turned a read-only check into a write against object storage.
+        """
+        return self.client.bucket_exists(settings.minio_bucket)
+
+    async def bucket_exists(self) -> bool:
+        """Non-blocking wrapper for bucket_exists_sync using asyncio.to_thread."""
+        return await asyncio.to_thread(self.bucket_exists_sync)
+
     def upload_file(
         self,
         object_name: str,

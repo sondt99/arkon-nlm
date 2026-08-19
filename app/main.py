@@ -5,7 +5,7 @@ FastAPI application entry point.
 
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Response
 from fastapi.middleware.cors import CORSMiddleware
 from loguru import logger
 
@@ -13,13 +13,20 @@ from app.config import settings
 from app.mcp.server import create_mcp_server
 from app.services.upload_guard import BodySizeLimitMiddleware
 
+# Named so the health endpoints below read as intent rather than as a magic number.
+HTTP_503 = 503
+
 # Create the MCP server and its HTTP app (lifespan must be composed with FastAPI)
 mcp_server = create_mcp_server()
 mcp_http_app = mcp_server.http_app(path="/", stateless_http=True)
 
 
-async def seed_default_admin():
-    """Create default admin account from .env if no admin exists yet."""
+async def seed_default_admin() -> bool:
+    """Create default admin account from .env if no admin exists yet.
+
+    Returns False if the step could not run, so startup can report that instead of
+    claiming success. A failure here almost always means the database is unreachable.
+    """
     from sqlalchemy import select
 
     from app.database import async_session_factory
@@ -32,7 +39,7 @@ async def seed_default_admin():
             stmt = select(Employee).where(Employee.role == "admin").limit(1)
             result = await session.execute(stmt)
             if result.scalar_one_or_none():
-                return  # Admin already exists, skip
+                return True  # Admin already exists, skip
 
             # Create admin department
             dept = Department(name="Administration", description="System administrators")
@@ -54,8 +61,10 @@ async def seed_default_admin():
 
             await session.commit()
             logger.success(f"Default admin created: {settings.default_admin_email}")
+            return True
     except Exception as e:
         logger.warning(f"Could not seed default admin: {e}")
+        return False
 
 
 @asynccontextmanager
@@ -64,16 +73,25 @@ async def lifespan(app: FastAPI):
     async with mcp_http_app.lifespan(app):
         logger.info("Starting Arkon API...")
 
-        # Ensure MinIO bucket exists
+        # Startup stays non-fatal on purpose — the API has to come up so /health can report
+        # *why* it is unhealthy. What is not acceptable is what this block used to do:
+        # swallow every failure into a warning and then log "started successfully"
+        # regardless. Each failed step is recorded and named in the final line instead.
+        degraded: list[str] = []
+
+        # Ensure MinIO bucket exists. This is the one place that may create it; the health
+        # probe uses the read-only check so a 15-second liveness poll cannot make a bucket.
         try:
             from app.services.storage_service import storage_service
             await storage_service.ensure_bucket()
             logger.success("MinIO bucket ready")
         except Exception as e:
             logger.warning(f"MinIO not available yet: {e}")
+            degraded.append("minio-bucket")
 
         # Seed default admin if no admin exists yet
-        await seed_default_admin()
+        if not await seed_default_admin():
+            degraded.append("default-admin-seed")
 
         # Seed built-in skills (idempotent — no-op if already up to date)
         try:
@@ -81,6 +99,7 @@ async def lifespan(app: FastAPI):
             await seed_builtin_skills()
         except Exception as e:
             logger.warning(f"Could not seed built-in skills: {e}")
+            degraded.append("builtin-skills-seed")
 
         # Seed default extraction hints for security knowledge types (idempotent)
         try:
@@ -88,6 +107,7 @@ async def lifespan(app: FastAPI):
             await seed_security_kt_hints()
         except Exception as e:
             logger.warning(f"Could not seed security KT extraction hints: {e}")
+            degraded.append("security-kt-hints-seed")
 
         # Warn if sensitive defaults are unchanged
         if settings.secret_key == "change-me-to-a-random-secret-string":
@@ -107,7 +127,13 @@ async def lifespan(app: FastAPI):
 
         # MCP server ready
         logger.success("Arkon MCP Server ready at /mcp")
-        logger.success("Arkon API started successfully")
+        if degraded:
+            logger.warning(
+                "Arkon API started with failed startup steps: "
+                f"{', '.join(degraded)} — /health reports the live dependency state"
+            )
+        else:
+            logger.success("Arkon API started successfully")
         yield
 
         logger.info("Arkon API shutdown complete")
@@ -209,68 +235,20 @@ async def root():
     }
 
 
-@app.get("/health")
-async def health():
-    services = {}
-    overall = "healthy"
-
-    # Database
-    try:
-        from sqlalchemy import text
-
-        from app.database import async_session_factory
-        async with async_session_factory() as session:
-            await session.execute(text("SELECT 1"))
-        services["database"] = "healthy"
-    except Exception as e:
-        services["database"] = "error"
-        overall = "degraded"
-        logger.warning(f"Health check — database error: {e}")
-
-    # Redis
-    try:
-        from app.routers.sources import get_arq_pool
-        pool = await get_arq_pool()
-        await pool.ping()
-        services["redis"] = "healthy"
-    except Exception as e:
-        services["redis"] = "error"
-        overall = "degraded"
-        logger.warning(f"Health check — redis error: {e}")
-
-    # MinIO
-    try:
-        from app.services.storage_service import storage_service
-        await storage_service.ensure_bucket()
-        services["minio"] = "healthy"
-    except Exception as e:
-        services["minio"] = "error"
-        overall = "degraded"
-        logger.warning(f"Health check — minio error: {e}")
-
-    return {"status": overall, "services": services}
-
-
-@app.get("/api/health")
-async def api_health():
-    """Detailed health check for API, database, and worker (Redis)."""
+async def _check_database() -> str:
     from sqlalchemy import text
 
     from app.database import async_session_factory
-
-    result = {
-        "api": "healthy",
-        "database": "error",
-        "worker": "error",
-    }
-
     try:
         async with async_session_factory() as session:
             await session.execute(text("SELECT 1"))
-        result["database"] = "healthy"
+        return "healthy"
     except Exception as e:
-        logger.warning(f"Health check: DB error — {e}")
+        logger.warning(f"Health check — database error: {e}")
+        return "error"
 
+
+async def _check_redis() -> str:
     try:
         import redis.asyncio as aioredis
         r = aioredis.Redis(
@@ -280,10 +258,68 @@ async def api_health():
             db=settings.redis_db,
             socket_connect_timeout=2,
         )
-        await r.ping()
-        await r.aclose()
-        result["worker"] = "healthy"
+        try:
+            await r.ping()
+        finally:
+            await r.aclose()
+        return "healthy"
     except Exception as e:
-        logger.warning(f"Health check: Redis error — {e}")
+        logger.warning(f"Health check — redis error: {e}")
+        return "error"
 
+
+async def _check_minio() -> str:
+    """Read-only. Must never be `ensure_bucket()` — see StorageService.bucket_exists_sync."""
+    try:
+        from app.services.storage_service import storage_service
+        if not await storage_service.bucket_exists():
+            logger.warning(
+                f"Health check — MinIO bucket '{settings.minio_bucket}' does not exist"
+            )
+            return "bucket_missing"
+        return "healthy"
+    except Exception as e:
+        logger.warning(f"Health check — minio error: {e}")
+        return "error"
+
+
+@app.get("/health")
+async def health(response: Response):
+    """Container liveness probe. **200 only when every dependency answers.**
+
+    Both health endpoints used to return 200 unconditionally, and Compose's probe only
+    fails on a non-2xx status. So Postgres could be unreachable while Docker reported the
+    API healthy, `depends_on: service_healthy` stayed satisfied, and the workers and
+    frontend started against a database that was not there.
+    """
+    services = {
+        "database": await _check_database(),
+        "redis": await _check_redis(),
+        "minio": await _check_minio(),
+    }
+    degraded = [name for name, state in services.items() if state != "healthy"]
+    if degraded:
+        response.status_code = HTTP_503
+    return {
+        "status": "degraded" if degraded else "healthy",
+        "services": services,
+    }
+
+
+@app.get("/api/health")
+async def api_health(response: Response):
+    """Detailed health check for API, database, and worker (Redis).
+
+    Returns 503 when a dependency is down, for the same reason as `/health`: a monitor
+    pointed at this path would otherwise read 200 and conclude all was well. The body
+    still carries per-service detail so a caller that inspects it (the dashboard card
+    reads it off the thrown ApiError) can say *which* dependency failed.
+    """
+    result = {
+        "api": "healthy",
+        "database": await _check_database(),
+        "worker": await _check_redis(),
+    }
+    if any(state != "healthy" for state in result.values()):
+        response.status_code = HTTP_503
     return result

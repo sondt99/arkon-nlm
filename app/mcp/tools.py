@@ -15,8 +15,10 @@ All tools verify the employee's MCP token and enforce knowledge_type scope:
 from typing import Optional
 
 from fastmcp import FastMCP
+from loguru import logger
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.config import settings
 from app.services.audit_service import log_audit
 
 # ---------------------------------------------------------------------------
@@ -49,7 +51,12 @@ async def _get_identity():
         identity = await auth_svc.verify_token(token)
         if identity is None:
             return None, "Invalid or inactive MCP token. Contact your administrator."
-        await session.commit()
+        # Commit only when verify_token actually wrote something — i.e. when the throttled
+        # `last_connected` touch fired. This used to commit unconditionally, so every
+        # read-only tool call ended in a COMMIT round-trip even on the 99% of calls where
+        # the throttle had already suppressed the write and there was nothing to flush.
+        if auth_svc.wrote_last_connected:
+            await session.commit()
 
     return identity, None
 
@@ -73,33 +80,164 @@ def _require_wiki_read(identity) -> Optional[str]:
     return None
 
 
-async def _get_allowed_source_ids(identity, session: Optional[AsyncSession] = None) -> Optional[set[str]]:
-    """Allowed source UUID strings, or None when access is unrestricted.
+async def _can_read_source(identity, session: AsyncSession, source_id) -> bool:
+    """Is this one source inside the caller's document scope?
 
-    Pass an existing session to avoid opening a second DB connection.
+    Replaces a helper that materialised *every* allowed source id and then did a Python
+    membership test — a second full scoped scan per tool call, on top of the one
+    `_resolve_scope` has already paid for. All three call sites only ever asked about a
+    single id, so this is an indexed `SELECT 1 ... LIMIT 1` instead.
+
+    Readiness is deliberately no longer part of the question. The old query also filtered
+    `Source.status == "ready"`, so a source the caller is fully authorized to read answered
+    "outside your knowledge scope" for as long as ingestion was still running — an
+    authorization error for a transient state, which sends the reader to an administrator
+    for a problem that resolves itself. `_processing_notice` reports that case honestly.
     """
     if identity.is_admin:
-        return None
+        return True
     if identity.allowed_source_ids is None and identity.allowed_knowledge_types is None:
-        return None
+        return True
 
     from sqlalchemy import select
 
-    from app.database import async_session_factory
     from app.database.models import Source
     from app.services.mcp_auth_service import apply_scope_filter
 
-    async def _query(s: AsyncSession) -> set[str]:
-        stmt = select(Source.id).where(Source.status == "ready")
-        stmt = apply_scope_filter(stmt, identity)
-        result = await s.execute(stmt)
-        return {str(r[0]) for r in result.all()}
+    stmt = select(Source.id).where(Source.id == source_id)
+    stmt = apply_scope_filter(stmt, identity).limit(1)
+    return (await session.execute(stmt)).first() is not None
 
-    if session is not None:
-        return await _query(session)
 
-    async with async_session_factory() as session:
-        return await _query(session)
+def _processing_notice(source) -> Optional[str]:
+    """Message for an in-scope source that has no readable text *yet*, else None."""
+    status = (source.status or "").lower()
+    if status in ("", "ready"):
+        return None
+    if status == "error":
+        return (
+            f"Source `{source.id}` failed to process: "
+            f"{source.error_message or 'no reason recorded'}. "
+            "Its text and outline are unavailable; ask an administrator to re-ingest it."
+        )
+    return (
+        f"Source `{source.id}` is still being processed (status: {source.status}). "
+        "Its text and outline are not available yet — retry once ingestion finishes."
+    )
+
+
+# ---------------------------------------------------------------------------
+# Pagination guard
+#
+# `limit` and `offset` arrive straight out of an LLM-generated tool call, so they are both
+# accident- and attacker-controlled. Four list tools passed them through untouched:
+# `limit=1_000_000` became a real `LIMIT 1000000` inside the same 2 GB container that
+# serves the API, and `limit=-1` reached Postgres as a raw syntax error. Out-of-range is
+# answered with an explanation rather than clamped, because a silently clamped page looks
+# to the caller exactly like a complete one.
+# ---------------------------------------------------------------------------
+
+def _page_window_error(limit: int, offset: int = 0) -> Optional[str]:
+    """Explain why this (limit, offset) pair is out of range, or None if it is fine."""
+    max_limit = settings.mcp_max_page_size
+    max_offset = settings.mcp_max_offset
+    if limit < 1:
+        return f"Error: `limit` must be at least 1 (got {limit})."
+    if limit > max_limit:
+        return (
+            f"Error: `limit` must not exceed {max_limit} (got {limit}). "
+            f"Request at most {max_limit} rows and page through the rest with `offset`."
+        )
+    if offset < 0:
+        return f"Error: `offset` must not be negative (got {offset})."
+    if offset > max_offset:
+        return (
+            f"Error: `offset` must not exceed {max_offset} (got {offset}). "
+            "Narrow the result set with the filter arguments instead of paging that deep."
+        )
+    return None
+
+
+# ---------------------------------------------------------------------------
+# Search-index refresh for the two write tools
+# ---------------------------------------------------------------------------
+
+_SUMMARY_MAX_CHARS = 300
+
+
+def _derive_summary(content_md: str, fallback: str) -> str:
+    """First prose line of a markdown body — the summary for a page just rewritten.
+
+    Same rule app/routers/chat.py uses when it turns a conversation into a page. Keeping
+    the *old* summary is not the conservative choice it looks like: `search_wiki` and
+    `read_wiki_index` print the summary beside the title, so the page went on advertising
+    content the edit had removed.
+    """
+    for raw in (content_md or "").splitlines():
+        line = raw.strip()
+        if not line or line.startswith(("#", "```", "---", "|")):
+            continue
+        cleaned = line.lstrip("*->+ ").strip()
+        if cleaned:
+            return cleaned[:_SUMMARY_MAX_CHARS]
+    return (fallback or "").strip()[:_SUMMARY_MAX_CHARS]
+
+
+async def _reindex_edited_page(session: AsyncSession, page) -> Optional[str]:
+    """Refresh `page.summary` and the page's search embedding after a body rewrite.
+
+    Returns a warning to pass back to the caller when the index could not be refreshed,
+    and None on success. Both MCP write tools bumped `content_md` and `version` and stopped
+    there, so `search_wiki` kept ranking the page by its pre-edit body — and printing a
+    pre-edit summary next to it — until the next wiki-wide re-embed.
+
+    Runs in its own transaction, after the edit has been committed: an embedding provider
+    outage must not be able to take the edit down with it. It also does not swallow the
+    failure the way the REST paths do (`except Exception: pass`) — a stale index the caller
+    does not know about is how "the wiki says X" outlives X.
+    """
+    from app.ai.embedding_catalog import get_spec
+    from app.ai.registry import ProviderRegistry
+    from app.services.embedding_storage import (
+        compute_content_hash,
+        embedding_input_text,
+        upsert_page_embedding,
+    )
+
+    content_md = page.content_md or ""
+    stale_notice = (
+        "\n\n⚠️ Saved, but wiki search still ranks this page by its previous content"
+    )
+    try:
+        page.summary = _derive_summary(content_md, page.title or page.slug)
+
+        registry = ProviderRegistry(session)
+        spec_id = await registry.get_active_embedding_spec_id()
+        if not spec_id:
+            await session.commit()
+            return stale_notice + ": no embedding model is configured."
+
+        spec = get_spec(spec_id)
+        provider = await registry.get_embedding(task="document")
+        vector = await provider.embed(
+            embedding_input_text(page.title, page.summary, content_md)
+        )
+        await upsert_page_embedding(
+            session,
+            page_id=page.id,
+            spec=spec,
+            vector=list(vector),
+            content_hash=compute_content_hash(page.title, page.summary, content_md),
+        )
+        await session.commit()
+        return None
+    except Exception as exc:
+        logger.warning(f"MCP: could not reindex wiki page {page.slug}: {exc}")
+        try:
+            await session.rollback()
+        except Exception:
+            pass
+        return stale_notice + f" ({type(exc).__name__}). Ask an admin to re-embed."
 
 
 # ---------------------------------------------------------------------------
@@ -400,8 +538,7 @@ def register_tools(mcp: FastMCP):
             if not source:
                 return f"Source not found: {source_id}"
 
-            allowed_ids = await _get_allowed_source_ids(identity, session)
-            if allowed_ids is not None and str(sid) not in allowed_ids:
+            if not await _can_read_source(identity, session, sid):
                 return "Access denied: this source is outside your knowledge scope."
 
         page_count = len(source.page_offsets or [])
@@ -456,13 +593,16 @@ def register_tools(mcp: FastMCP):
             source = await session.get(Source, sid)
             if not source:
                 return f"Source not found: {source_id}"
-            allowed_ids = await _get_allowed_source_ids(identity, session)
-            if allowed_ids is not None and str(sid) not in allowed_ids:
+            if not await _can_read_source(identity, session, sid):
                 return "Access denied: this source is outside your knowledge scope."
 
         outline = source.outline_json or []
         if not outline:
-            return "_(no outline — this document has no detectable headings)_"
+            # A source mid-ingestion has no outline yet. Saying "no detectable headings"
+            # there reads as a fact about the document rather than about the clock.
+            return _processing_notice(source) or (
+                "_(no outline — this document has no detectable headings)_"
+            )
 
         lines = ["# Outline\n"]
         def _walk(nodes: list[dict]):
@@ -520,8 +660,7 @@ def register_tools(mcp: FastMCP):
             source = await session.get(Source, sid)
             if not source:
                 return f"Source not found: {source_id}"
-            allowed_ids = await _get_allowed_source_ids(identity, session)
-            if allowed_ids is not None and str(sid) not in allowed_ids:
+            if not await _can_read_source(identity, session, sid):
                 return "Access denied: this source is outside your knowledge scope."
 
         full_text = source.full_text or ""

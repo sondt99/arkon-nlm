@@ -67,8 +67,12 @@ async def _wiki_visibility_for(db: AsyncSession, user: Employee):
     return identity.wiki_visibility()
 
 
-async def _assert_conversation_scope(db: AsyncSession, user: Employee, conv: ChatConversation) -> None:
-    """Re-check workspace membership so a departed member cannot keep querying."""
+async def assert_conversation_scope(db: AsyncSession, user: Employee, conv: ChatConversation) -> None:
+    """Re-check workspace membership so a departed member cannot keep querying.
+
+    Public because the Export API reaches the same conversations through a bearer token and
+    was missing this check entirely. One definition of the rule, called from both surfaces.
+    """
     if conv.scope_type == "project" and conv.scope_id:
         if not await can_access_workspace(db, user, conv.scope_id):
             raise HTTPException(
@@ -260,7 +264,7 @@ async def send_message(
         raise HTTPException(status_code=422, detail="Message content cannot be empty")
 
     conv = await _get_owned_conversation(db, conversation_id, current_user.id)
-    await _assert_conversation_scope(db, current_user, conv)
+    await assert_conversation_scope(db, current_user, conv)
 
     # Save user message
     user_msg = await chat_service.save_message(
@@ -337,7 +341,7 @@ async def edit_message(
         raise HTTPException(status_code=422, detail="Message content cannot be empty")
 
     conv = await _get_owned_conversation(db, conversation_id, current_user.id)
-    await _assert_conversation_scope(db, current_user, conv)
+    await assert_conversation_scope(db, current_user, conv)
 
     # Load and validate the target message
     msg_result = await db.execute(
@@ -500,7 +504,7 @@ async def conversation_to_wiki(
         raise HTTPException(status_code=422, detail="Title is required")
 
     conv = await _get_owned_conversation(db, conversation_id, current_user.id)
-    await _assert_conversation_scope(db, current_user, conv)
+    await assert_conversation_scope(db, current_user, conv)
 
     # Ignore body-supplied scope — a conversation cannot write into another workspace.
     scope_type = conv.scope_type or "global"
@@ -543,10 +547,14 @@ async def conversation_to_wiki(
             synthesis_prompt, system=_SYNTHESIS_SYSTEM, temperature=0.2
         )
     except Exception as exc:
+        # `{exc}` here reached the client with whatever the provider SDK put in the message
+        # — request URLs, response bodies, occasionally the API key. The actionable half of
+        # the old text is kept; the diagnostic half moves to the log.
+        logger.exception("Conversation-to-wiki synthesis failed for conversation={}", conv.id)
         raise HTTPException(
             status_code=503,
-            detail=f"LLM synthesis failed: {exc}. Configure a chatbot provider in Settings.",
-        )
+            detail="LLM synthesis failed. Check the chatbot provider in Settings.",
+        ) from exc
 
     # Generate summary (first non-empty line of content)
     summary_line = next(
@@ -575,7 +583,12 @@ async def conversation_to_wiki(
             scope_id=scope_id,
         )
     except Exception as exc:
-        raise HTTPException(status_code=500, detail=f"Failed to create wiki page: {exc}")
+        # Was `detail=f"... {exc}"`, which surfaced SQLAlchemy/psycopg text — constraint
+        # names, the failing statement — to whoever clicked "save to wiki".
+        logger.exception("Wiki page creation failed for conversation={} slug={}", conv.id, slug)
+        raise HTTPException(
+            status_code=500, detail="Failed to create the wiki page."
+        ) from exc
 
     # Store embedding so the page appears in RAG search
     try:
@@ -595,7 +608,15 @@ async def conversation_to_wiki(
             content_hash = compute_content_hash(page.title, summary, content_md)
             await upsert_page_embedding(db, page.id, spec, vector, content_hash)
     except Exception:
-        pass  # Embedding failure is non-fatal; page is still created
+        # Still non-fatal — the page exists and is readable by slug, in the index and in
+        # the graph; only semantic search misses it until an admin re-embeds. But `pass`
+        # made that indistinguishable from success: the 201 said the page was saved and
+        # nothing anywhere recorded that it would never come back from a RAG query.
+        logger.exception(
+            "Embedding upsert failed for wiki page {} — the page is created but will not "
+            "appear in semantic search until it is re-embedded",
+            page.id,
+        )
 
     await db.commit()
     return ToWikiResult(slug=slug, title=body.title.strip())

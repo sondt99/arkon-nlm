@@ -5,8 +5,9 @@ Notes router — CRUD.
 import uuid
 from typing import Optional
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database import get_db
@@ -35,9 +36,18 @@ class NoteResponse(BaseModel):
 
 
 @router.get("/notes", response_model=list[NoteResponse])
-async def list_notes(db: AsyncSession = Depends(get_db), _user: Employee = Depends(get_current_user)):
-    repo = Repository(db)
-    notes = await repo.get_all(Note, order_by=Note.created_at.desc())
+async def list_notes(
+    # This endpoint had no limit of any kind: `get_all` selects every row, and Note.content
+    # is unbounded Text, so the response grew without limit as the table did. Newest-first
+    # with an explicit window, matching how the capped siblings paginate.
+    limit: int = Query(100, ge=1, le=500),
+    offset: int = Query(0, ge=0),
+    db: AsyncSession = Depends(get_db),
+    _user: Employee = Depends(get_current_user),
+):
+    notes = (await db.execute(
+        select(Note).order_by(Note.created_at.desc()).offset(offset).limit(limit)
+    )).scalars().all()
     return [
         NoteResponse(
             id=n.id, title=n.title, content=n.content,

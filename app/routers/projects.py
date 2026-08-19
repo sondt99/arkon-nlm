@@ -18,7 +18,7 @@ import uuid
 from typing import Optional
 
 from arq.connections import ArqRedis, create_pool
-from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, UploadFile
 from pydantic import BaseModel
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -100,24 +100,24 @@ class ProjectSourceOut(BaseModel):
 # Helpers
 # ---------------------------------------------------------------------------
 
-async def _get_project_or_404(db: AsyncSession, project_id: str) -> Project:
-    project = await db.get(Project, uuid.UUID(project_id))
+async def _get_project_or_404(db: AsyncSession, project_id: uuid.UUID) -> Project:
+    project = await db.get(Project, project_id)
     if not project:
         raise HTTPException(404, "Project not found")
     return project
 
 
-async def _require_workspace_member(db: AsyncSession, user: Employee, project_id: str) -> None:
+async def _require_workspace_member(db: AsyncSession, user: Employee, project_id: uuid.UUID) -> None:
     """Raise 403 if user is not a workspace member (or system admin)."""
-    if not await can_access_workspace(db, user, uuid.UUID(project_id)):
+    if not await can_access_workspace(db, user, project_id):
         raise HTTPException(403, "Workspace access required")
 
 
 async def _require_workspace_role(
-    db: AsyncSession, user: Employee, project_id: str, min_role: str
+    db: AsyncSession, user: Employee, project_id: uuid.UUID, min_role: str
 ) -> str:
     """Raise 403 if user's workspace role is below min_role. Returns the role."""
-    ws_role = await get_workspace_role(db, user, uuid.UUID(project_id))
+    ws_role = await get_workspace_role(db, user, project_id)
     if not ws_role or not workspace_role_can(ws_role, min_role):
         labels = {
             WorkspaceRole.VIEWER.value: "viewer",
@@ -129,10 +129,10 @@ async def _require_workspace_role(
     return ws_role
 
 
-async def _count_workspace_admins(db: AsyncSession, project_id: str) -> int:
+async def _count_workspace_admins(db: AsyncSession, project_id: uuid.UUID) -> int:
     result = await db.execute(
         select(func.count()).select_from(ProjectMember).where(
-            ProjectMember.project_id == uuid.UUID(project_id),
+            ProjectMember.project_id == project_id,
             ProjectMember.role == WorkspaceRole.ADMIN.value,
         )
     )
@@ -245,7 +245,7 @@ async def create_project(
 
 @router.put("/projects/{project_id}", response_model=ProjectOut)
 async def update_project(
-    project_id: str,
+    project_id: uuid.UUID,
     body: ProjectUpdate,
     db: AsyncSession = Depends(get_db),
     _user: Employee = Depends(get_current_user),
@@ -273,7 +273,7 @@ async def update_project(
 
 @router.delete("/projects/{project_id}")
 async def delete_project(
-    project_id: str,
+    project_id: uuid.UUID,
     db: AsyncSession = Depends(get_db),
     _user: Employee = Depends(get_current_user),
 ):
@@ -290,7 +290,7 @@ async def delete_project(
 # ---------------------------------------------------------------------------
 
 class AddMemberBody(BaseModel):
-    employee_id: str
+    employee_id: uuid.UUID
     role: str = "viewer"
 
 
@@ -300,7 +300,7 @@ class UpdateMemberBody(BaseModel):
 
 @router.get("/projects/{project_id}/members", response_model=list[MemberOut])
 async def list_members(
-    project_id: str,
+    project_id: uuid.UUID,
     db: AsyncSession = Depends(get_db),
     current_user: Employee = Depends(get_current_user),
 ):
@@ -310,7 +310,7 @@ async def list_members(
     result = await db.execute(
         select(ProjectMember)
         .options(selectinload(ProjectMember.employee))
-        .where(ProjectMember.project_id == uuid.UUID(project_id))
+        .where(ProjectMember.project_id == project_id)
     )
     members = result.scalars().all()
     return [
@@ -327,7 +327,7 @@ async def list_members(
 
 @router.post("/projects/{project_id}/members", status_code=201)
 async def add_member(
-    project_id: str,
+    project_id: uuid.UUID,
     body: AddMemberBody,
     db: AsyncSession = Depends(get_db),
     _user: Employee = Depends(get_current_user),
@@ -335,13 +335,13 @@ async def add_member(
     await _get_project_or_404(db, project_id)
     await _require_workspace_role(db, _user, project_id, WorkspaceRole.ADMIN.value)
 
-    emp = await db.get(Employee, uuid.UUID(body.employee_id))
+    emp = await db.get(Employee, body.employee_id)
     if not emp:
         raise HTTPException(404, "Employee not found")
 
     existing = await db.get(
         ProjectMember,
-        (uuid.UUID(project_id), uuid.UUID(body.employee_id)),
+        (project_id, body.employee_id),
     )
     if existing:
         raise HTTPException(409, "Employee is already a member")
@@ -351,8 +351,8 @@ async def add_member(
         raise HTTPException(400, f"Role must be one of: {sorted(valid_roles)}")
 
     member = ProjectMember(
-        project_id=uuid.UUID(project_id),
-        employee_id=uuid.UUID(body.employee_id),
+        project_id=project_id,
+        employee_id=body.employee_id,
         role=body.role,
     )
     db.add(member)
@@ -362,8 +362,8 @@ async def add_member(
 
 @router.delete("/projects/{project_id}/members/{employee_id}")
 async def remove_member(
-    project_id: str,
-    employee_id: str,
+    project_id: uuid.UUID,
+    employee_id: uuid.UUID,
     db: AsyncSession = Depends(get_db),
     _user: Employee = Depends(get_current_user),
 ):
@@ -371,7 +371,7 @@ async def remove_member(
 
     member = await db.get(
         ProjectMember,
-        (uuid.UUID(project_id), uuid.UUID(employee_id)),
+        (project_id, employee_id),
     )
     if not member:
         raise HTTPException(404, "Member not found")
@@ -387,8 +387,8 @@ async def remove_member(
 
 @router.patch("/projects/{project_id}/members/{employee_id}")
 async def update_member(
-    project_id: str,
-    employee_id: str,
+    project_id: uuid.UUID,
+    employee_id: uuid.UUID,
     body: UpdateMemberBody,
     db: AsyncSession = Depends(get_db),
     _user: Employee = Depends(get_current_user),
@@ -397,7 +397,7 @@ async def update_member(
 
     member = await db.get(
         ProjectMember,
-        (uuid.UUID(project_id), uuid.UUID(employee_id)),
+        (project_id, employee_id),
     )
     if not member:
         raise HTTPException(404, "Member not found")
@@ -421,19 +421,18 @@ async def update_member(
 # ---------------------------------------------------------------------------
 
 class AddSourceBody(BaseModel):
-    source_id: str
+    source_id: uuid.UUID
 
 
 @router.get("/projects/{project_id}/sources", response_model=list[ProjectSourceOut])
 async def list_project_sources(
-    project_id: str,
+    project_id: uuid.UUID,
     db: AsyncSession = Depends(get_db),
     current_user: Employee = Depends(get_current_user),
 ):
     await _get_project_or_404(db, project_id)
     await _require_workspace_member(db, current_user, project_id)
 
-    pid = uuid.UUID(project_id)
 
     # 1. Linked sources (project_sources table)
     linked_result = await db.execute(
@@ -441,7 +440,7 @@ async def list_project_sources(
         .options(
             selectinload(ProjectSource.source).selectinload(Source.knowledge_type)
         )
-        .where(ProjectSource.project_id == pid)
+        .where(ProjectSource.project_id == project_id)
     )
     linked_rows = linked_result.scalars().all()
     linked_ids = {r.source_id for r in linked_rows}
@@ -450,7 +449,7 @@ async def list_project_sources(
     owned_result = await db.execute(
         select(Source)
         .options(selectinload(Source.knowledge_type))
-        .where(Source.scope_type == "project", Source.scope_id == pid)
+        .where(Source.scope_type == "project", Source.scope_id == project_id)
     )
     owned_sources = owned_result.scalars().all()
 
@@ -485,7 +484,7 @@ async def list_project_sources(
 
 @router.post("/projects/{project_id}/sources", status_code=201)
 async def add_project_source(
-    project_id: str,
+    project_id: uuid.UUID,
     body: AddSourceBody,
     db: AsyncSession = Depends(get_db),
     _user: Employee = Depends(get_current_user),
@@ -493,7 +492,7 @@ async def add_project_source(
     await _get_project_or_404(db, project_id)
     await _require_workspace_role(db, _user, project_id, WorkspaceRole.EDITOR.value)
 
-    source = await db.get(Source, uuid.UUID(body.source_id))
+    source = await db.get(Source, body.source_id)
     if not source:
         raise HTTPException(404, "Source not found")
 
@@ -503,14 +502,14 @@ async def add_project_source(
 
     existing = await db.get(
         ProjectSource,
-        (uuid.UUID(project_id), uuid.UUID(body.source_id)),
+        (project_id, body.source_id),
     )
     if existing:
         raise HTTPException(409, "Source already in project")
 
     ps = ProjectSource(
-        project_id=uuid.UUID(project_id),
-        source_id=uuid.UUID(body.source_id),
+        project_id=project_id,
+        source_id=body.source_id,
     )
     db.add(ps)
     await db.flush()
@@ -519,25 +518,23 @@ async def add_project_source(
 
 @router.delete("/projects/{project_id}/sources/{source_id}")
 async def remove_project_source(
-    project_id: str,
-    source_id: str,
+    project_id: uuid.UUID,
+    source_id: uuid.UUID,
     db: AsyncSession = Depends(get_db),
     _user: Employee = Depends(get_current_user),
 ):
     await _require_workspace_role(db, _user, project_id, WorkspaceRole.EDITOR.value)
 
-    pid = uuid.UUID(project_id)
-    sid = uuid.UUID(source_id)
 
     # 1. Check linked source (project_sources join table)
-    ps = await db.get(ProjectSource, (pid, sid))
+    ps = await db.get(ProjectSource, (project_id, source_id))
     if ps:
         await db.delete(ps)
         return {"removed": True}
 
     # 2. Check owned source (scope_type=project, scope_id=project_id)
-    source = await db.get(Source, sid)
-    if source and source.scope_type == "project" and source.scope_id == pid:
+    source = await db.get(Source, source_id)
+    if source and source.scope_type == "project" and source.scope_id == project_id:
         # This used to be a bare db.delete(source), which skipped the MinIO purge, the
         # wiki detachment, and the embedding rebuild that DELETE /api/sources/{id}
         # performs — orphaning blobs forever and leaving deleted material surfacing in
@@ -574,10 +571,10 @@ async def _get_arq_pool() -> ArqRedis:
 
 @router.post("/projects/{project_id}/sources/upload", status_code=201)
 async def upload_workspace_source(
-    project_id: str,
+    project_id: uuid.UUID,
     file: UploadFile = File(...),
     title: str | None = Form(None),
-    knowledge_type_id: str | None = Form(None),
+    knowledge_type_id: uuid.UUID | None = Form(None),
     db: AsyncSession = Depends(get_db),
     user: Employee = Depends(get_current_user),
 ):
@@ -585,24 +582,26 @@ async def upload_workspace_source(
     await _get_project_or_404(db, project_id)
     await _require_workspace_role(db, user, project_id, WorkspaceRole.EDITOR.value)
 
-    pid = uuid.UUID(project_id)
+    from app.routers.sources import _storage_basename
     from app.services.upload_guard import spooled_upload
 
     file_stream, file_size = await spooled_upload(file, what="Upload")
-    file_name = file.filename or "unknown"
+    # Same defect as POST /sources/upload: the raw multipart name went straight into the
+    # object key, so `../../x.pdf` escaped `sources/{id}/` and outlived the row's deletion.
+    file_name = _storage_basename(file.filename or "unknown")
 
     source = Source(
-        title=title or file.filename,
+        title=title or file_name,
         source_type="file",
         file_name=file_name,
         file_size=file_size,
         status="pending",
         progress=0,
         progress_message="Queued for ingestion...",
-        knowledge_type_id=uuid.UUID(knowledge_type_id) if knowledge_type_id else None,
+        knowledge_type_id=knowledge_type_id,
         contributed_by_employee_id=user.id,
         scope_type="project",
-        scope_id=pid,
+        scope_id=project_id,
     )
     db.add(source)
     await db.flush()
@@ -640,12 +639,12 @@ async def upload_workspace_source(
 class WorkspaceURLBody(BaseModel):
     url: str
     title: str | None = None
-    knowledge_type_id: str | None = None
+    knowledge_type_id: uuid.UUID | None = None
 
 
 @router.post("/projects/{project_id}/sources/url", status_code=201)
 async def add_workspace_url_source(
-    project_id: str,
+    project_id: uuid.UUID,
     body: WorkspaceURLBody,
     db: AsyncSession = Depends(get_db),
     user: Employee = Depends(get_current_user),
@@ -654,7 +653,6 @@ async def add_workspace_url_source(
     await _get_project_or_404(db, project_id)
     await _require_workspace_role(db, user, project_id, WorkspaceRole.EDITOR.value)
 
-    pid = uuid.UUID(project_id)
 
     source = Source(
         title=body.title or body.url,
@@ -663,10 +661,10 @@ async def add_workspace_url_source(
         status="pending",
         progress=0,
         progress_message="Queued for ingestion...",
-        knowledge_type_id=uuid.UUID(body.knowledge_type_id) if body.knowledge_type_id else None,
+        knowledge_type_id=body.knowledge_type_id,
         contributed_by_employee_id=user.id,
         scope_type="project",
-        scope_id=pid,
+        scope_id=project_id,
     )
     db.add(source)
     await db.flush()
@@ -692,9 +690,14 @@ async def add_workspace_url_source(
 
 @router.get("/projects/{project_id}/wiki")
 async def list_workspace_wiki(
-    project_id: str,
-    page_type: str | None = None,
-    limit: int = 2000,
+    project_id: uuid.UUID,
+    page_type: str | None = Query(None),
+    # `limit: int = 2000` had no validation at all, so a caller could ask for any number of
+    # full WikiPage rows — content_md included, since list_pages selects the whole entity.
+    # The ceiling stays 2000 rather than dropping to a sibling's 100/500 because the portal
+    # requests `?limit=2000` explicitly (wiki/[...slug] and projects/project-detail); a
+    # lower cap would 422 the workspace wiki page instead of merely truncating it.
+    limit: int = Query(2000, ge=1, le=2000),
     db: AsyncSession = Depends(get_db),
     current_user: Employee = Depends(get_current_user),
 ):
@@ -702,14 +705,13 @@ async def list_workspace_wiki(
     await _get_project_or_404(db, project_id)
     await _require_workspace_member(db, current_user, project_id)
 
-    pid = uuid.UUID(project_id)
     from app.services import wiki_service
     pages = await wiki_service.list_pages(
         db,
         page_type=page_type,
         limit=limit,
         scope_type="project",
-        scope_id=pid,
+        scope_id=project_id,
     )
     return [
         {
@@ -730,7 +732,7 @@ async def list_workspace_wiki(
 
 @router.get("/projects/{project_id}/wiki/index")
 async def get_workspace_wiki_index(
-    project_id: str,
+    project_id: uuid.UUID,
     db: AsyncSession = Depends(get_db),
     current_user: Employee = Depends(get_current_user),
 ):
@@ -738,18 +740,17 @@ async def get_workspace_wiki_index(
     await _get_project_or_404(db, project_id)
     await _require_workspace_member(db, current_user, project_id)
 
-    pid = uuid.UUID(project_id)
     from app.services import wiki_service
     page = await wiki_service.get_page_by_slug(
         db, wiki_service.INDEX_SLUG,
-        scope_type="project", scope_id=pid,
+        scope_type="project", scope_id=project_id,
     )
     return {"content_md": page.content_md if page else ""}
 
 
 @router.get("/projects/{project_id}/wiki/graph")
 async def get_workspace_wiki_graph(
-    project_id: str,
+    project_id: uuid.UUID,
     db: AsyncSession = Depends(get_db),
     current_user: Employee = Depends(get_current_user),
 ):
@@ -757,7 +758,6 @@ async def get_workspace_wiki_graph(
     await _get_project_or_404(db, project_id)
     await _require_workspace_member(db, current_user, project_id)
 
-    pid = uuid.UUID(project_id)
 
     from app.database.models import WikiLink, WikiPage
     from app.services import wiki_service
@@ -766,7 +766,7 @@ async def get_workspace_wiki_graph(
         select(WikiPage.slug, WikiPage.title, WikiPage.page_type)
         .where(
             WikiPage.scope_type == "project",
-            WikiPage.scope_id == pid,
+            WikiPage.scope_id == project_id,
             WikiPage.slug.notin_([wiki_service.INDEX_SLUG, wiki_service.LOG_SLUG]),
         )
     )).all()

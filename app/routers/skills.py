@@ -205,7 +205,9 @@ async def list_skills(
     scope_id: Optional[uuid.UUID] = Query(None),
     ids: Optional[List[uuid.UUID]] = Query(None),
     cursor: Optional[str] = Query(None),
-    limit: int = Query(20),
+    # Capped like its siblings (audit le=200, sources le=500, wiki le=100). Bare Query(20)
+    # let a caller name any limit, and the row loader eager-loads departments per skill.
+    limit: int = Query(20, ge=1, le=200),
     db: AsyncSession = Depends(get_db),
     user: Employee = Depends(get_current_user),
 ):
@@ -225,6 +227,7 @@ async def list_skills(
         allowed_department_ids=allowed_depts if needs_filter else None
     )
     items = []
+    dropped = 0
     for s in skills:
         try:
             resp = SkillResponse.model_validate(s)
@@ -235,10 +238,17 @@ async def list_skills(
                     sd.department.name for sd in s.departments if sd.department
                 ]
             items.append(resp)
-        except Exception as e:
-            logger.error(f"Error serializing skill {s.id}: {e}")
-            # Skip corrupted skill record instead of crashing the whole request
-            continue
+        except Exception:
+            # Still skipped rather than 500-ing the whole page for one bad row — but
+            # counted, and logged with a traceback. `logger.error(f"...{e}")` recorded only
+            # the exception's str(), which for a Pydantic ValidationError does not say which
+            # field failed, and `total` kept counting the row, so the response asserted
+            # len(items) == total while quietly returning fewer.
+            logger.exception("Skipping skill {} — it failed to serialize", s.id)
+            dropped += 1
+
+    if dropped:
+        total = max(0, total - dropped)
 
     return {"items": items, "total": total}
 
@@ -399,13 +409,20 @@ async def get_skill_file_content(
 
         logger.info(f"[Debug] Attempting to find skill file. Combinations: {[c[0] for c in combinations]}")
 
+        # Probing candidate keys, so a miss must not abort the loop. It stays broad because
+        # the MinIO SDK signals a missing key with the same S3Error class it uses for auth
+        # and connection failures — but each miss is now logged, so a systemically broken
+        # bucket is distinguishable from a genuinely absent file instead of both ending as
+        # the same 404 below.
         for full_p, pth in combinations:
             try:
                 content_bytes = await storage_service.download_file_async(full_p)
                 logger.info(f"[Debug] Found file at: {full_p}")
                 return {"content": content_bytes.decode("utf-8", errors="ignore")}
-            except Exception:
-                continue
+            except Exception as candidate_error:
+                logger.debug(
+                    "Skill file candidate {} unavailable: {!r}", full_p, candidate_error
+                )
 
         # If all fail, list objects to find it (Fuzzy match)
         logger.info(f"[Debug] All standard paths failed, listing objects to find match for: {path}")

@@ -357,14 +357,25 @@ async def test_audit_log_applies_the_requested_page_offset():
 
 
 @pytest.mark.asyncio
-async def test_audit_log_rejects_a_malformed_principal_filter():
-    """An unparseable UUID must not reach the driver as a 500."""
+async def test_audit_log_filters_on_a_parsed_principal_uuid():
+    """The filter binds the UUID itself, not a string the driver has to coerce.
+
+    This assertion used to be `pytest.raises(ValueError)`, which pinned the defect its own
+    docstring complained about: the handler took `principal_id: Optional[str]` and called
+    `uuid.UUID(...)` on it, and no ValueError handler is registered, so a mistyped id was a
+    500. The param is typed now, so rejection happens in FastAPI's validation layer — see
+    test_api_hygiene.py for the 422 driven through the real router.
+    """
+    principal = uuid.uuid4()
     db = _FakeSession(results=[], total=0)
-    with pytest.raises(ValueError):
-        await audit_router.get_audit_log(
-            page=1, page_size=50, principal_id="not-a-uuid", db=db,
-            _user=_user("org:audit:read"),
-        )
+
+    await audit_router.get_audit_log(
+        page=1, page_size=50, principal_id=principal, db=db,
+        _user=_user("org:audit:read"),
+    )
+
+    count_stmt = next(s for s in db.statements if "count(" in str(s).lower())
+    assert principal in set(count_stmt.compile().params.values())
 
 
 # --------------------------------------------------------------------------- #
@@ -384,7 +395,10 @@ async def test_list_notes_orders_newest_first():
     """The notes pane shows the most recent entry; losing the ordering buries it."""
     db = _FakeSession(results=[_note_row()])
 
-    result = await notes_router.list_notes(db=db, _user=_user())
+    # limit/offset are passed explicitly: a direct call leaves Query(...) defaults
+    # unresolved, which is exactly why the cap itself is asserted through the router in
+    # test_api_hygiene.py rather than here.
+    result = await notes_router.list_notes(limit=100, offset=0, db=db, _user=_user())
 
     assert len(result) == 1
     assert result[0].title == "Standup"

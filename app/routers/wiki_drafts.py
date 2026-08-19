@@ -11,11 +11,18 @@ from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, field_validator
-from sqlalchemy import select
+from sqlalchemy import and_, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database import get_db
-from app.database.models import Employee, WikiPage, WikiPageDraft
+from app.database.models import (
+    WORKSPACE_ROLE_HIERARCHY,
+    Employee,
+    ProjectMember,
+    WikiPage,
+    WikiPageDraft,
+    WorkspaceRole,
+)
 from app.services import wiki_service
 from app.services.audit_service import log_audit
 from app.services.auth_service import get_current_user, require_permission
@@ -107,6 +114,38 @@ async def _can_review(db: AsyncSession, user: Employee, page: WikiPage) -> bool:
     return "wiki:write:all" in perms
 
 
+def _build_reviewable_filter(user: Employee):
+    """`_can_review` as a WHERE clause over the joined WikiPage, or None for "everything".
+
+    Must stay in step with `_can_review` above — same two branches, same thresholds:
+    project-scoped pages need editor+ membership, global pages need wiki:write:all.
+    """
+    if user.role == "admin":
+        return None
+
+    editor_or_above = [
+        role.value
+        for role, level in WORKSPACE_ROLE_HIERARCHY.items()
+        if level >= WORKSPACE_ROLE_HIERARCHY[WorkspaceRole.EDITOR]
+    ]
+    editor_of = select(ProjectMember.project_id).where(
+        ProjectMember.employee_id == user.id,
+        ProjectMember.role.in_(editor_or_above),
+    )
+    project_scoped = and_(
+        WikiPage.scope_type == "project",
+        WikiPage.scope_id.isnot(None),
+        WikiPage.scope_id.in_(editor_of),
+    )
+
+    if "wiki:write:all" in _get_user_permissions(user):
+        return or_(
+            project_scoped,
+            or_(WikiPage.scope_type != "project", WikiPage.scope_id.is_(None)),
+        )
+    return project_scoped
+
+
 async def _load_draft(db: AsyncSession, draft_id: str) -> WikiPageDraft:
     try:
         did = uuid.UUID(draft_id)
@@ -118,27 +157,71 @@ async def _load_draft(db: AsyncSession, draft_id: str) -> WikiPageDraft:
     return draft
 
 
-async def _draft_response(db: AsyncSession, draft: WikiPageDraft) -> DraftResponse:
-    page = await db.get(WikiPage, draft.page_id)
-    author = await db.get(Employee, draft.author_id) if draft.author_id else None
-    reviewer = await db.get(Employee, draft.reviewed_by_id) if draft.reviewed_by_id else None
+def _draft_out(
+    draft: WikiPageDraft,
+    page: Optional[WikiPage],
+    names: dict[uuid.UUID, str],
+) -> DraftResponse:
+    """Shape one draft. Pure, so the list endpoints can batch their lookups."""
     return DraftResponse(
         id=draft.id,
         page_id=draft.page_id,
         page_slug=page.slug if page else "",
         page_title=page.title if page else "",
         author_id=draft.author_id,
-        author_name=author.name if author else None,
+        author_name=names.get(draft.author_id) if draft.author_id else None,
         content_md=draft.content_md,
         note=draft.note,
         status=draft.status,
         source=draft.source,
-        reviewed_by_name=reviewer.name if reviewer else None,
+        reviewed_by_name=names.get(draft.reviewed_by_id) if draft.reviewed_by_id else None,
         reviewed_at=draft.reviewed_at.isoformat() if draft.reviewed_at else None,
         reviewer_note=draft.reviewer_note,
         created_at=draft.created_at.isoformat(),
         updated_at=draft.updated_at.isoformat(),
     )
+
+
+async def _employee_names(db: AsyncSession, ids) -> dict[uuid.UUID, str]:
+    wanted = {i for i in ids if i}
+    if not wanted:
+        return {}
+    return {
+        row.id: row.name
+        for row in (await db.execute(
+            select(Employee.id, Employee.name).where(Employee.id.in_(wanted))
+        )).all()
+    }
+
+
+async def _draft_response(db: AsyncSession, draft: WikiPageDraft) -> DraftResponse:
+    """Single-draft shortcut for the endpoints that address exactly one draft.
+
+    Three primary-key gets is not an N+1 when there is one draft; it becomes one when a
+    list calls it per row, which is what `_draft_responses` below exists to avoid.
+    """
+    page = await db.get(WikiPage, draft.page_id)
+    names = {}
+    for emp_id in (draft.author_id, draft.reviewed_by_id):
+        if emp_id and emp_id not in names:
+            employee = await db.get(Employee, emp_id)
+            if employee:
+                names[emp_id] = employee.name
+    return _draft_out(draft, page, names)
+
+
+async def _draft_responses(
+    db: AsyncSession, drafts: list[WikiPageDraft], pages: dict[uuid.UUID, WikiPage]
+) -> list[DraftResponse]:
+    """Shape a whole page of drafts with one employee lookup for the batch.
+
+    _draft_response issues three primary-key SELECTs per draft (page, author, reviewer), so
+    a 50-draft page cost ~150 round trips plus the caller's own per-draft page load.
+    """
+    names = await _employee_names(
+        db, [i for d in drafts for i in (d.author_id, d.reviewed_by_id)]
+    )
+    return [_draft_out(d, pages.get(d.page_id), names) for d in drafts]
 
 
 # ---------------------------------------------------------------------------
@@ -184,19 +267,29 @@ async def list_all_drafts(
     db: AsyncSession = Depends(get_db),
     user: Employee = require_permission("wiki:read"),
 ):
-    """List wiki drafts. Editors see drafts for pages they can review. Admins see all."""
-    stmt = select(WikiPageDraft).order_by(WikiPageDraft.created_at.desc()).limit(limit)
+    """List wiki drafts. Editors see drafts for pages they can review. Admins see all.
+
+    The reviewability rule is expressed in SQL rather than applied per row after the fetch.
+    LIMIT ran *before* the old `_can_review` loop, so a reviewer scoped to one workspace was
+    served whatever fraction of the newest 50 drafts happened to be theirs — anything from a
+    full page to an empty one — with no signal that the rest of their queue existed.
+    """
+    stmt = (
+        select(WikiPageDraft, WikiPage)
+        .join(WikiPage, WikiPage.id == WikiPageDraft.page_id)
+        .order_by(WikiPageDraft.created_at.desc())
+    )
     if status:
         stmt = stmt.where(WikiPageDraft.status == status)
 
-    drafts = (await db.execute(stmt)).scalars().all()
+    reviewable = _build_reviewable_filter(user)
+    if reviewable is not None:
+        stmt = stmt.where(reviewable)
 
-    results = []
-    for draft in drafts:
-        page = await db.get(WikiPage, draft.page_id)
-        if page and await _can_review(db, user, page):
-            results.append(await _draft_response(db, draft))
-    return results
+    rows = (await db.execute(stmt.limit(limit))).all()
+    drafts = [row[0] for row in rows]
+    pages = {page.id: page for _, page in rows}
+    return await _draft_responses(db, drafts, pages)
 
 
 @router.get("/wiki/pages/{slug:path}/drafts", response_model=list[DraftResponse])
@@ -223,7 +316,9 @@ async def list_page_drafts(
         stmt = stmt.where(WikiPageDraft.status == status)
 
     drafts = (await db.execute(stmt)).scalars().all()
-    return [await _draft_response(db, d) for d in drafts]
+    # One employee lookup for the batch: this list is unbounded (every draft ever proposed
+    # for the page) and _draft_response would re-fetch the same page row for each one.
+    return await _draft_responses(db, list(drafts), {page.id: page})
 
 
 @router.get("/wiki/drafts/{draft_id}", response_model=DraftResponse)

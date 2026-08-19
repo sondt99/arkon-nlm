@@ -122,7 +122,7 @@ async def test_employees_manage_cannot_promote_another_user_to_admin():
     db = _FakeSession(target)
     with pytest.raises(HTTPException) as exc:
         await rbac_router.update_employee(
-            str(target.id),
+            target.id,
             rbac_router.EmployeeUpdate(role="admin"),
             db=db,
             _user=_actor("org:employees:manage"),
@@ -139,7 +139,7 @@ async def test_employees_manage_cannot_promote_itself_to_admin():
     db = _FakeSession(target)
     with pytest.raises(HTTPException) as exc:
         await rbac_router.update_employee(
-            str(actor_id),
+            actor_id,
             rbac_router.EmployeeUpdate(role="admin"),
             db=db,
             _user=_actor("org:employees:manage", actor_id=actor_id),
@@ -155,7 +155,7 @@ async def test_employees_manage_cannot_demote_an_admin():
     db = _FakeSession(target, admin_count=5)
     with pytest.raises(HTTPException) as exc:
         await rbac_router.update_employee(
-            str(target.id),
+            target.id,
             rbac_router.EmployeeUpdate(role="employee"),
             db=db,
             _user=_actor("org:employees:manage"),
@@ -171,7 +171,7 @@ async def test_an_admin_cannot_change_their_own_system_role():
     db = _FakeSession(target, admin_count=5)
     with pytest.raises(HTTPException) as exc:
         await rbac_router.update_employee(
-            str(actor_id),
+            actor_id,
             rbac_router.EmployeeUpdate(role="employee"),
             db=db,
             _user=_actor(role="admin", actor_id=actor_id),
@@ -187,7 +187,7 @@ async def test_the_last_active_admin_cannot_be_demoted():
     db = _FakeSession(target, admin_count=1)
     with pytest.raises(HTTPException) as exc:
         await rbac_router.update_employee(
-            str(target.id),
+            target.id,
             rbac_router.EmployeeUpdate(role="employee"),
             db=db,
             _user=_actor(role="admin"),
@@ -202,7 +202,7 @@ async def test_an_admin_can_still_promote_someone_else():
     target = _employee_row()
     db = _FakeSession(target, admin_count=2)
     result = await rbac_router.update_employee(
-        str(target.id),
+        target.id,
         rbac_router.EmployeeUpdate(role="admin"),
         db=db,
         _user=_actor(role="admin"),
@@ -219,7 +219,7 @@ async def test_employees_manage_cannot_reset_another_users_password():
     db = _FakeSession(target)
     with pytest.raises(HTTPException) as exc:
         await rbac_router.update_employee(
-            str(target.id),
+            target.id,
             rbac_router.EmployeeUpdate(password="a-long-enough-secret"),
             db=db,
             _user=_actor("org:employees:manage"),
@@ -233,7 +233,7 @@ async def test_password_reset_by_an_admin_stores_only_a_bcrypt_hash():
     target = _employee_row()
     db = _FakeSession(target)
     await rbac_router.update_employee(
-        str(target.id),
+        target.id,
         rbac_router.EmployeeUpdate(password="a-long-enough-secret"),
         db=db,
         _user=_actor(role="admin"),
@@ -248,7 +248,7 @@ async def test_password_reset_still_enforces_the_length_floor():
     db = _FakeSession(target)
     with pytest.raises(HTTPException) as exc:
         await rbac_router.update_employee(
-            str(target.id),
+            target.id,
             rbac_router.EmployeeUpdate(password="short"),
             db=db,
             _user=_actor(role="admin"),
@@ -266,7 +266,7 @@ async def test_update_employee_leaves_omitted_fields_alone():
     db = _FakeSession(target)
 
     await rbac_router.update_employee(
-        str(target.id),
+        target.id,
         rbac_router.EmployeeUpdate(name="Renamed"),
         db=db,
         _user=_actor(role="admin"),
@@ -287,7 +287,7 @@ async def test_clearing_the_custom_role_requires_an_explicit_null():
     db = _FakeSession(target)
 
     await rbac_router.update_employee(
-        str(target.id),
+        target.id,
         rbac_router.EmployeeUpdate(custom_role_id=None),
         db=db,
         _user=_actor(role="admin"),
@@ -317,7 +317,7 @@ async def test_update_employee_writes_an_audit_entry_naming_the_actor():
     actor = _actor(role="admin")
 
     await rbac_router.update_employee(
-        str(target.id),
+        target.id,
         rbac_router.EmployeeUpdate(name="Renamed"),
         db=db,
         _user=actor,
@@ -341,7 +341,7 @@ async def test_create_employee_refuses_to_mint_an_admin_for_a_non_admin_caller()
         email="new@example.com",
         password="a-long-enough-secret",
         role="admin",
-        department_id=str(DEPT_ID),
+        department_id=DEPT_ID,
     )
     with pytest.raises(HTTPException) as exc:
         await rbac_router.create_employee(
@@ -361,7 +361,7 @@ async def test_create_employee_rejects_an_unknown_system_role():
         email="new@example.com",
         password="a-long-enough-secret",
         role="superuser",
-        department_id=str(DEPT_ID),
+        department_id=DEPT_ID,
     )
     with pytest.raises(HTTPException) as exc:
         await rbac_router.create_employee(body, db=db, _user=_actor(role="admin"))
@@ -373,7 +373,7 @@ async def test_create_employee_rejects_an_unknown_system_role():
 async def test_create_employee_rejects_a_weak_password():
     db = _FakeSession(_department())
     body = rbac_router.EmployeeCreate(
-        name="New", email="new@example.com", password="short", department_id=str(DEPT_ID)
+        name="New", email="new@example.com", password="short", department_id=DEPT_ID
     )
     with pytest.raises(HTTPException) as exc:
         await rbac_router.create_employee(body, db=db, _user=_actor(role="admin"))
@@ -386,7 +386,7 @@ async def test_create_employee_requires_a_password():
     a credential with no interactive owner."""
     db = _FakeSession(_department())
     body = rbac_router.EmployeeCreate(
-        name="New", email="new@example.com", department_id=str(DEPT_ID)
+        name="New", email="new@example.com", department_id=DEPT_ID
     )
     with pytest.raises(HTTPException) as exc:
         await rbac_router.create_employee(body, db=db, _user=_actor(role="admin"))
@@ -400,7 +400,7 @@ async def test_create_employee_rejects_an_unknown_department():
         name="New",
         email="new@example.com",
         password="a-long-enough-secret",
-        department_id=str(uuid.uuid4()),
+        department_id=uuid.uuid4(),
     )
     with pytest.raises(HTTPException) as exc:
         await rbac_router.create_employee(body, db=db, _user=_actor(role="admin"))
@@ -414,7 +414,7 @@ async def test_create_employee_stores_only_a_hash_of_the_password():
         name="New",
         email="new@example.com",
         password="a-long-enough-secret",
-        department_id=str(DEPT_ID),
+        department_id=DEPT_ID,
     )
 
     result = await rbac_router.create_employee(body, db=db, _user=_actor(role="admin"))
@@ -438,7 +438,7 @@ async def test_nobody_can_deactivate_their_own_account():
     db = _FakeSession(target, admin_count=5)
     with pytest.raises(HTTPException) as exc:
         await rbac_router.toggle_employee(
-            str(actor_id), db=db, _user=_actor(role="admin", actor_id=actor_id)
+            actor_id, db=db, _user=_actor(role="admin", actor_id=actor_id)
         )
     assert exc.value.status_code == 403
     assert target.is_active is True
@@ -450,7 +450,7 @@ async def test_employees_manage_cannot_disable_an_admin_account():
     db = _FakeSession(target, admin_count=5)
     with pytest.raises(HTTPException) as exc:
         await rbac_router.toggle_employee(
-            str(target.id), db=db, _user=_actor("org:employees:manage")
+            target.id, db=db, _user=_actor("org:employees:manage")
         )
     assert exc.value.status_code == 403
     assert target.is_active is True
@@ -461,7 +461,7 @@ async def test_the_last_active_admin_cannot_be_deactivated():
     target = _employee_row(role="admin")
     db = _FakeSession(target, admin_count=1)
     with pytest.raises(HTTPException) as exc:
-        await rbac_router.toggle_employee(str(target.id), db=db, _user=_actor(role="admin"))
+        await rbac_router.toggle_employee(target.id, db=db, _user=_actor(role="admin"))
     assert exc.value.status_code == 409
     assert target.is_active is True
 
@@ -471,7 +471,7 @@ async def test_toggle_flips_an_ordinary_employee_and_reports_the_new_state():
     target = _employee_row(is_active=True)
     db = _FakeSession(target, admin_count=2)
     result = await rbac_router.toggle_employee(
-        str(target.id), db=db, _user=_actor("org:employees:manage")
+        target.id, db=db, _user=_actor("org:employees:manage")
     )
     assert target.is_active is False
     assert result == {"id": str(target.id), "is_active": False}
@@ -483,7 +483,7 @@ async def test_delete_employee_refuses_admin_accounts():
     db = _FakeSession(target)
     with pytest.raises(HTTPException) as exc:
         await rbac_router.delete_employee(
-            str(target.id), db=db, _user=_actor("org:employees:manage")
+            target.id, db=db, _user=_actor("org:employees:manage")
         )
     assert exc.value.status_code == 400
     assert db.deleted == []
@@ -507,7 +507,7 @@ async def test_delete_department_refuses_while_employees_are_attached():
     db = _FakeSession(dept, admin_count=3)  # the count query answers 3 employees
     with pytest.raises(HTTPException) as exc:
         await rbac_router.delete_department(
-            str(dept.id), db=db, _user=_actor("org:departments:manage")
+            dept.id, db=db, _user=_actor("org:departments:manage")
         )
     assert exc.value.status_code == 409
     assert db.deleted == []
@@ -518,7 +518,7 @@ async def test_delete_department_succeeds_when_empty():
     dept = _department()
     db = _FakeSession(dept, admin_count=0)
     result = await rbac_router.delete_department(
-        str(dept.id), db=db, _user=_actor("org:departments:manage")
+        dept.id, db=db, _user=_actor("org:departments:manage")
     )
     assert result == {"deleted": True}
     assert db.deleted == [dept]
@@ -854,13 +854,13 @@ async def test_cannot_assign_a_custom_role_richer_than_your_own():
     )
     body = SimpleNamespace(
         name=None, email=None, department_id=None, role=None, password=None,
-        custom_role_id=str(rich.id),
+        custom_role_id=rich.id,
         model_fields_set={"custom_role_id"},
     )
 
     with pytest.raises(HTTPException) as exc:
         await rbac_router.update_employee(
-            emp_id=str(target.id), body=body,
+            emp_id=target.id, body=body,
             db=_FakeSession(target, rich), _user=actor,
         )
 
@@ -885,12 +885,12 @@ async def test_cannot_grant_yourself_a_custom_role_you_already_qualify_for():
     )
     body = SimpleNamespace(
         name=None, email=None, department_id=None, role=None, password=None,
-        custom_role_id=str(role.id), model_fields_set={"custom_role_id"},
+        custom_role_id=role.id, model_fields_set={"custom_role_id"},
     )
 
     with pytest.raises(HTTPException) as exc:
         await rbac_router.update_employee(
-            emp_id=str(me.id), body=body, db=_FakeSession(me, role), _user=actor,
+            emp_id=me.id, body=body, db=_FakeSession(me, role), _user=actor,
         )
 
     assert exc.value.status_code == 403
@@ -904,7 +904,7 @@ async def test_create_employee_cannot_mint_someone_richer_than_the_creator():
     rich = Role(id=uuid.uuid4(), name="Rich", permissions=list(ORG_WIDE), is_system=False)
     body = SimpleNamespace(
         name="New", email="n@x", password="hunter22hunter", role="employee",
-        department_id=str(DEPT_ID), custom_role_id=str(rich.id),
+        department_id=DEPT_ID, custom_role_id=rich.id,
     )
 
     dept = Department(id=DEPT_ID, name="Eng")
@@ -925,12 +925,12 @@ async def test_an_unknown_custom_role_is_a_404_not_a_silent_write():
     )
     body = SimpleNamespace(
         name=None, email=None, department_id=None, role=None, password=None,
-        custom_role_id=str(uuid.uuid4()), model_fields_set={"custom_role_id"},
+        custom_role_id=uuid.uuid4(), model_fields_set={"custom_role_id"},
     )
 
     with pytest.raises(HTTPException) as exc:
         await rbac_router.update_employee(
-            emp_id=str(target.id), body=body, db=_FakeSession(target), _user=actor,
+            emp_id=target.id, body=body, db=_FakeSession(target), _user=actor,
         )
 
     assert exc.value.status_code == 404
@@ -951,7 +951,7 @@ async def test_clearing_a_custom_role_is_always_allowed():
     )
 
     await rbac_router.update_employee(
-        emp_id=str(target.id), body=body, db=_FakeSession(target), _user=actor,
+        emp_id=target.id, body=body, db=_FakeSession(target), _user=actor,
     )
 
     assert target.custom_role_id is None
@@ -987,7 +987,7 @@ async def test_create_employee_audits_the_real_id():
     db = _FakeSession(dept)
     body = SimpleNamespace(
         name="New", email="n@x", password="hunter22hunter", role="employee",
-        department_id=str(DEPT_ID), custom_role_id=None,
+        department_id=DEPT_ID, custom_role_id=None,
     )
 
     out = await rbac_router.create_employee(body=body, _user=admin, db=db)

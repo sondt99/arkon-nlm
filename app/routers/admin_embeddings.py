@@ -281,16 +281,25 @@ async def switch_embedding_model(
 
         pool = await get_arq_pool()
         await pool.enqueue_job("reembed_all_pages_task", str(job_id))
-    except Exception as e:
-        # Mark job as failed so the UI doesn't poll forever.
+    except Exception as exc:
+        # Mark job as failed so the UI doesn't poll forever. Neither the stored
+        # error_message nor the response carries `str(exc)`: an arq connection failure
+        # renders as the Redis host, port and password-bearing DSN, and EmbeddingJobOut
+        # returns error_message straight to the client, so the leak had two exits.
         async with db.begin():
             await db.execute(
                 update(EmbeddingJob)
                 .where(EmbeddingJob.id == job_id)
-                .values(status="failed", error_message=f"Enqueue failed: {e}")
+                .values(
+                    status="failed",
+                    error_message="Enqueue failed — the job queue is unreachable",
+                )
             )
         logger.exception("Failed to enqueue reembed_all_pages_task")
-        raise HTTPException(status_code=500, detail=f"Failed to enqueue job: {e}")
+        raise HTTPException(
+            status_code=500,
+            detail="Failed to enqueue job — the job queue is unreachable.",
+        ) from exc
 
     return EmbeddingSwitchOut(job_id=job_id)
 

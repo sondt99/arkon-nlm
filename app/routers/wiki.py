@@ -382,13 +382,15 @@ async def search_wiki_pages(
 async def get_wiki_page(
     slug: str,
     scope_type: Optional[str] = Query(None),
-    scope_id: Optional[str] = Query(None),
+    # Typed rather than parsed in the body: `uuid.UUID(scope_id)` on a client-supplied
+    # string raised ValueError, and no ValueError handler is registered, so a typo in a
+    # query string answered 500 instead of 422.
+    scope_id: Optional[uuid.UUID] = Query(None),
     db: AsyncSession = Depends(get_db),
     user: Employee = require_permission("wiki:read"),
 ):
-    sid = uuid.UUID(scope_id) if scope_id else None
     if scope_type:
-        page = await wiki_service.get_page_by_slug(db, slug, scope_type=scope_type, scope_id=sid)
+        page = await wiki_service.get_page_by_slug(db, slug, scope_type=scope_type, scope_id=scope_id)
     else:
         page = await wiki_service.get_page_by_slug(db, slug, scope_type="global", scope_id=None)
         if not page:
@@ -572,21 +574,58 @@ async def delete_wiki_page(
     db: AsyncSession = Depends(get_db),
     user: Employee = require_permission("wiki:delete"),
 ):
-    """Delete a wiki page and cascade-cleanup all references."""
+    """Delete a wiki page and cascade-cleanup all references.
+
+    Authorised the same way direct_edit_wiki_page authorises a write: workspace editor+ for
+    a project-scoped page, the `:all` grant for a global one. The guard here used to be
+    `user.role not in ("admin", "super_admin")` — `"super_admin"` is not a role this
+    codebase ever assigns, so that reduced to "admin only" and made `wiki:delete:own_dept`
+    and `wiki:delete:all` dead permissions: granting either to a custom role did nothing
+    while ACCESS-CONTROL.md documented them as working.
+    """
     if slug in (wiki_service.INDEX_SLUG, wiki_service.LOG_SLUG):
         raise HTTPException(400, "Cannot delete reserved pages")
 
-    page = await wiki_service.get_page_by_slug(db, slug)
+    # get_page_by_slug defaults to scope_type="global", so every project-scoped page 404'd
+    # on delete regardless of who asked.
+    page = await wiki_service.get_page_by_slug_any_scope(db, slug)
     if not page:
         raise HTTPException(404, f"Wiki page not found: {slug}")
 
-    # Check admin role (additional safeguard)
-    if user.role not in ("admin", "super_admin"):
-        raise HTTPException(403, "Only admins can delete wiki pages")
+    if user.role != "admin":
+        if page.scope_type == "project" and page.scope_id:
+            member_role = await get_workspace_role(db, user, page.scope_id)
+            if not member_role:
+                # 404 rather than 403: a non-member is not entitled to learn that a page
+                # exists inside a workspace they cannot see, and the old global-only
+                # lookup already answered 404 here.
+                raise HTTPException(404, f"Wiki page not found: {slug}")
+            if not workspace_role_can(member_role, "editor"):
+                raise HTTPException(403, "Requires editor role or above in this workspace")
+        elif "wiki:delete:all" not in _get_user_permissions(user):
+            raise HTTPException(
+                403, "Requires wiki:delete:all permission to delete global wiki pages"
+            )
+
+    # delete_page_cascade strips wiki_links by slug (that table is keyed on slugs alone and
+    # carries no scope column) but resolves the row to delete with the *global-scoped*
+    # get_page_by_slug. Now that project-scoped pages reach this code at all, resolve what
+    # the cascade will hit before calling it: on a project page it either finds nothing or,
+    # when a global page happens to share the slug, deletes that one instead.
+    cascade_target = await wiki_service.get_page_by_slug(db, slug)
+    if cascade_target is not None and cascade_target.id != page.id:
+        raise HTTPException(
+            409,
+            f"A global wiki page shares the slug '{slug}' — deleting by slug alone is "
+            "ambiguous. Delete the global page first.",
+        )
 
     deleted_title = page.title
     await log_audit(db, user, "delete", "wiki", slug, reason=deleted_title)
     await wiki_service.delete_page_cascade(db, slug)
+    if cascade_target is None:
+        # Project-scoped page: the cascade cleaned the edges but found no row to remove.
+        await db.delete(page)
     await wiki_service.regenerate_index(db)
     await wiki_service.append_log(db, f"Deleted page: {deleted_title} ({slug})")
     await db.commit()

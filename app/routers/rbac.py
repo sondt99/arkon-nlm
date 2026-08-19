@@ -13,7 +13,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from app.database import get_db
-from app.database.models import Department, Employee
+from app.database.models import Department, Employee, Role
 from app.services.audit_service import log_audit
 from app.services.auth_service import (
     get_current_user,
@@ -21,6 +21,7 @@ from app.services.auth_service import (
     require_permission,
 )
 from app.services.employee_policy import (
+    ensure_can_assign_custom_role,
     ensure_can_assign_role,
     ensure_can_set_password,
     ensure_can_toggle,
@@ -135,7 +136,11 @@ async def create_department(
     _user: Employee = require_permission("org:departments:manage"),
 ):
     """Create a new department."""
-    dept = Department(name=body.name, description=body.description)
+    # Explicit id, not the column default: `default=uuid.uuid4` is applied at INSERT, so
+    # reading dept.id before the flush gave log_audit the string "None" — and an audit row
+    # that cannot say which department was created is not an audit row. roles.py already
+    # does this; departments and employees were missed.
+    dept = Department(id=uuid.uuid4(), name=body.name, description=body.description)
     db.add(dept)
     await log_audit(db, _user, "create", "department", str(dept.id), reason=dept.name)
     await db.flush()
@@ -265,23 +270,43 @@ async def create_employee(
     elif body.role != "employee":
         raise HTTPException(400, "Role must be 'admin' or 'employee'")
 
-    # bcrypt at cost 12 is ~250 ms of uninterruptible CPU; on the event loop it blocks every
-    # other request this process is serving, /health included.
+    new_role = await _resolve_custom_role(db, body.custom_role_id)
+    ensure_can_assign_custom_role(_user, new_role)
+
+    # Authorized only from here. bcrypt at cost 12 is ~250 ms of uninterruptible CPU; on the
+    # event loop it blocks every other request this process is serving, /health included —
+    # so a request destined for a 403 must not reach it.
     password_hash = await hash_password_async(body.password)
 
     emp = Employee(
+        # See create_department: without an explicit id, log_audit records "None".
+        id=uuid.uuid4(),
         name=body.name,
         email=body.email,
         password_hash=password_hash,
         role=body.role,
         department_id=uuid.UUID(body.department_id),
-        custom_role_id=uuid.UUID(body.custom_role_id) if body.custom_role_id else None,
+        custom_role_id=new_role.id if new_role else None,
     )
     db.add(emp)
     await log_audit(db, _user, "create", "employee", str(emp.id), reason=emp.email)
     await db.flush()
 
     return {"id": str(emp.id), "name": emp.name, "email": emp.email}
+
+
+async def _resolve_custom_role(db: AsyncSession, custom_role_id: Optional[str]):
+    """Load the Role a request is trying to assign, so its grants can be authorized.
+
+    The id arrived from the request body and was written to the column unchecked, so the
+    role's permissions were never looked at — which is what made this an escalation path.
+    """
+    if not custom_role_id:
+        return None
+    role = await db.get(Role, uuid.UUID(custom_role_id))
+    if not role:
+        raise HTTPException(404, "Role not found")
+    return role
 
 
 @router.put("/employees/{emp_id}")
@@ -302,7 +327,9 @@ async def update_employee(
     if body.department_id is not None:
         emp.department_id = uuid.UUID(body.department_id)
     if "custom_role_id" in body.model_fields_set:
-        emp.custom_role_id = uuid.UUID(body.custom_role_id) if body.custom_role_id else None
+        new_role = await _resolve_custom_role(db, body.custom_role_id)
+        ensure_can_assign_custom_role(_user, new_role, target=emp)
+        emp.custom_role_id = new_role.id if new_role else None
 
     if body.role is not None and body.role != emp.role:
         ensure_can_assign_role(_user, body.role, target=emp)

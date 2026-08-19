@@ -15,6 +15,7 @@ from app.database import get_db
 from app.database.models import Role
 from app.services.audit_service import log_audit
 from app.services.auth_service import require_permission
+from app.services.employee_policy import ensure_no_escalation
 from app.services.permissions import (
     ALL_PERMISSIONS,
     LEGACY_PERMISSION_MAP,
@@ -134,6 +135,8 @@ async def create_role(
 ):
     migrated = _migrate_permissions(body.permissions)
     _validate_permissions(migrated)
+    # A new role is entirely "granting", so there is nothing already-held to subtract.
+    ensure_no_escalation(_user, migrated)
     role = Role(
         id=uuid.uuid4(),
         name=body.name.strip(),
@@ -174,21 +177,9 @@ async def update_role(
                 "Cannot change permissions on a system role. Create a custom role instead.",
             )
 
-        # No privilege escalation: only grant what the caller already holds. Otherwise
-        # org:roles:manage is a path to full admin — grant yourself
-        # org:employees:manage, then use it to set your own role to admin.
-        if _user.role != "admin":
-            from app.services.permission_engine import _get_user_permissions
-
-            held = _get_user_permissions(_user)
-            granting = set(migrated) - set(role.permissions or [])
-            escalating = sorted(granting - set(held))
-            if escalating:
-                raise HTTPException(
-                    403,
-                    "You cannot grant permissions you do not hold yourself: "
-                    + ", ".join(escalating),
-                )
+        # Only grant what the caller already holds; permissions the role has already had
+        # are not a new grant. See ensure_no_escalation for why this is shared.
+        ensure_no_escalation(_user, migrated, already_held=role.permissions or [])
 
         role.permissions = migrated
 

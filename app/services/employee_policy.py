@@ -39,6 +39,59 @@ def ensure_can_assign_role(actor, new_role: str, target=None) -> None:
             raise HTTPException(status_code=403, detail="You cannot change your own system role")
 
 
+def held_permissions(actor) -> set[str]:
+    """The actor's own effective permission set."""
+    from app.services.permission_engine import _get_user_permissions
+
+    return _get_user_permissions(actor)
+
+
+def ensure_no_escalation(actor, granting, *, already_held=()) -> None:
+    """Refuse to hand out a permission the actor does not hold itself.
+
+    This is the rule that keeps `org:roles:manage` and `org:employees:manage` from being
+    paths to full admin. It has to hold at EVERY write that can widen a permission set,
+    which is why it lives here rather than inline in one router: it was originally added to
+    `update_role` alone, so `create_role` and both `custom_role_id` assignments were left
+    open — and the guard could simply be walked around by creating a role instead of
+    editing one.
+    """
+    if is_system_admin(actor):
+        return
+
+    escalating = sorted(set(granting) - set(already_held) - held_permissions(actor))
+    if escalating:
+        raise HTTPException(
+            status_code=403,
+            detail="You cannot grant permissions you do not hold yourself: "
+            + ", ".join(escalating),
+        )
+
+
+def ensure_can_assign_custom_role(actor, role, target=None) -> None:
+    """Assign or clear `Employee.custom_role_id`.
+
+    `Employee.role` was guarded by `ensure_can_assign_role`, but the custom role confers the
+    same authority through the permission engine and was written straight from the request
+    body on both create and update. So `org:employees:manage` alone was enough to PUT your
+    own id with a richer `custom_role_id` and hold those permissions on the next request;
+    combined with an over-broad role created through `create_role`, that reached every
+    permission in ALL_PERMISSIONS.
+    """
+    if role is None:
+        return
+
+    ensure_no_escalation(actor, getattr(role, "permissions", None) or [])
+
+    if target is not None and str(getattr(actor, "id", "")) == str(getattr(target, "id", "")):
+        current = getattr(target, "custom_role_id", None)
+        if str(current or "") != str(getattr(role, "id", "") or ""):
+            raise HTTPException(
+                status_code=403,
+                detail="You cannot change your own custom role",
+            )
+
+
 def ensure_can_set_password(actor) -> None:
     if not is_system_admin(actor):
         raise HTTPException(

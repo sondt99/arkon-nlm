@@ -836,28 +836,6 @@ export function SkillEditor({ contributionId, onSubmitted, onStatusChange, mode 
           )}
         </div>
       </div>
-      <style jsx global>{`
-      .markdown-content {
-        color: #1f2328;
-        font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "Noto Sans", Helvetica, Arial, sans-serif;
-      }
-      .markdown-content h1 { font-size: 2em; font-weight: 600; margin-top: 24px; margin-bottom: 16px; padding-bottom: .3em; border-bottom: 1px solid #d0d7de; }
-      .markdown-content h2 { font-size: 1.5em; font-weight: 600; margin-top: 24px; margin-bottom: 16px; padding-bottom: .3em; border-bottom: 1px solid #d0d7de; }
-      .markdown-content h3 { font-size: 1.25em; font-weight: 600; margin-top: 24px; margin-bottom: 16px; }
-      .markdown-content p { margin-top: 0; margin-bottom: 16px; line-height: 1.6; }
-      .markdown-content ul { list-style-type: disc; margin-bottom: 16px; padding-left: 2em; }
-      .markdown-content ol { list-style-type: decimal; margin-bottom: 16px; padding-left: 2em; }
-      .markdown-content li { margin-top: .25em; }
-      .markdown-content code { padding: .2em .4em; margin: 0; font-size: 85%; white-space: break-spaces; background-color: rgba(175,184,193,0.2); border-radius: 6px; font-family: ui-monospace,SFMono-Regular,SF Mono,Menlo,Consolas,Liberation Mono,monospace; }
-      .markdown-content pre { padding: 16px; overflow: auto; font-size: 85%; line-height: 1.45; background-color: #f6f8fa; border-radius: 6px; margin-bottom: 16px; border: 1px solid #d0d7de; }
-      .markdown-content pre code { padding: 0; margin: 0; font-size: 100%; word-break: normal; white-space: pre; background: transparent; border: 0; }
-      .markdown-content blockquote { padding: 0 1em; color: #636c76; border-left: .25em solid #d0d7de; margin-bottom: 16px; }
-      .markdown-content table { border-spacing: 0; border-collapse: collapse; margin-top: 0; margin-bottom: 16px; width: 100%; overflow: auto; border: 1px solid #d0d7de; }
-      .markdown-content th, .markdown-content td { padding: 8px 13px; border: 1px solid #d0d7de; }
-      .markdown-content th { background-color: #f6f8fa; font-weight: 600; }
-      .markdown-content tr { background-color: #ffffff; border-top: 1px solid #d8dee4; }
-      .markdown-content tr:nth-child(2n) { background-color: #f6f8fa; }
-    `}</style>
     </>
   );
 }

@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState, useCallback } from "react";
+import { useEffect, useRef, useState, useCallback } from "react";
 import { api } from "@/lib/api";
 import { PageHeader } from "@/components/shared/page-header";
 import { Button } from "@/components/ui/button";
@@ -48,6 +48,8 @@ export type Source = {
   updated_at?: string;
 };
 
+const PAGE_SIZE = 20;
+
 type PaginatedSources = {
   items: Source[];
   total: number;
@@ -70,51 +72,79 @@ export default function KnowledgePage() {
   const [totalPages, setTotalPages] = useState(1);
   const [total, setTotal] = useState(0);
   const [search, setSearch] = useState("");
-  const pageSize = 20;
+  const [loadFailed, setLoadFailed] = useState(false);
+  /** Only the newest load may write state. Polls, searches and filter clicks all run through
+   *  `loadSources`, so ordering between them is not guaranteed by anything else. */
+  const loadSeqRef = useRef(0);
   
   const [typeDialogOpen, setTypeDialogOpen] = useState(false);
   const [editType, setEditType] = useState<KnowledgeType | null>(null);
 
+  // Resolved here rather than inside `loadSources`, which used to depend on the whole `types`
+  // array. `types` arrives from a separate request, so its identity change re-fired the
+  // initial-load effect and every page view fetched the source list twice.
+  const selectedTypeId = selectedType
+    ? types.find((t) => t.slug === selectedType)?.id ?? null
+    : null;
+
   const loadSources = useCallback(async (silent = false, p = 1, s?: string) => {
-    if (!silent) setLoading(true);
+    const seq = ++loadSeqRef.current;
+    if (!silent) {
+      setLoading(true);
+      setLoadFailed(false);
+    }
     try {
       const params = new URLSearchParams({
         page: String(p),
-        page_size: String(pageSize),
+        page_size: String(PAGE_SIZE),
       });
-      if (selectedType) {
-        const matchedType = types.find((t) => t.slug === selectedType);
-        if (matchedType) params.set("knowledge_type_id", matchedType.id);
-      }
+      if (selectedTypeId) params.set("knowledge_type_id", selectedTypeId);
       if (selectedDepartment) params.set("department_id", selectedDepartment);
       const searchQuery = s !== undefined ? s : search;
       if (searchQuery) params.set("search", searchQuery);
 
       const data = await api<PaginatedSources>(`/api/sources?${params}`);
+      // A poll that left before the user typed can land after the search it raced. Applying
+      // it put the full unfiltered list in the table while the search box still showed the
+      // query — the same overwrite happens between two filter clicks.
+      if (seq !== loadSeqRef.current) return;
       setSources(data.items);
       setTotal(data.total);
       setTotalPages(data.total_pages);
       setPage(data.page);
     } catch {
-      if (!silent) setSources([]);
+      if (seq !== loadSeqRef.current) return;
+      // A silent poll keeps the rows it already has — one failed tick is not evidence the
+      // library is empty, and the next tick corrects it. A user-initiated load has to say so.
+      if (!silent) {
+        setSources([]);
+        setLoadFailed(true);
+      }
     } finally {
-      if (!silent) setLoading(false);
+      if (!silent && seq === loadSeqRef.current) setLoading(false);
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [selectedType, selectedDepartment, types, search]);
+  }, [selectedTypeId, selectedDepartment, search]);
 
-  // Polling cho trạng thái tài liệu
+  // Polling cho trạng thái tài liệu.
+  //
+  // Depends on a boolean, not on `sources`: the array is what this effect's own callback
+  // replaces, so depending on it tore the interval down and recreated it on every single
+  // response (an eslint-disable hid the cycle). `plan_ready` is deliberately excluded —
+  // it is terminal until a human approves the plan, exactly as `notebooklm/page.tsx`
+  // classifies it, so polling it just burns a request every three seconds forever.
+  const hasPendingSources = sources.some(
+    (s) => s.status === "pending" || s.status === "processing"
+  );
+
   useEffect(() => {
-    const hasPending = sources.some((s) => s.status === "pending" || s.status === "processing" || s.status === "plan_ready");
-    if (!hasPending) return;
+    if (!hasPendingSources) return;
 
     const interval = setInterval(() => {
       loadSources(true, page, search);
     }, 3000);
 
     return () => clearInterval(interval);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [sources, loadSources]);
+  }, [hasPendingSources, page, search, loadSources]);
 
   const loadMeta = useCallback(async () => {
     try {
@@ -200,6 +230,18 @@ export default function KnowledgePage() {
               />
             </div>
             <div className="lg:col-span-3">
+              {loadFailed && (
+                <div className="mb-4 flex items-center gap-2 rounded-lg bg-destructive/10 px-4 py-2 text-sm text-destructive">
+                  <span className="material-symbols-outlined text-base">error</span>
+                  Couldn&apos;t load documents.
+                  <button
+                    onClick={() => loadSources(false, page, search)}
+                    className="ml-auto underline underline-offset-2 hover:no-underline"
+                  >
+                    Retry
+                  </button>
+                </div>
+              )}
               <KnowledgeTable
                 sources={sources}
                 types={types}

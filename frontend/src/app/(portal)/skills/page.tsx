@@ -101,29 +101,43 @@ export default function SkillsPage() {
     return () => clearTimeout(timer);
   }, [search, selectedDepartment, loadSkills]);
 
-  useEffect(() => {
-    const processingIds = skills
-      .filter(s => s.status === "processing" || s.status === "deleting")
-      .map(s => s.id);
+  // Keyed on the ids being polled, not on a join of every skill's status. Two skills
+  // swapping states inside one window (one finishes as another starts) left that joined
+  // string identical, so the effect never re-ran and the interval kept its stale
+  // `pollIds` closure — the newly-processing skill was polled *never* and sat on
+  // "Processing…" until someone reloaded the page.
+  const pollIds = skills
+    .filter((s) => s.status === "processing" || s.status === "deleting")
+    .map((s) => s.id)
+    .sort()
+    .join(",");
 
-    if (processingIds.length === 0) return;
+  useEffect(() => {
+    if (!pollIds) return;
+    const processingIds = pollIds.split(",");
 
     const interval = setInterval(() => {
       const params = new URLSearchParams();
       processingIds.forEach(id => params.append("ids", id));
-      params.set("limit", "2000"); // Ensure all processing items are returned
+      params.set("limit", String(LIMIT)); // Ensure all processing items are returned
 
       api<SkillListResponse>(`/api/skills?${params.toString()}`)
         .then(data => {
+          // IDs được trả về từ API (còn tồn tại trong DB)
+          const returnedIds = new Set(data.items.map(i => i.id));
+          // IDs đang poll nhưng không có trong response → đã bị xóa khỏi DB
+          const deletedIds = new Set(processingIds.filter(id => !returnedIds.has(id)));
+
+          // Đồng bộ total khi có skill bị xóa khỏi state.
+          // This used to run *inside* the `setSkills` updater. Updaters have to be pure —
+          // StrictMode invokes them twice — so every deletion was subtracted twice and the
+          // header count drifted below the real number of skills.
+          if (deletedIds.size > 0) {
+            setTotal(prev => Math.max(0, prev - deletedIds.size));
+          }
+
           setSkills(prev => {
-            // IDs được trả về từ API (còn tồn tại trong DB)
-            const returnedIds = new Set(data.items.map(i => i.id));
-
-            // IDs đang poll nhưng không có trong response → đã bị xóa khỏi DB
-            const deletedIds = new Set(processingIds.filter(id => !returnedIds.has(id)));
-
-            // Bắt đầu bằng cách loại bỏ các skill đã xóa
-            let updatedItems = deletedIds.size > 0
+            const updatedItems = deletedIds.size > 0
               ? prev.filter(s => !deletedIds.has(s.id))
               : [...prev];
             let hasChanges = deletedIds.size > 0;
@@ -137,19 +151,16 @@ export default function SkillsPage() {
               }
             });
 
-            // Đồng bộ total khi có skill bị xóa khỏi state
-            if (deletedIds.size > 0) {
-              setTotal(prev => Math.max(0, prev - deletedIds.size));
-            }
-
             return hasChanges ? updatedItems : prev;
           });
         })
+        // A background poll must not blank the table it is refreshing: keeping the last
+        // known rows is right when one tick fails, and the next tick corrects them.
         .catch(err => console.error("Polling error:", err));
     }, 3000);
 
     return () => clearInterval(interval);
-  }, [skills.map(s => s.status).join(",")]);
+  }, [pollIds]);
 
 
 

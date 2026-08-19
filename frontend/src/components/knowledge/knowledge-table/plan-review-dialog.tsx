@@ -361,13 +361,21 @@ export function PlanReviewDialog({
   };
 
   const handleAddPage = () => {
+    // Derived from the highest number in use, not from `pages.length`: add / add /
+    // delete-the-first / add produced two pages with the slug `new-page-2`, and the
+    // approve request carried both. `key={idx}` on the list meant React never warned.
+    const takenSlugs = new Set(pages.map((p) => p.slug));
+    let n = pages.length + 1;
+    while (takenSlugs.has(`new-page-${n}`)) n += 1;
+    const nextPriority = pages.reduce((max, p) => Math.max(max, p.priority ?? 0), 0) + 1;
+
     const newPage: PlanPage = {
       action: "CREATE",
-      slug: `new-page-${pages.length + 1}`,
+      slug: `new-page-${n}`,
       title: "New Page",
       page_type: "concept",
       entity_names: [],
-      priority: (pages.length + 1),
+      priority: nextPriority,
     };
     setPages((prev) => [...prev, newPage]);
     setEditingIdx(pages.length);

@@ -115,14 +115,10 @@ export function SkillFileExplorer({ skillId, version }: SkillFileExplorerProps) 
       const query = version ? `&version=${version}` : "";
       const apiUrl = `/api/skills/${skillId}/files/content?path=${encodeURIComponent(path)}${query}`;
       const data = await api<{ content: string }>(apiUrl);
-      
-      // Clean up internal markers and YAML frontmatter
-      let cleanedContent = data.content
-        .replace(/^---[\s\S]*?---\n?/, "") // Remove YAML frontmatter
-        .replace(/--[a-z0-9]{4}--/gi, "")   // Remove internal markers
-        .trim();
-        
-      setContent(cleanedContent);
+      // Stored verbatim. Storing the *stripped* text made the Copy button hand back a
+      // SKILL.md with no frontmatter block — an invalid skill file — and mangled any
+      // non-markdown file that happened to contain a `--abcd--` sequence.
+      setContent(data.content);
     } catch (err) {
       console.error("[FileExplorer] Failed to load file content:", err);
       setContent("Error loading file content.");
@@ -160,6 +156,17 @@ export function SkillFileExplorer({ skillId, version }: SkillFileExplorerProps) 
       }
     }
   }, [selectedPath, files, loadContent, loading, loadedVersion, version]);
+
+  // Frontmatter and `--xxxx--` internal markers are noise in the rendered preview, but they
+  // are part of the file: the strip belongs here, not in what gets stored and copied.
+  const previewMarkdown = useMemo(
+    () =>
+      (content ?? "")
+        .replace(/^---[\s\S]*?---\n?/, "")
+        .replace(/--[a-z0-9]{4}--/gi, "")
+        .trim(),
+    [content]
+  );
 
   const toggleFolder = (path: string) => {
     setExpandedFolders((prev) => {
@@ -315,7 +322,7 @@ export function SkillFileExplorer({ skillId, version }: SkillFileExplorerProps) 
                   <div className="p-10 md:p-16 max-w-4xl mx-auto">
                     <div className="prose prose-sm dark:prose-invert max-w-none markdown-content">
                       <ReactMarkdown remarkPlugins={[remarkGfm]}>
-                        {content}
+                        {previewMarkdown}
                       </ReactMarkdown>
                     </div>
                   </div>

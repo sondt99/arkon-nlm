@@ -13,9 +13,13 @@
     "",
     "86 -> 84: the P1 frontend fixes (chat reveal stopped rewriting the message array).",
     "84 -> 78: issue #94 deleted ~1,100 LOC of unreferenced components, which carried",
-    "         six of these errors with them."
+    "         six of these errors with them.",
+    "78 -> 74: issue #91. use-image-resolver derives `loading` instead of writing it from",
+    "         the effect; the skills poll keys on the ids it polls rather than a joined",
+    "         status string; skill-contribute-dialog derives `mode` instead of re-setting it",
+    "         in an effect; skill-file-explorer no longer needs a mutable `cleanedContent`."
   ],
-  "maxErrors": 78,
+  "maxErrors": 74,
   "recordedAt": "2026-08-19",
-  "recordedAtCommit": "4b4aedf"
+  "recordedAtCommit": "463291b"
 }

@@ -126,7 +126,10 @@ export function EmployeeDialog({
   };
 
   const submitInlinePrompt = async () => {
-    if (!inlinePrompt.value.trim()) return;
+    // Guarded here rather than only on the submit button: the input's Enter handler called
+    // straight through, so pressing Enter twice before the POST returned created two
+    // departments (or two positions) with the same name.
+    if (inlinePrompt.saving || !inlinePrompt.value.trim()) return;
     setInlinePrompt(p => ({ ...p, saving: true, error: "" }));
     try {
       await inlinePrompt.onSubmit(inlinePrompt.value.trim());

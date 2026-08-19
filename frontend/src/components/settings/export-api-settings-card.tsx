@@ -46,6 +46,8 @@ export function ExportApiSettingsCard() {
   const [maxTokens, setMaxTokens] = useState("");
   const [savingParams, setSavingParams] = useState(false);
   const [savedParams, setSavedParams] = useState(false);
+  const [paramsError, setParamsError] = useState("");
+  const [loadError, setLoadError] = useState("");
 
   // API key (shares Employee.mcp_token with MCP Desktop)
   const [token, setToken] = useState<string | null>(null);
@@ -53,41 +55,58 @@ export function ExportApiSettingsCard() {
   const [tokenLoading, setTokenLoading] = useState(false);
   const [copied, setCopied] = useState(false);
 
-  async function load() {
-    try {
-      const data = await api<Record<string, unknown>>("/api/settings");
-      const str = (k: string) => (typeof data[k] === "string" ? (data[k] as string) : "");
-
-      const val = data["export_api_enabled"];
-      setEnabled(val === undefined || val === null || val === "" || String(val).toLowerCase() !== "false");
-
-      const chatbotProvider = str("chatbot_provider");
-      if (chatbotProvider) {
-        setModelProvider(chatbotProvider);
-        setModelId(str("chatbot_model_id"));
-        setIsFallbackModel(false);
-      } else {
-        setModelProvider(str("llm_provider"));
-        setModelId(str("llm_model_id"));
-        setIsFallbackModel(true);
-      }
-
-      const temp = str("export_api_temperature");
-      if (temp) setTemperature(parseFloat(temp));
-      const tp = str("export_api_top_p");
-      if (tp) setTopP(parseFloat(tp));
-      setMaxTokens(str("export_api_max_tokens"));
-    } finally {
-      setLoading(false);
-    }
-  }
+  /** Bumped by Retry. The load lives in the effect rather than in a `load()` the effect
+   *  calls, so the effect owns cancellation too: a card unmounted mid-request no longer
+   *  writes into a torn-down tree. */
+  const [reloadToken, setReloadToken] = useState(0);
 
   useEffect(() => {
-    void load();
-    api<{ has_token: boolean }>("/api/my/mcp-token/status")
-      .then((data) => setHasToken(data.has_token))
-      .catch(() => {});
-  }, []);
+    let cancelled = false;
+
+    (async () => {
+      try {
+        const data = await api<Record<string, unknown>>("/api/settings");
+        if (cancelled) return;
+        const str = (k: string) => (typeof data[k] === "string" ? (data[k] as string) : "");
+
+        setLoadError("");
+        const val = data["export_api_enabled"];
+        setEnabled(val === undefined || val === null || val === "" || String(val).toLowerCase() !== "false");
+
+        const chatbotProvider = str("chatbot_provider");
+        if (chatbotProvider) {
+          setModelProvider(chatbotProvider);
+          setModelId(str("chatbot_model_id"));
+          setIsFallbackModel(false);
+        } else {
+          setModelProvider(str("llm_provider"));
+          setModelId(str("llm_model_id"));
+          setIsFallbackModel(true);
+        }
+
+        const temp = str("export_api_temperature");
+        if (temp) setTemperature(parseFloat(temp));
+        const tp = str("export_api_top_p");
+        if (tp) setTopP(parseFloat(tp));
+        setMaxTokens(str("export_api_max_tokens"));
+      } catch (err) {
+        // Previously a try/finally with no catch: a failed read stopped the spinner and left
+        // `enabled` asserting its `useState(true)` default, so the next toggle wrote the
+        // opposite of what the server held.
+        if (cancelled) return;
+        setLoadError(err instanceof Error ? err.message : "Failed to load settings");
+      } finally {
+        if (!cancelled) setLoading(false);
+      }
+    })();
+
+    return () => { cancelled = true; };
+  }, [reloadToken]);
+
+  const retryLoad = () => {
+    setLoading(true);
+    setReloadToken((n) => n + 1);
+  };
 
   async function toggleEnabled() {
     const next = !enabled;
@@ -111,6 +130,7 @@ export function ExportApiSettingsCard() {
   async function saveParams() {
     setSavingParams(true);
     setSavedParams(false);
+    setParamsError("");
     try {
       await api("/api/settings", {
         method: "PUT",
@@ -124,6 +144,10 @@ export function ExportApiSettingsCard() {
       });
       setSavedParams(true);
       setTimeout(() => setSavedParams(false), 2000);
+    } catch (err) {
+      // A bare try/finally reported a rejected save as "spinner stopped": no error,
+      // no "Saved", and the only trace was an unhandled rejection in the console.
+      setParamsError(err instanceof Error ? err.message : "Failed to save parameters");
     } finally {
       setSavingParams(false);
     }
@@ -176,7 +200,7 @@ export function ExportApiSettingsCard() {
 
           <button
             onClick={toggleEnabled}
-            disabled={loading || savingToggle}
+            disabled={loading || savingToggle || !!loadError}
             aria-pressed={enabled}
             className={`relative inline-flex h-6 w-11 shrink-0 cursor-pointer items-center rounded-full border-2 border-transparent transition-colors duration-200 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:opacity-50 ${
               enabled ? "bg-primary" : "bg-muted"
@@ -194,6 +218,17 @@ export function ExportApiSettingsCard() {
           <p className="text-xs text-green-600 dark:text-green-400 flex items-center gap-1">
             <span className="material-symbols-outlined text-sm">check_circle</span>
             Saved
+          </p>
+        )}
+
+        {loadError && (
+          <p className="text-xs text-destructive flex items-center gap-1">
+            <span className="material-symbols-outlined text-sm">error</span>
+            Couldn&apos;t read the current setting ({loadError}) — the toggle is disabled so it
+            cannot write the wrong value.
+            <button onClick={retryLoad} className="underline underline-offset-2 hover:no-underline">
+              Retry
+            </button>
           </p>
         )}
       </div>
@@ -296,6 +331,12 @@ export function ExportApiSettingsCard() {
             <span className="text-xs text-green-600 dark:text-green-400 flex items-center gap-1">
               <span className="material-symbols-outlined text-sm">check_circle</span>
               Saved
+            </span>
+          )}
+          {paramsError && (
+            <span className="text-xs text-destructive flex items-center gap-1">
+              <span className="material-symbols-outlined text-sm">error</span>
+              {paramsError}
             </span>
           )}
         </div>

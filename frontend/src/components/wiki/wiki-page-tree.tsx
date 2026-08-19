@@ -52,6 +52,12 @@ export function WikiPageTree({
   const [collapsed, setCollapsed] = React.useState(false);
   const treeRef = React.useRef<HTMLDivElement>(null);
   const [expandedGroups, setExpandedGroups] = React.useState<Set<string>>(() => {
+    // Explicit rather than relying on the catch below to absorb a ReferenceError. This does not
+    // cause a hydration mismatch: the tree only ever mounts under `(portal)/layout.tsx`, which
+    // renders its skeleton until `useAuth().loading` clears in an effect, so the tree does not
+    // exist in the server HTML. The guard keeps that from being load-bearing, and keeps a
+    // corrupt stored value from being indistinguishable from an unavailable store.
+    if (typeof window === "undefined") return new Set(GROUP_ORDER);
     try {
       const saved = localStorage.getItem("wiki-tree-expanded-groups");
       if (saved) {

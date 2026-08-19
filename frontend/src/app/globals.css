@@ -422,3 +422,86 @@ input, textarea, select {
 .sidebar-scrollbar:hover {
   scrollbar-color: color-mix(in srgb, var(--foreground) 14%, transparent) transparent;
 }
+
+/* ─── GitHub-flavoured markdown body ───
+   One definition, here, for every `.markdown-content` renderer (skill detail page, skill
+   editor preview, file explorer). Two components each shipped their own `<style jsx global>`
+   copy with different values and hardcoded light-mode hex: whichever mounted last won, so the
+   same README styled differently depending on session history, and in dark mode the file
+   explorer painted #1f2328 text on a near-black background. Tokens only — see DESIGN.md. */
+.markdown-content {
+  color: var(--foreground);
+  font-family: var(--font-sans);
+}
+
+.markdown-content h1,
+.markdown-content h2 {
+  font-weight: 600;
+  margin-top: 24px;
+  margin-bottom: 16px;
+  padding-bottom: 0.3em;
+  border-bottom: 1px solid var(--border);
+}
+
+.markdown-content h1 { font-size: 2em; }
+.markdown-content h2 { font-size: 1.5em; }
+.markdown-content h3 { font-size: 1.25em; font-weight: 600; margin-top: 24px; margin-bottom: 16px; }
+.markdown-content p { margin-top: 0; margin-bottom: 16px; line-height: 1.6; }
+.markdown-content ul { list-style-type: disc; margin-bottom: 16px; padding-left: 2em; }
+.markdown-content ol { list-style-type: decimal; margin-bottom: 16px; padding-left: 2em; }
+.markdown-content li { margin-top: 0.25em; }
+
+.markdown-content code {
+  padding: 0.2em 0.4em;
+  margin: 0;
+  font-size: 85%;
+  white-space: break-spaces;
+  background-color: color-mix(in srgb, var(--foreground) 8%, transparent);
+  border-radius: 6px;
+  font-family: var(--font-mono);
+}
+
+.markdown-content pre {
+  padding: 16px;
+  overflow: auto;
+  font-size: 85%;
+  line-height: 1.45;
+  background-color: var(--muted);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  margin-bottom: 16px;
+}
+
+.markdown-content pre code {
+  padding: 0;
+  margin: 0;
+  font-size: 100%;
+  word-break: normal;
+  white-space: pre;
+  background: transparent;
+  border: 0;
+}
+
+.markdown-content blockquote {
+  padding: 0 1em;
+  color: var(--muted-foreground);
+  border-left: 0.25em solid var(--border);
+  margin-bottom: 16px;
+}
+
+.markdown-content table {
+  border-spacing: 0;
+  border-collapse: collapse;
+  margin-top: 0;
+  margin-bottom: 16px;
+  width: 100%;
+  overflow: auto;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+}
+
+.markdown-content th,
+.markdown-content td { padding: 8px 16px; border: 1px solid var(--border); }
+.markdown-content th { background-color: color-mix(in srgb, var(--primary) 6%, transparent); font-weight: 700; }
+.markdown-content tr { background-color: transparent; }
+.markdown-content tr:nth-child(2n) { background-color: color-mix(in srgb, var(--foreground) 3%, transparent); }

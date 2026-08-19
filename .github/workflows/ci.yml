@@ -133,6 +133,19 @@ jobs:
   images:
     name: Docker images build
     runs-on: ubuntu-latest
+    # OFF THE PULL-REQUEST PATH ON PURPOSE. Building three images took ~4 minutes and was
+    # the single largest cost in every PR cycle — and because branch protection required
+    # it, every merge invalidated the next PR and paid it again.
+    #
+    # It is NOT deleted, because it earns its keep: it is the only job that caught the
+    # Dockerfile installing the exported lockfile without `--no-deps`, where pip
+    # re-resolved and silently discarded the pinned graph. Nothing else in CI builds an
+    # image, so deleting this would mean a broken image is discovered on deploy.
+    #
+    # Post-merge is the right trade: `main` is still verified within minutes, and it is no
+    # longer a required check, so it cannot block or serialise a PR. Run it on a branch on
+    # demand with `workflow_dispatch` before touching the Dockerfile or dependencies.
+    if: github.event_name != 'pull_request'
     steps:
       - uses: actions/checkout@v7
 

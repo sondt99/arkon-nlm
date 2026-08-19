@@ -463,6 +463,9 @@ def register_tools(mcp: FastMCP):
         Returns:
             Slug, title, summary, type, and KnowledgeType slugs for each page.
         """
+        window_error = _page_window_error(limit, offset)
+        if window_error:
+            return window_error
         identity, err = await _get_identity()
         if err:
             return err
@@ -697,6 +700,9 @@ def register_tools(mcp: FastMCP):
             limit: Max sources to return (default: 20).
             offset: Number of sources to skip for pagination (default: 0).
         """
+        window_error = _page_window_error(limit, offset)
+        if window_error:
+            return window_error
         from sqlalchemy import select
         from sqlalchemy.orm import selectinload
 
@@ -800,6 +806,9 @@ def register_tools(mcp: FastMCP):
             knowledge_type_slug: Type slug (use `list_knowledge_types` to find).
             limit: Max documents to return (default: 10).
         """
+        window_error = _page_window_error(limit)
+        if window_error:
+            return window_error
         from sqlalchemy import select
 
         from app.database import async_session_factory
@@ -975,7 +984,11 @@ def register_tools(mcp: FastMCP):
             await session.commit()
             await session.refresh(page)
 
-        return f"Page `{slug}` updated to v{page.version}."
+        # After the commit, deliberately: the edit is durable before the index is touched,
+        # so an embedding-provider outage degrades search rather than losing the write.
+        stale = await _reindex_edited_page(session, page)
+
+        return f"Page `{slug}` updated to v{page.version}." + (stale or "")
 
     # =========================================================================
     # Tier 4 — Review (editor/admin only)
@@ -996,6 +1009,9 @@ def register_tools(mcp: FastMCP):
             limit: Max drafts to return (default: 50).
             offset: Number of drafts to skip for pagination (default: 0).
         """
+        window_error = _page_window_error(limit, offset)
+        if window_error:
+            return window_error
         from sqlalchemy import select
         from sqlalchemy.orm import selectinload
 
@@ -1193,7 +1209,15 @@ def register_tools(mcp: FastMCP):
             )
             await session.commit()
 
-        return f"Draft `{draft_id}` approved. Page `{page.slug}` updated to v{page.version}."
+        # See edit_wiki_page: approving a draft rewrites content_md, so the index is just as
+        # stale here. This was the half of the path that made "approve via MCP" leave search
+        # ranking the page by whatever it said before review.
+        stale = await _reindex_edited_page(session, page)
+
+        return (
+            f"Draft `{draft_id}` approved. Page `{page.slug}` updated to v{page.version}."
+            + (stale or "")
+        )
 
     @mcp.tool()
     async def reject_draft(draft_id: str, reviewer_note: str) -> str:

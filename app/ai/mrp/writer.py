@@ -1174,7 +1174,15 @@ async def run_refine_phase(
                         base_budget = _page_source_budget(
                             llm.config.model_id, page_type, page_artifacts,
                         )
-                        retry_factor = (1.0, 0.60, 0.35)[attempt]
+                        # Clamped, not indexed. config.py allows
+                        # MRP_WRITER_MAX_ATTEMPTS up to 5 while this tuple has three
+                        # entries, so attempt=3 raised IndexError — inside the `try`, where
+                        # the generic `except Exception` swallowed it and burned the
+                        # remaining attempts on a failure that had nothing to do with the
+                        # LLM. That made max_attempts=4 strictly WORSE than 3, the opposite
+                        # of what the setting promises.
+                        factors = (1.0, 0.60, 0.35)
+                        retry_factor = factors[min(attempt, len(factors) - 1)]
                         source_context = _build_source_context(
                             full_text,
                             evidence,

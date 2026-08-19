@@ -80,6 +80,35 @@ def _require_wiki_read(identity) -> Optional[str]:
     return None
 
 
+async def _load_employee(session: AsyncSession, employee_id):
+    """Load an Employee with `custom_role` eager-loaded.
+
+    `_can_review_page` / `_can_contribute_to_page` call `_get_user_permissions`, which reads
+    `employee.custom_role` — a default-lazy relationship. Six tools loaded the row with a
+    bare `session.get()`, so that read raised `MissingGreenlet: greenlet_spawn has not been
+    called` under the real async engine.
+
+    It failed for EXACTLY the users an admin had deliberately given a role to: `role ==
+    "admin"` returns early from `_get_user_permissions`, and a NULL `custom_role_id`
+    short-circuits the lazy load, so both of those paths worked. Anyone with a custom role
+    assigned crashed on every global wiki page.
+
+    One helper rather than six call sites, because six is how the drift happened. Mirrors
+    `auth_service.get_current_user`, which has always eager-loaded this.
+    """
+    from sqlalchemy import select
+    from sqlalchemy.orm import selectinload
+
+    from app.database.models import Employee
+
+    result = await session.execute(
+        select(Employee)
+        .options(selectinload(Employee.custom_role))
+        .where(Employee.id == employee_id)
+    )
+    return result.scalar_one_or_none()
+
+
 async def _can_read_source(identity, session: AsyncSession, source_id) -> bool:
     """Is this one source inside the caller's document scope?
 
@@ -871,7 +900,7 @@ def register_tools(mcp: FastMCP):
         from sqlalchemy import select
 
         from app.database import async_session_factory
-        from app.database.models import Employee, WikiPage
+        from app.database.models import WikiPage
         from app.services import wiki_service
 
         identity, err = await _get_identity()
@@ -893,7 +922,7 @@ def register_tools(mcp: FastMCP):
             if not page:
                 return f"Page '{slug}' not found. Use read_wiki_index() to browse available pages."
 
-            employee = await session.get(Employee, identity.employee_id)
+            employee = await _load_employee(session, identity.employee_id)
             if not employee:
                 return "Error: employee not found."
 
@@ -944,7 +973,7 @@ def register_tools(mcp: FastMCP):
         from sqlalchemy import select
 
         from app.database import async_session_factory
-        from app.database.models import Employee, WikiPage
+        from app.database.models import WikiPage
         from app.services import wiki_service
 
         identity, err = await _get_identity()
@@ -964,7 +993,7 @@ def register_tools(mcp: FastMCP):
             if not page:
                 return f"Page '{slug}' not found."
 
-            employee = await session.get(Employee, identity.employee_id)
+            employee = await _load_employee(session, identity.employee_id)
             if not employee:
                 return "Error: employee not found."
 
@@ -1016,7 +1045,7 @@ def register_tools(mcp: FastMCP):
         from sqlalchemy.orm import selectinload
 
         from app.database import async_session_factory
-        from app.database.models import Employee, WikiPageDraft
+        from app.database.models import WikiPageDraft
 
         identity, err = await _get_identity()
         if err:
@@ -1024,7 +1053,7 @@ def register_tools(mcp: FastMCP):
         assert identity is not None
 
         async with async_session_factory() as session:
-            employee = await session.get(Employee, identity.employee_id)
+            employee = await _load_employee(session, identity.employee_id)
             if not employee:
                 return "Error: employee not found."
 
@@ -1087,7 +1116,7 @@ def register_tools(mcp: FastMCP):
         from sqlalchemy.orm import selectinload
 
         from app.database import async_session_factory
-        from app.database.models import Employee, WikiPageDraft
+        from app.database.models import WikiPageDraft
 
         identity, err = await _get_identity()
         if err:
@@ -1111,7 +1140,7 @@ def register_tools(mcp: FastMCP):
             if not draft:
                 return f"Draft `{draft_id}` not found."
 
-            employee = await session.get(Employee, identity.employee_id)
+            employee = await _load_employee(session, identity.employee_id)
             if not employee:
                 return "Error: employee not found."
 
@@ -1160,7 +1189,7 @@ def register_tools(mcp: FastMCP):
         from sqlalchemy.orm import selectinload
 
         from app.database import async_session_factory
-        from app.database.models import Employee, WikiPageDraft
+        from app.database.models import WikiPageDraft
         from app.services import wiki_service
 
         identity, err = await _get_identity()
@@ -1184,7 +1213,7 @@ def register_tools(mcp: FastMCP):
             if draft.status != "pending":
                 return f"Error: draft is already {draft.status}."
 
-            employee = await session.get(Employee, identity.employee_id)
+            employee = await _load_employee(session, identity.employee_id)
             if not employee:
                 return "Error: employee not found."
 
@@ -1235,7 +1264,7 @@ def register_tools(mcp: FastMCP):
         from sqlalchemy.orm import selectinload
 
         from app.database import async_session_factory
-        from app.database.models import Employee, WikiPageDraft
+        from app.database.models import WikiPageDraft
         from app.services import wiki_service
 
         identity, err = await _get_identity()
@@ -1262,7 +1291,7 @@ def register_tools(mcp: FastMCP):
             if draft.status != "pending":
                 return f"Error: draft is already {draft.status}."
 
-            employee = await session.get(Employee, identity.employee_id)
+            employee = await _load_employee(session, identity.employee_id)
             if not employee:
                 return "Error: employee not found."
 

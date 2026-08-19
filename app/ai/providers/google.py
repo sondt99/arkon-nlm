@@ -45,7 +45,12 @@ class GoogleEmbedding(EmbeddingProvider):
         from google.genai import types
 
         formatted = self._format_for_task(text)
-        result = self.client.models.embed_content(
+        # `.aio.` — the sync client here made embed_batch's Semaphore(5) + gather deliver
+        # ZERO concurrency (it serialised N blocking HTTP calls), and on the request path a
+        # single query froze every request in the process, /health included. Lines 175 and
+        # 260 in this same file already used `.aio.`, so this was an inconsistency rather
+        # than a deliberate choice.
+        result = await self.client.aio.models.embed_content(
             model=self.config.model_id,
             contents=formatted,
             config=types.EmbedContentConfig(
@@ -135,7 +140,8 @@ class GoogleLLM(LLMProvider):
     ) -> str:
         from google.genai import types
 
-        response = self.client.models.generate_content(
+        # See embed(): `.aio.`, matching generate_with_tools and analyze_image below.
+        response = await self.client.aio.models.generate_content(
             model=self.config.model_id,
             contents=prompt,
             config=types.GenerateContentConfig(

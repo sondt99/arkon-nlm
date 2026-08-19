@@ -12,6 +12,18 @@ x-backend: &backend
     dockerfile: Dockerfile
   image: arkon-backend:latest
   env_file: [.env.docker]
+  environment:
+    # Composed from the POSTGRES_* vars rather than duplicated. The example file used to
+    # carry the password twice — once as POSTGRES_PASSWORD and again embedded in a URL that
+    # does not look like a placeholder field — so rotating it was a two-place edit and the
+    # second place was a substring. `config.py` does refuse a URL still holding the shipped
+    # default, so a desync failed at boot rather than silently; but "fails fast" is a worse
+    # guarantee than "cannot desync".
+    #
+    # `environment` beats `env_file`, so the :- default preserves the escape hatch: set
+    # DATABASE_URL explicitly in .env.docker (managed Postgres, a pooler, sslmode) and that
+    # value still wins.
+    DATABASE_URL: ${DATABASE_URL:-postgresql+asyncpg://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}}
   restart: always
   stop_grace_period: 30s
   logging: *default-logging

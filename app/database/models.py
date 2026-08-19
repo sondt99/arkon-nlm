@@ -829,6 +829,12 @@ class SkillVersion(Base):
 
     __table_args__ = (
         Index("ix_skill_versions_skill_id", "skill_id"),
+        # Version numbers are computed as current_version + 1 from a row read without
+        # FOR UPDATE, so two concurrent approvals both produced version N. Without this
+        # constraint both rows were inserted and set_latest_version resolved N via
+        # .first() — non-deterministically. The advisory lock in SkillService prevents the
+        # race; this makes the invariant enforceable rather than merely intended.
+        UniqueConstraint("skill_id", "version_number", name="uq_skill_versions_skill_version"),
     )
 
 

@@ -347,7 +347,20 @@ def _validate_url_not_internal(url: str) -> None:
 
     for _, _, _, _, addr in resolved:
         ip = ipaddress.ip_address(addr[0])
-        if ip.is_private or ip.is_loopback or ip.is_link_local or ip.is_reserved:
+        # is_multicast / is_unspecified cover 0.0.0.0, ::, and 224.0.0.0/4, which the
+        # original set missed. IPv4-mapped IPv6 (::ffff:127.0.0.1) is unwrapped first,
+        # because is_loopback is False on the mapped form.
+        mapped = getattr(ip, "ipv4_mapped", None)
+        if mapped is not None:
+            ip = mapped
+        if (
+            ip.is_private
+            or ip.is_loopback
+            or ip.is_link_local
+            or ip.is_reserved
+            or ip.is_multicast
+            or ip.is_unspecified
+        ):
             raise ValueError("URLs pointing to private/internal networks are not allowed")
 
 
@@ -360,7 +373,34 @@ async def _extract_text_from_url(url: str) -> list[dict]:
         return [{"content": _clean_text(result.content or ""), "page_number": 1}]
     except Exception as e:
         logger.warning(f"URL extraction failed for {url}: {e}")
-        import httpx
-        async with httpx.AsyncClient() as client:
-            resp = await client.get(url, follow_redirects=True, timeout=30)
-            return [{"content": _clean_text(resp.text), "page_number": 1}]
+        return [{"content": _clean_text(await _fetch_url_guarded(url)), "page_number": 1}]
+
+
+# Redirects are followed manually so every hop is validated. With
+# follow_redirects=True only the *first* URL was ever checked, so an attacker-controlled
+# host could 302 to 169.254.169.254 or minio:9000 and the response body was stored in
+# Source.full_text — a readable SSRF, not a blind one.
+_MAX_REDIRECTS = 5
+
+
+async def _fetch_url_guarded(url: str) -> str:
+    """GET a URL, validating the target before every hop."""
+    import httpx
+
+    current = url
+    async with httpx.AsyncClient(follow_redirects=False, timeout=30) as client:
+        for _ in range(_MAX_REDIRECTS):
+            _validate_url_not_internal(current)
+            resp = await client.get(current)
+            if resp.status_code in (301, 302, 303, 307, 308):
+                location = resp.headers.get("location")
+                if not location:
+                    raise ValueError("Redirect response without a Location header")
+                # Relative redirects must be resolved against the current URL before
+                # validation, or a `/latest/meta-data` Location would slip through.
+                from urllib.parse import urljoin
+
+                current = urljoin(current, location)
+                continue
+            return resp.text
+    raise ValueError(f"Too many redirects while fetching {url}")

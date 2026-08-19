@@ -25,6 +25,22 @@ from app.utils.text import slugify
 from app.worker import get_arq_pool
 
 
+async def _lock_skill_for_versioning(db, skill_id) -> None:
+    """Serialise next-version computation for one skill.
+
+    `current_version + 1` is a check-then-act on a row read without FOR UPDATE, and the
+    destination MinIO prefix is derived from that number. Two reviewers approving
+    different contributions for the same skill both computed version N and both
+    copy_prefix'd into skills/<id>/versions/N/ — which copy_prefix does not clear — so
+    that directory ended up holding an interleaved mix of both contributions' files.
+
+    Same transaction-scoped advisory lock that wiki_service.upsert_page already uses for
+    the equivalent slug race, so the pattern is consistent across the codebase.
+    """
+    import sqlalchemy as _sa
+
+    await db.execute(_sa.select(_sa.func.pg_advisory_xact_lock(_sa.func.hashtext(str(skill_id)))))
+
 class SkillService:
     @staticmethod
     def _calculate_zip_content_hash(file_data: bytes) -> Optional[str]:
@@ -143,6 +159,7 @@ class SkillService:
             if existing_skill.version_hash == file_hash:
                 return existing_skill, None, "metadata_only"
             
+            await _lock_skill_for_versioning(db, existing_skill.id)
             new_version_num = existing_skill.current_version + 1
             existing_skill.status = "processing"
             existing_skill.version_hash = file_hash
@@ -325,6 +342,7 @@ class SkillService:
             raise HTTPException(status_code=400, detail=err)
 
         # 3. Prepare New Version
+        await _lock_skill_for_versioning(db, skill.id)
         new_version_num = skill.current_version + 1
         skill.status = "processing"
         skill.version_hash = file_hash
@@ -866,6 +884,7 @@ class SkillService:
                 skill.scope_id = None
         
         # 5. Create New Version
+        await _lock_skill_for_versioning(db, skill.id)
         new_v = skill.current_version + 1
         v_path = f"skills/{skill.id}/versions/{new_v}/"
         

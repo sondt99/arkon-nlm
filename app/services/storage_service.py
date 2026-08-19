@@ -182,18 +182,36 @@ class StorageService:
             CopySource(bucket, src_key),
         )
 
-    def copy_prefix(self, src_prefix: str, dest_prefix: str):
-        """Copy all objects from one prefix to another (recursively)."""
-        bucket = settings.minio_bucket
-        
-        # Check if src_prefix is a specific file using stat_object (more reliable)
-        is_file = False
+    def _is_single_object(self, prefix: str) -> bool:
+        """True if `prefix` names one object, False if it is a folder prefix.
+
+        Only a genuine missing-key error means "not a single object". Everything else —
+        a transient 503, an auth failure, a network blip — is re-raised.
+
+        The previous form was `except Exception: is_file = False`, evaluated independently
+        in copy_prefix and then again in move_prefix. A transient error made a file look
+        like a folder, and because the two calls could disagree, move_prefix could delete
+        a file that copy_prefix had just failed to copy. See move_prefix.
+        """
         try:
-            self.client.stat_object(bucket, src_prefix)
-            is_file = True
-        except Exception:
-            is_file = False
-        
+            self.client.stat_object(settings.minio_bucket, prefix)
+            return True
+        except S3Error as exc:
+            if exc.code in ("NoSuchKey", "NoSuchObject", "NotFound"):
+                return False
+            raise
+
+    def copy_prefix(self, src_prefix: str, dest_prefix: str, is_file: Optional[bool] = None):
+        """Copy all objects from one prefix to another (recursively).
+
+        `is_file` may be passed by a caller that already determined it, so the two code
+        paths cannot reach different conclusions about the same prefix.
+        """
+        bucket = settings.minio_bucket
+
+        if is_file is None:
+            is_file = self._is_single_object(src_prefix)
+
         if is_file:
             # Single file copy - do NOT add slashes
             self.copy_object(src_prefix, dest_prefix)
@@ -216,19 +234,22 @@ class StorageService:
         logger.info(f"Copied folder content ({count} objects) from {src_p} to {dest_p}")
     
     def move_prefix(self, src_prefix: str, dest_prefix: str):
-        """Move all objects from one prefix to another (recursively), then delete source."""
-        bucket = settings.minio_bucket
-        
-        # Determine if it's a file or folder before moving
-        is_file = False
-        try:
-            self.client.stat_object(bucket, src_prefix)
-            is_file = True
-        except Exception:
-            is_file = False
+        """Move all objects from one prefix to another (recursively), then delete source.
 
-        self.copy_prefix(src_prefix, dest_prefix)
-        
+        Data-loss path this guards against: is_file used to be computed twice, once here
+        and once inside copy_prefix, each swallowing every exception. A transient MinIO
+        error on the second call made copy_prefix treat a file as a folder — it listed
+        `<file>/`, found zero objects, logged "Copied folder content (0 objects)" at INFO,
+        and returned. Control came back here still believing it was a file, so
+        delete_object ran. The file was destroyed, nothing was copied, and the operation
+        reported success.
+
+        Now the determination is made once and passed down.
+        """
+        is_file = self._is_single_object(src_prefix)
+
+        self.copy_prefix(src_prefix, dest_prefix, is_file=is_file)
+
         if is_file:
             self.delete_object(src_prefix)
         else:

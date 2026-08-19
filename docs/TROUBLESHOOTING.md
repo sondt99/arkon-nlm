@@ -36,7 +36,10 @@ docker compose --env-file .env.docker logs api
 |---|---|
 | `SECRET_KEY is still the default value` | You copied the example and did not change it |
 | `DEFAULT_ADMIN_PASSWORD is a weak default` | Same — pick a real password |
-| `MINIO_ACCESS_KEY / MINIO_SECRET_KEY are still MinIO factory defaults` | Change both |
+| `MINIO_ACCESS_KEY is a known default` | `MINIO_ACCESS_KEY=minioadmin` is refused — the template still ships it |
+| `MINIO_SECRET_KEY is a known default` | Checked independently of the access key; change both |
+| `REDIS_PASSWORD is unset or a known default` | Must be non-empty and match Compose's `--requirepass` |
+| `DATABASE_URL still embeds a default password` | Still contains `arkon_secret` or `change-me-postgres-password` |
 | `CORS_ORIGINS is '*'` | Leave it empty behind nginx, or set explicit origins |
 | password authentication failed | `POSTGRES_PASSWORD` ≠ password in `DATABASE_URL` |
 | Redis `NOAUTH` / `invalid password` | `REDIS_PASSWORD` empty in env but Compose started Redis with `--requirepass` |

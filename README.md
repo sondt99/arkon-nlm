@@ -145,6 +145,10 @@ pip install -e ".[dev]"
 cp .env.local.example .env.local   # then edit
 alembic upgrade head
 uvicorn app.main:app --reload --port 5055
+# `alembic` and `uvicorn` both import app.config, which refuses known-weak
+# credentials at import time. .env.local.example ships with
+# ARKON_ALLOW_DEFAULT_SECRET=1 and ARKON_ALLOW_CORS_WILDCARD=1 set for exactly
+# that reason — keep them for local work, drop them anywhere else.
 
 # Worker (second terminal)
 python -m arq app.worker.WorkerSettings

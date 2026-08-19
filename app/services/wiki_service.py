@@ -752,7 +752,7 @@ async def detach_source_from_wiki(
         WikiPageContribution.source_id == source_id,
     )
     stmt = select(WikiPage).where(or_(
-        WikiPage.source_ids.any(source_id),  # type: ignore[arg-type]
+        WikiPage.source_ids.contains([source_id]),  # type: ignore[arg-type]
         WikiPage.id.in_(contribution_pages),
     ))
     pages = list((await session.execute(stmt)).scalars().all())

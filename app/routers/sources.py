@@ -192,9 +192,46 @@ async def _validate_source_scope(
 
 
 async def _wiki_page_count(session: AsyncSession, source_id: uuid.UUID) -> int:
-    """How many wiki pages reference this source in their source_ids array."""
-    stmt = select(func.count()).select_from(WikiPage).where(WikiPage.source_ids.any(source_id))  # type: ignore[arg-type]
+    """How many wiki pages reference this source in their source_ids array.
+
+    Uses `@>` (contains) rather than `= ANY(col)`. Postgres cannot use a GIN array index
+    for `= ANY(col)` — only `@>`, `<@`, and `&&` qualify — so the previous form was a full
+    scan of wiki_pages even before migration 018 dropped ix_wiki_pages_source_ids.
+    """
+    stmt = (
+        select(func.count())
+        .select_from(WikiPage)
+        .where(WikiPage.source_ids.contains([source_id]))  # type: ignore[arg-type]
+    )
     return (await session.execute(stmt)).scalar_one()
+
+
+async def _wiki_page_counts(
+    session: AsyncSession, source_ids: list[uuid.UUID]
+) -> dict[uuid.UUID, int]:
+    """Wiki-page counts for many sources in ONE query.
+
+    The listing called _wiki_page_count once per row, so a single page of 25 sources
+    triggered 25 separate array scans of wiki_pages (up to 500 with the max page size).
+    unnest + GROUP BY collapses that into one aggregate.
+    """
+    if not source_ids:
+        return {}
+
+    unnested = func.unnest(WikiPage.source_ids).label("source_id")
+    stmt = (
+        select(unnested, func.count().label("n"))
+        .select_from(WikiPage)
+        .where(WikiPage.source_ids.overlap(source_ids))  # type: ignore[arg-type]
+        .group_by(unnested)
+    )
+    rows = (await session.execute(stmt)).all()
+    wanted = set(source_ids)
+    counts = {sid: 0 for sid in source_ids}
+    for sid, n in rows:
+        if sid in wanted:
+            counts[sid] = n
+    return counts
 
 
 def _to_response(source: Source, wiki_page_count: int = 0) -> SourceResponse:
@@ -331,9 +368,12 @@ async def list_sources(
     stmt = base.order_by(Source.created_at.desc()).offset(offset).limit(page_size)
     sources = (await db.execute(stmt)).scalars().all()
 
+    # One aggregate for the whole page instead of one query per row.
+    page_counts = await _wiki_page_counts(db, [s.id for s in sources])
+
     items: list[SourceResponse] = []
     for s in sources:
-        items.append(_to_response(s, await _wiki_page_count(db, s.id)))
+        items.append(_to_response(s, page_counts.get(s.id, 0)))
 
     return {
         "items": items,
@@ -399,7 +439,7 @@ async def get_source_wiki_pages(
     rows = (await db.execute(
         select(WikiPage.id, WikiPage.slug, WikiPage.title, WikiPage.page_type,
                WikiPage.summary, WikiPage.updated_at)
-        .where(WikiPage.source_ids.any(source_id))
+        .where(WikiPage.source_ids.contains([source_id]))
         .order_by(WikiPage.title)
     )).all()
 
@@ -1071,7 +1111,7 @@ async def get_source_knowledge_impact(
     page_rows = (await db.execute(
         select(WikiPage)
         .where(or_(
-            WikiPage.source_ids.any(source_id),  # type: ignore[arg-type]
+            WikiPage.source_ids.contains([source_id]),  # type: ignore[arg-type]
             WikiPage.id.in_(contribution_page_ids),
         ))
         .order_by(WikiPage.title)

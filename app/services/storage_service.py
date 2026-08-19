@@ -148,11 +148,17 @@ class StorageService:
         Uses a dedicated client configured with minio_public_endpoint so the
         HMAC signature is computed against the browser-accessible hostname.
         """
-        hours = expiry_hours or settings.minio_presign_expiry_hours
+        # After issuance a presigned URL is an unauthenticated bearer capability: it
+        # survives permission revocation and account deletion, so its lifetime is the real
+        # exposure window. The default is now 30 minutes rather than 24 hours.
+        if expiry_hours is not None:
+            expires = timedelta(hours=expiry_hours)
+        else:
+            expires = timedelta(minutes=settings.minio_presign_expiry_minutes)
         return self.presign_client.presigned_get_object(
             bucket_name=settings.minio_bucket,
             object_name=object_name,
-            expires=timedelta(hours=hours),
+            expires=expires,
         )
 
     def delete_object(self, object_name: str):

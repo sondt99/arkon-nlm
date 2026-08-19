@@ -54,8 +54,10 @@ frontend/out/
 # Alembic
 alembic/__pycache__/
 
-# UV
-uv.lock
+# UV — uv.lock IS committed. A deployed app needs a reproducible dependency graph:
+# all 30 runtime deps are open-ended >= floors, so two builds a week apart produced
+# different closures from identical source, and the security floors pinned in
+# pyproject.toml were enforced only at the bottom.
 
 # Grapuco
 .grapuco/

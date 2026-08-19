@@ -26,6 +26,29 @@ from app.services.storage_service import storage_service
 
 router = APIRouter()
 
+# Raster types only. SVG is deliberately absent: it is an XML document that can carry
+# script, so serving it inline from the app origin is the exact hazard this allowlist
+# exists to prevent. An SVG stored by the extractor is served as a PNG-typed download
+# attempt rather than rendered.
+_SAFE_IMAGE_TYPES = {
+    "image/png",
+    "image/jpeg",
+    "image/gif",
+    "image/webp",
+    "image/bmp",
+    "image/tiff",
+}
+
+
+def _safe_image_content_type(stored: "str | None") -> str:
+    """Map a stored content type onto the allowlist, defaulting to a harmless one."""
+    candidate = (stored or "").split(";")[0].strip().lower()
+    if candidate in _SAFE_IMAGE_TYPES:
+        return candidate
+    return "application/octet-stream"
+
+
+
 MAX_IDS_PER_REQUEST = 100
 
 
@@ -103,7 +126,21 @@ async def proxy_wiki_image(
         logger.warning(f"Failed to fetch image {image_id} from MinIO: {e}")
         raise HTTPException(status_code=502, detail="Could not retrieve image from storage")
 
-    content_type = row.content_type or "image/jpeg"
+    # Serve ONLY an allowlisted raster type, never the stored one.
+    #
+    # row.content_type comes from image_service, which trusts the content_type declared in
+    # an uploader-authored DOCX relationship part (and maps svg -> image/svg+xml). Echoing
+    # it meant a crafted document could get arbitrary bytes served as text/html or SVG from
+    # this app's own origin — and MinIO is proxied on that same origin, so a same-origin CSP
+    # would not have stopped it either. nosniff does not help when the type is *declared*
+    # rather than sniffed.
+    #
+    # No working exploit existed, but every guard rail was incidental: the frontend happens
+    # to fetch these into a blob and render them only in <img>, and the one anchor happens
+    # to carry `download`. Removing that attribute, adding a "copy image link" affordance, or
+    # any future use of the ?token= query parameter would have converted it into stored XSS
+    # on an origin where the JWT lives in localStorage.
+    content_type = _safe_image_content_type(row.content_type)
 
     def _stream():
         yield data
@@ -111,5 +148,11 @@ async def proxy_wiki_image(
     return StreamingResponse(
         _stream(),
         media_type=content_type,
-        headers={"Cache-Control": "private, max-age=3600"},
+        headers={
+            "Cache-Control": "private, max-age=3600",
+            # inline is what the UI needs, but stating it explicitly stops a browser from
+            # inferring anything else from the (now fixed) type.
+            "Content-Disposition": "inline",
+            "X-Content-Type-Options": "nosniff",
+        },
     )

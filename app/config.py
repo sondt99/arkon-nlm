@@ -48,7 +48,14 @@ class Settings(BaseSettings):
     minio_secret_key: str = Field(default="minioadmin123")
     minio_bucket: str = Field(default="arkon-files")
     minio_secure: bool = Field(default=False)
-    minio_presign_expiry_hours: int = Field(default=24)
+    minio_presign_expiry_minutes: int = Field(
+        default=30,
+        description="Lifetime of a presigned download URL. Was 24 hours, and a fresh URL "
+                    "was minted on EVERY source-detail fetch — after issuance the URL is an "
+                    "unauthenticated bearer capability that survives permission revocation "
+                    "and account deletion, so a link captured from a proxy log or browser "
+                    "history granted a full day of access.",
+    )
 
     # --- Uploads ---
     max_upload_mb: int = Field(

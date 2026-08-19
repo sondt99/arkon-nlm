@@ -53,7 +53,7 @@ A file with **no** department **and** `scope_type != project` is global: anyone 
 | `wiki:read:own_dept` / `:all` | Read pages |
 | `wiki:write:own_dept` | Propose drafts on global pages |
 | `wiki:write:all` | Direct edit + approve/reject drafts |
-| `wiki:delete:own_dept` / `:all` | Delete pages |
+| `wiki:delete:own_dept` / `:all` | **Not currently effective — admin only.** `app/routers/wiki.py` rejects any non-admin after the permission check, so granting this to a custom role does nothing. (`super_admin` appears in that check but exists nowhere else in the codebase.) Tracked in issue #86. |
 
 ### Skills
 
@@ -90,7 +90,14 @@ doc:create:own_dept
 wiki:read:own_dept
 wiki:write:own_dept
 skill:read:own_dept
+org:departments:read
 ```
+
+> `org:departments:read` gates `GET /api/departments`, which returns every department with
+> its employee count — so an employee with no custom role can enumerate the org chart. That
+> is the current intended behaviour; it is listed here because it was previously omitted from
+> this document and from the design document, making the default reach look narrower than it
+> is.
 
 ### System admin
 

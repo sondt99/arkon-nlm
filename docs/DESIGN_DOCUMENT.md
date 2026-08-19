@@ -143,7 +143,11 @@ Latest revision: `026_legacy_ninerouter_spec_ids`. Source of truth: `app/databas
 | `source_chunk_extracts` | MAP output (resume) |
 | `source_compilation_plans` | REDUCE output awaiting review |
 
-Source `status`: `pending` · `processing` · `plan_review` · `ready` · `error`.
+Source `status`: `pending` · `processing` · `plan_ready` · `ready` · `error`.
+
+Source `pipeline_phase` (a **separate** column tracking MRP progress, not a status): `map` · `reduce` · `plan_review` · `refine` · `verify` · `commit`.
+
+> The awaiting-review **status** is `plan_ready` (`app/worker.py`). `plan_review` is a `pipeline_phase` value (`app/ai/mrp/reducer.py`). Filtering `status == "plan_review"` matches zero rows silently — no error, just an empty result that reads as "nothing pending review".
 
 ### 3.3 Wiki
 

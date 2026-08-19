@@ -8,9 +8,19 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 RUN pip install --upgrade pip --no-cache-dir
 
-# Install dependencies in a separate layer so they're cached on code-only changes
-COPY pyproject.toml ./
-RUN pip install --no-cache-dir .
+# Install dependencies in a separate layer so they're cached on code-only changes.
+#
+# uv sync --frozen installs the exact graph recorded in uv.lock and FAILS if the lockfile
+# is out of date with pyproject.toml. Previously this was `pip install .` against
+# pyproject alone, and since all 30 runtime deps are open-ended >= floors, two builds a
+# week apart produced different closures from identical source — with no way to reproduce
+# the last-known-good image. The security floors pinned in pyproject.toml
+# (cryptography>=50.0 for PYSEC-2026-3552, aiohttp>=3.14.3, pyasn1>=0.6.4) were enforced
+# at the bottom only; nothing above them was.
+COPY --from=ghcr.io/astral-sh/uv:0.9.21 /uv /usr/local/bin/uv
+COPY pyproject.toml uv.lock ./
+RUN uv export --frozen --no-dev --no-emit-project -o /tmp/requirements.txt \
+    && pip install --no-cache-dir -r /tmp/requirements.txt
 
 # --- Runtime stage: no build tools ---
 FROM python:3.12-slim AS runtime

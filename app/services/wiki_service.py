@@ -602,33 +602,56 @@ async def append_log(
 # Page deletion — cascade cleanup
 # ---------------------------------------------------------------------------
 
+async def _rebuild_outgoing_links(session: AsyncSession, from_slug: str) -> None:
+    """Re-derive the wiki_links rows for one from_slug from the pages that still carry it.
+
+    wiki_links is keyed on (from_slug, to_slug) and has no scope column, so one row can be
+    the edge of pages in several scopes at once. Deleting edges by slug alone therefore took
+    out structure another scope's page still owns; re-deriving from the surviving content is
+    what keeps that scope's graph intact.
+    """
+    contents = (await session.execute(
+        select(WikiPage.content_md).where(WikiPage.slug == from_slug)
+    )).scalars().all()
+    await refresh_links(session, from_slug, "\n".join(c or "" for c in contents))
+
+
 async def delete_page_cascade(
     session: AsyncSession,
     slug: str,
+    scope_type: str = "global",
+    scope_id: Optional[uuid.UUID] = None,
 ) -> None:
     """
-    Delete a wiki page and cascade-cleanup all references:
-    1. Delete all outgoing links from this page
-    2. Delete all incoming links pointing to this page
-    3. Remove [[slug]] and [[slug|text]] wikilinks from pages that reference this one
-    4. Delete the page itself
-    """
-    # 1+2: Remove all wikilink edges
-    await session.execute(
-        delete(WikiLink).where(
-            (WikiLink.from_slug == slug) | (WikiLink.to_slug == slug)
-        )
-    )
+    Delete a wiki page and cascade-cleanup all references, within one scope:
+    1. Locate the page in the requested scope — nothing is touched if it is not there
+    2. Remove [[slug]] and [[slug|text]] wikilinks from pages in the SAME scope
+    3. Delete the page itself
+    4. Re-derive the wikilink edges of every slug whose content this call changed
 
-    # 3: Find pages that reference this slug in their content and clean up
-    # Look for [[slug]] or [[slug|display text]] patterns
+    Steps 1-3 used to run with no scope predicate while the page itself was fetched with
+    get_page_by_slug's `scope_type="global"` default. Deleting a global `budget` therefore
+    rewrote workspace W's `overview.content_md` and dropped W's internal `[[budget]]` edge,
+    stripping a link to a page that still existed; and passing a workspace-scoped slug found
+    no page to delete at all, yet still wrecked the global graph and logged success.
+    """
+    page = await get_page_by_slug(session, slug, scope_type=scope_type, scope_id=scope_id)
+    if page is None:
+        raise ValueError(
+            f"delete_page_cascade: no page {slug!r} in scope {scope_type}/{scope_id} — "
+            "refusing to cascade a deletion that would not delete anything"
+        )
+
+    # 2: pages in this scope that reference the slug in their content
     referring_pages = (await session.execute(
         select(WikiPage).where(
             WikiPage.content_md.contains(f"[[{slug}]]")
-            | WikiPage.content_md.contains(f"[[{slug}|")
+            | WikiPage.content_md.contains(f"[[{slug}|"),
+            _scope_filter(scope_type, scope_id),
         )
     )).scalars().all()
 
+    rewritten: list[str] = []
     for ref_page in referring_pages:
         if ref_page.slug == slug:
             continue
@@ -642,14 +665,23 @@ async def delete_page_cascade(
         # Replace [[slug]] with slug text
         cleaned = cleaned.replace(f"[[{slug}]]", slug.split("/")[-1])
         ref_page.content_md = cleaned
+        rewritten.append(ref_page.slug)
 
-    # 4: Delete the page
-    page = await get_page_by_slug(session, slug)
-    if page:
-        await session.delete(page)
+    # 3: Delete the page
+    await session.delete(page)
+    await session.flush()
+
+    # 4: Only the slugs whose content changed here get their edges recomputed. Edges owned
+    # by pages in other scopes are left alone — their content still justifies them, and
+    # blowing them away is exactly the damage this function used to do.
+    for from_slug in [slug, *rewritten]:
+        await _rebuild_outgoing_links(session, from_slug)
 
     await session.flush()
-    logger.info(f"delete_page_cascade({slug}): deleted page + cleaned {len(referring_pages)} references")
+    logger.info(
+        f"delete_page_cascade({slug} @ {scope_type}/{scope_id}): deleted page "
+        f"+ cleaned {len(rewritten)} references"
+    )
 
 
 # ---------------------------------------------------------------------------

@@ -22,15 +22,22 @@ lệnh trong đó đã hỏng khi repo được chuyển đi).
 
 ## Khởi động / Build
 
-> **Deploy giờ có 2 bước.** Migration không còn tự chạy khi container start nữa
-> (xem mục Alembic bên dưới). Bỏ bước `migrate` sẽ khiến schema tụt lại sau code.
+> **Deploy vẫn là một lệnh.** `api` có `depends_on: migrate` với
+> `condition: service_completed_successfully`, nên `up -d` tự chạy migration trước rồi mới
+> khởi động API — không thể bị bỏ sót. Điểm khác so với trước là migration chạy trong một
+> service one-shot riêng (`restart: "no"`), không còn nằm trong entrypoint của mọi container.
+>
+> **Và nó fail-closed.** Nếu migration bị từ chối vì có bước phá dữ liệu, `migrate` exit 1,
+> `api` **không bao giờ start**, và schema giữ nguyên. Đã kiểm chứng: database ở revision
+> `013`, chạy `up -d api` → `migrate exit=1`, `api state=created`, schema vẫn `013`. API
+> không bao giờ chạy trên schema cũ.
 
 ```bash
-# 1. Áp dụng migration — chạy riêng, một lần, có kiểm tra an toàn trước
-docker compose --env-file .env.docker run --rm migrate
-
-# 2. Build và khởi động toàn bộ stack
+# Build và khởi động toàn bộ stack (migration chạy tự động, trước api)
 docker compose --env-file .env.docker up -d --build
+
+# Chỉ chạy migration, không khởi động gì khác — dùng khi cần override hoặc kiểm tra trước
+docker compose --env-file .env.docker run --rm migrate
 
 # Build và restart một service cụ thể (thường dùng nhất)
 docker compose --env-file .env.docker up -d --build api
@@ -149,8 +156,8 @@ uv run --extra dev pytest tests/ -q
 ## Alembic (DB migrations)
 
 ```bash
-# Áp dụng migration mới nhất — dùng service `migrate`, KHÔNG exec vào arkon_api.
-# Script này kiểm tra trước các bước phá dữ liệu và từ chối chạy nếu có (xem bên dưới).
+# `up -d` đã tự chạy migration. Lệnh dưới đây chỉ cần khi muốn chạy riêng — ví dụ để xem
+# pre-flight nói gì, hoặc để dùng ALLOW_DESTRUCTIVE_MIGRATIONS. KHÔNG exec vào arkon_api.
 docker compose --env-file .env.docker run --rm migrate
 
 # Chỉ kiểm tra, không ghi gì

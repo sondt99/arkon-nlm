@@ -4,6 +4,16 @@ Revision ID: 018
 Revises: 017
 Create Date: 2026-05-08 10:00:00.000000
 
+This revision drops skills.description (added by 012) and
+skill_contributions.description (added by 017) and originally did so with no archive, so
+every skill description written before it was destroyed the moment entrypoint.sh ran
+`alembic upgrade head` (issue #41).
+
+The archive added below does NOT recover anything on a database already past this
+revision — Alembic will not re-run an applied revision, and the columns are gone there.
+It protects only an environment still at or below 017, and fresh restores of pre-018
+dumps.
+
 """
 
 from typing import Sequence, Union
@@ -19,8 +29,85 @@ down_revision: Union[str, None] = '017'
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
 
+# Neither column has a successor. skill_contributions kept `title`, which is a 200-char
+# label rather than a body, and a skill's description is now read out of SKILL.md in
+# object storage at upload time (SkillService.inspect_zip) and never persisted. So there
+# is nothing to copy forward into, and the choice is archive or lose.
+#
+# app_config is the archive because it is the only durable store that already exists in
+# both a migrated database and a fresh one. A dedicated side table would diverge the two
+# — and because alembic/env.py's include_object only exempts unmodelled *indexes* and a
+# named legacy-table list, an unmodelled archive table would surface in the next
+# autogenerate as a proposed DROP TABLE. That is the exact mechanism that made this
+# revision drop four live indexes; it should not be reproduced to fix it.
+#
+# The rows are inert: ConfigService reads app_config only by explicit key, and both
+# get_all() and update_many() iterate the fixed ALL_CONFIG_KEYS allowlist, so an archive
+# key can never surface in — or be overwritten by — the admin config UI.
+_ARCHIVE_SKILLS_DESCRIPTION = """
+INSERT INTO app_config (key, value, updated_at)
+SELECT
+    'archived_018_skills_description',
+    jsonb_agg(
+        jsonb_build_object(
+            'id', s.id,
+            'slug', s.slug,
+            'name', s.name,
+            'description', s.description
+        ) ORDER BY s.slug
+    )::text,
+    now()
+FROM skills s
+WHERE s.description ~ '[^[:space:]]'
+HAVING count(*) > 0
+ON CONFLICT (key) DO UPDATE
+SET value = EXCLUDED.value, updated_at = now()
+"""
+
+_ARCHIVE_CONTRIBUTIONS_DESCRIPTION = """
+INSERT INTO app_config (key, value, updated_at)
+SELECT
+    'archived_018_skill_contributions_description',
+    jsonb_agg(
+        jsonb_build_object(
+            'id', c.id,
+            'skill_id', c.skill_id,
+            'contributor_id', c.contributor_id,
+            'title', c.title,
+            'description', c.description
+        ) ORDER BY c.created_at, c.id
+    )::text,
+    now()
+FROM skill_contributions c
+WHERE c.description ~ '[^[:space:]]'
+HAVING count(*) > 0
+ON CONFLICT (key) DO UPDATE
+SET value = EXCLUDED.value, updated_at = now()
+"""
+
+
+def _has_column(table: str, column: str) -> bool:
+    """Whether `table.column` exists right now.
+
+    The archive and the drops are both gated on this. A database that already lost these
+    columns must still be able to reach head: a migration that aborts on a fresh or
+    hand-repaired install is a worse failure than the one being fixed.
+    """
+    inspector = sa.inspect(op.get_bind())
+    if not inspector.has_table(table):
+        return False
+    return column in {c["name"] for c in inspector.get_columns(table)}
+
 
 def upgrade() -> None:
+    # --- Archive before anything below can drop it ---
+    # `HAVING count(*) > 0` keeps this a true no-op: a fresh install writes no row at all
+    # rather than an app_config entry holding an empty array.
+    if _has_column('skills', 'description'):
+        op.execute(_ARCHIVE_SKILLS_DESCRIPTION)
+    if _has_column('skill_contributions', 'description'):
+        op.execute(_ARCHIVE_CONTRIBUTIONS_DESCRIPTION)
+
     # --- Logic from 589ac254ec03 ---
     op.alter_column('app_config', 'updated_at',
                existing_type=postgresql.TIMESTAMP(timezone=True),
@@ -132,14 +219,23 @@ def upgrade() -> None:
                comment='active or archived',
                existing_nullable=False,
                existing_server_default=sa.text("'active'::character varying"))
-    op.add_column('skill_contributions', sa.Column('scope_type', sa.String(length=20), nullable=False, comment='Scope type for NEW skills: global or department'))
+    # Added nullable, backfilled, then constrained. In its original form — NOT NULL with
+    # no server_default — this aborts with NotNullViolationError against any database that
+    # already holds skill_contributions rows, which is exactly the population that has
+    # descriptions to lose in the drop below. So the archive above was unreachable on
+    # every install it was meant to protect. 025 still supplies the server_default; the
+    # resulting schema is unchanged.
+    op.add_column('skill_contributions', sa.Column('scope_type', sa.String(length=20), nullable=True, comment='Scope type for NEW skills: global or department'))
+    op.execute("UPDATE skill_contributions SET scope_type = 'global' WHERE scope_type IS NULL")
+    op.alter_column('skill_contributions', 'scope_type', existing_type=sa.String(length=20), nullable=False)
     op.add_column('skill_contributions', sa.Column('scope_ids', postgresql.JSONB(astext_type=sa.Text()), nullable=True, comment='List of Department IDs if scope_type is department'))
     op.alter_column('skill_contributions', 'storage_path',
                existing_type=sa.VARCHAR(length=1000),
                comment="MinIO prefix for this contribution's files, e.g. 'skill-contributions/{id}/'",
                existing_comment="MinIO prefix for this contribution's files, e.g. 'contributions/{id}/'",
                existing_nullable=True)
-    op.drop_column('skill_contributions', 'description')
+    # IF EXISTS, so the guarded archive above is not undone by an unguarded drop.
+    op.execute('ALTER TABLE skill_contributions DROP COLUMN IF EXISTS description')
     op.alter_column('skills', 'scope_type',
                existing_type=sa.VARCHAR(length=20),
                comment='Scope type: global, project, department, team',
@@ -150,7 +246,7 @@ def upgrade() -> None:
                comment='Scope entity ID. Null for global scope.',
                existing_nullable=True)
     op.drop_constraint(op.f('skills_slug_key'), 'skills', type_='unique')
-    op.drop_column('skills', 'description')
+    op.execute('ALTER TABLE skills DROP COLUMN IF EXISTS description')
     op.alter_column('sources', 'scope_type',
                existing_type=sa.VARCHAR(length=20),
                nullable=False,
@@ -207,8 +303,8 @@ def downgrade() -> None:
          had created that FK with `op.create_foreign_key(None, ...)`, letting Postgres name
          it, so there was no name to drop by.
       3. It re-created uq_wiki_pages_slug_scope WITHOUT deduplicating first, and re-added
-         skills.description after the upgrade had destroyed the data — so even a downgrade
-         that ran would not restore the pre-018 state.
+         skills.description as an empty column — so even a downgrade that ran would not
+         restore the pre-018 state.
 
     Nothing caught any of this because nothing ever ran a downgrade. CI now does, which is
     why this needed to become honest rather than merely quieter.
@@ -221,13 +317,21 @@ def downgrade() -> None:
     Migration 028 restores the three indexes 018 dropped that are still meaningful (the
     unique index and two GIN indexes), so an operator wanting the pre-018 *index* state
     should downgrade to 028 rather than past 018.
+
+    The two description columns are a separate matter from the downgrade. On a database
+    that ran the *current* upgrade() their contents are in app_config under
+    'archived_018_skills_description' and
+    'archived_018_skill_contributions_description', so an operator can re-add the columns
+    by hand and restore from that JSON by primary key. A database that ran the original
+    upgrade() has no archive and no way to produce one.
     """
     raise NotImplementedError(
         "Migration 018 cannot be reversed. Its autogenerated downgrade was written against "
         "a pre-015 schema and fails three separate ways (index on a dropped column, "
         "DROP CONSTRAINT NULL, and re-creating a unique index over un-deduplicated rows). "
-        "It also cannot restore the skills.description and skill_contributions.description "
-        "data that the upgrade destroyed. Restore from backup instead."
+        "It also does not restore the dropped description columns: re-add them by hand and "
+        "read the values back from app_config keys archived_018_skills_description and "
+        "archived_018_skill_contributions_description, or restore from backup."
     )
 
 

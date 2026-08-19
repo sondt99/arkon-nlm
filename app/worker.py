@@ -181,7 +181,7 @@ async def ingest_file_task(ctx: dict, source_id: str):
 
         except BaseException as e:
             logger.error(f"Pre-processing failed for {source_id}: {e}")
-            error_msg = str(e)[:500]
+            error_msg = (str(e).strip() or type(e).__name__)[:500]
             progress_msg = f"Error: {str(e)[:200]}"
 
             async def _mark_error_file() -> None:
@@ -260,7 +260,7 @@ async def ingest_url_task(ctx: dict, source_id: str):
 
         except BaseException as e:
             logger.error(f"URL ingestion failed for {source_id}: {e}")
-            error_msg = str(e)[:500]
+            error_msg = (str(e).strip() or type(e).__name__)[:500]
 
             async def _mark_error_url() -> None:
                 from app.database import async_session_factory as _sf
@@ -1013,7 +1013,7 @@ async def ingest_map_reduce_task(ctx: dict, source_id: str, auto_approve: bool =
 
         except BaseException as e:
             logger.error(f"MAP-REDUCE failed for {source_id}: {e}")
-            error_msg = str(e)[:500]
+            error_msg = (str(e).strip() or type(e).__name__)[:500]
 
             async def _mark_error_mr() -> None:
                 from app.database import async_session_factory as _sf

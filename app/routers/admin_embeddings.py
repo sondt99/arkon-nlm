@@ -10,7 +10,7 @@ Endpoints:
 """
 
 import uuid
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException
@@ -326,6 +326,6 @@ async def cancel_job(
             status_code=400, detail=f"Job is {job.status}, cannot cancel"
         )
     job.status = "cancelled"
-    job.finished_at = datetime.utcnow()
+    job.finished_at = datetime.now(timezone.utc)
     await db.commit()
     return _job_to_out(job)

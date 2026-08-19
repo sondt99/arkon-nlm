@@ -42,10 +42,14 @@ DEFAULT_ADMIN_EMAIL=admin@yourcompany.com
 DEFAULT_ADMIN_PASSWORD=        # strong password
 POSTGRES_PASSWORD=             # strong password
 REDIS_PASSWORD=                # strong password
-MINIO_ACCESS_KEY=minioadmin
+MINIO_ACCESS_KEY=              # NOT "minioadmin" — see below
 MINIO_SECRET_KEY=              # strong password, not minioadmin123
 DATABASE_URL=postgresql+asyncpg://arkon:<POSTGRES_PASSWORD>@postgres:5432/arkon
 ```
+
+Every one of those is checked at startup, and the API **refuses to boot** on a known-weak value
+rather than running with it. That includes `MINIO_ACCESS_KEY=minioadmin`, which the template still
+ships — change it too, or the API exits with `MINIO_ACCESS_KEY is a known default.`
 
 Leave these as they are for a local Docker run:
 
@@ -59,16 +63,34 @@ NGINX_PORT=3119
 
 `CORS_ORIGINS` empty is correct: the browser talks to nginx on one origin, so the API does not need a CORS wildcard.
 
+> **File download links do not work on a non-80 port.** `MINIO_PUBLIC_ENDPOINT` goes straight into
+> the presigned-URL signature, and nginx forwards `Host $host` — which strips the port. With
+> `NGINX_PORT=3119` you get one of two failures and no third option: `localhost` produces links to
+> port 80, where nothing is listening, and `localhost:3119` produces links that reach nginx and
+> then fail MinIO's signature check with `SignatureDoesNotMatch`. Everything else on this page
+> works either way; only downloading an uploaded file is affected. If you need it locally, set
+> `NGINX_PORT=80` and keep `MINIO_PUBLIC_ENDPOINT=localhost` (then read the portal at
+> `http://localhost` instead of `:3119`). Wiki **images** are unaffected — they are proxied through
+> the API, not presigned.
+
 ---
 
 ## 4. Start the stack
 
 Always pass `--env-file .env.docker`. Without it, Compose substitutes empty passwords and the containers cannot talk to each other.
 
+Two steps: migrations run as their own one-shot service, not on container start.
+Skipping the first leaves the schema behind the code.
+
 ```bash
+docker compose --env-file .env.docker run --rm migrate
 docker compose --env-file .env.docker up -d --build
 docker compose --env-file .env.docker ps
 ```
+
+`migrate` exits 0 and stays stopped. On a brand-new database it applies everything;
+on an existing one it refuses first if a pending revision would destroy data, naming
+the file and line. See DOCKER.md for the override.
 
 Wait until `arkon_api`, `arkon_frontend`, and `arkon_nginx` are healthy (about 30–60 seconds).
 
@@ -79,6 +101,10 @@ curl http://localhost:3119/api/health
 ```
 
 You want `"api": "healthy"` and `"database": "healthy"`.
+
+The endpoint answers **503** — not 200 — when a dependency is unreachable, so an
+orchestrator or uptime check can rely on the status code alone. If you have a monitor
+asserting `200`, it will now correctly alert on a half-broken stack instead of passing.
 
 ---
 
@@ -129,7 +155,7 @@ In Settings, provider **Ollama**, base URL `http://host.docker.internal:11434/v1
 
 1. **Knowledge Types → New** — e.g. `SOP` / slug `sop`.
 2. **Documents → Upload** — drop a PDF or DOCX, pick that knowledge type, scope **Global**.
-3. Watch the status: `pending` → `processing` → `plan_review` or `ready`.
+3. Watch the status: `pending` → `processing` → `plan_ready` or `ready`.
 
 If it sits on `pending`, the worker is not running: `docker compose --env-file .env.docker logs worker`.
 
@@ -171,7 +197,7 @@ Details: [MCP.md](MCP.md).
 ## Checklist
 
 - [ ] `arkon_default` network exists
-- [ ] `.env.docker` has unique secrets (not the example strings)
+- [ ] `.env.docker` has unique secrets (not the example strings, and not `minioadmin`)
 - [ ] `docker compose --env-file .env.docker ps` shows healthy
 - [ ] Login works at http://localhost:3119
 - [ ] Embedding + LLM tests pass

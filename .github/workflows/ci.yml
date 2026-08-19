@@ -15,10 +15,10 @@ jobs:
     name: Backend — lint + tests
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
 
       # Matches Dockerfile's python:3.12-slim so CI and the image agree.
-      - uses: actions/setup-python@v6
+      - uses: actions/setup-python@v7
         with:
           python-version: "3.12"
           cache: pip
@@ -46,10 +46,10 @@ jobs:
       run:
         working-directory: frontend
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
 
       # Matches frontend/Dockerfile's node:22-alpine.
-      - uses: actions/setup-node@v5
+      - uses: actions/setup-node@v7
         with:
           node-version: "22"
           cache: npm
@@ -117,14 +117,14 @@ jobs:
     name: Docker images build
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
 
-      - uses: docker/setup-buildx-action@v3
+      - uses: docker/setup-buildx-action@v4
 
       # Build-verify all three images so a pip/npm resolution break, or a bad nginx
       # directive, is caught here rather than during a production deploy.
       - name: Build backend image
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@v7
         with:
           context: .
           push: false
@@ -132,7 +132,7 @@ jobs:
           cache-to: type=gha,mode=max
 
       - name: Build frontend image
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@v7
         with:
           context: ./frontend
           push: false
@@ -145,7 +145,7 @@ jobs:
       # nginx.conf or http-common.conf fails the build here instead of taking the
       # ingress down on deploy.
       - name: Build nginx image (runs nginx -t)
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@v7
         with:
           context: ./nginx
           push: false
@@ -172,9 +172,9 @@ jobs:
       ARKON_ALLOW_DEFAULT_SECRET: "1"
       DATABASE_URL: postgresql+asyncpg://arkon:ci_test_password@localhost:5432/arkon
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
 
-      - uses: actions/setup-python@v6
+      - uses: actions/setup-python@v7
         with:
           python-version: "3.12"
           cache: pip

@@ -92,8 +92,7 @@ async def lifespan(app: FastAPI):
         if settings.default_admin_password == "change-me-admin-password":
             logger.warning("⚠️  DEFAULT_ADMIN_PASSWORD is unchanged — change the admin password after first login!")
         if "*" in settings.cors_origin_list:
-            import os
-            if os.environ.get("ARKON_ALLOW_CORS_WILDCARD") != "1":
+            if not settings.arkon_allow_cors_wildcard:
                 raise RuntimeError(
                     "CORS_ORIGINS is '*' with credentials enabled — any website can call this "
                     "API using a user's token. Set CORS_ORIGINS to your actual frontend origin(s). "

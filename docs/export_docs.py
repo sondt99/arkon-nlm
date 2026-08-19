@@ -12,22 +12,20 @@ Run: python docs/export_docs.py
 
 import io
 import re
-import os
 from pathlib import Path
 
 import matplotlib
-matplotlib.use("Agg")
-import matplotlib.pyplot as plt
-import matplotlib.patches as mpatches
-from matplotlib.patches import FancyArrowPatch, FancyBboxPatch
-import matplotlib.patheffects as pe
 
+matplotlib.use("Agg")
+import matplotlib.patches as mpatches
+import matplotlib.pyplot as plt
 from docx import Document
-from docx.shared import Inches, Pt, RGBColor, Cm
-from docx.enum.text import WD_ALIGN_PARAGRAPH
 from docx.enum.style import WD_STYLE_TYPE
-from docx.oxml.ns import qn
+from docx.enum.text import WD_ALIGN_PARAGRAPH
 from docx.oxml import OxmlElement
+from docx.oxml.ns import qn
+from docx.shared import Cm, Inches, Pt, RGBColor
+from matplotlib.patches import FancyBboxPatch
 
 # ── Paths ────────────────────────────────────────────────────────────────────
 DOCS_DIR = Path(__file__).parent
@@ -96,7 +94,8 @@ def fig_to_bytes(fig):
 def make_architecture_diagram():
     fig, ax = plt.subplots(figsize=(14, 9))
     fig.patch.set_facecolor(hex_to_rgb(C["bg"]))
-    ax.set_xlim(0, 14); ax.set_ylim(0, 9)
+    ax.set_xlim(0, 14)
+    ax.set_ylim(0, 9)
     ax.axis("off")
     ax.set_facecolor(hex_to_rgb(C["bg"]))
     ax.set_title("Kiến trúc hệ thống Arkon", fontsize=16, fontweight="bold",
@@ -210,7 +209,8 @@ def make_architecture_diagram():
 def make_mrp_pipeline():
     fig, ax = plt.subplots(figsize=(14, 7))
     fig.patch.set_facecolor(hex_to_rgb(C["bg"]))
-    ax.set_xlim(0, 14); ax.set_ylim(0, 7)
+    ax.set_xlim(0, 14)
+    ax.set_ylim(0, 7)
     ax.axis("off")
     ax.set_facecolor(hex_to_rgb(C["bg"]))
     ax.set_title("MRP Pipeline — Quy trình xử lý tài liệu", fontsize=15,
@@ -276,7 +276,8 @@ def make_mrp_pipeline():
 def make_upload_flow():
     fig, ax = plt.subplots(figsize=(13, 6.5))
     fig.patch.set_facecolor(hex_to_rgb(C["bg"]))
-    ax.set_xlim(0, 13); ax.set_ylim(0, 6.5)
+    ax.set_xlim(0, 13)
+    ax.set_ylim(0, 6.5)
     ax.axis("off")
     ax.set_facecolor(hex_to_rgb(C["bg"]))
     ax.set_title("Luồng Upload & Xử lý Tài liệu", fontsize=15,
@@ -350,7 +351,8 @@ def make_upload_flow():
 def make_rbac_diagram():
     fig, ax = plt.subplots(figsize=(13, 7))
     fig.patch.set_facecolor(hex_to_rgb(C["bg"]))
-    ax.set_xlim(0, 13); ax.set_ylim(0, 7)
+    ax.set_xlim(0, 13)
+    ax.set_ylim(0, 7)
     ax.axis("off")
     ax.set_facecolor(hex_to_rgb(C["bg"]))
     ax.set_title("Mô hình phân quyền (Dual-Realm RBAC)", fontsize=15,
@@ -440,7 +442,8 @@ def make_rbac_diagram():
 def make_db_schema():
     fig, ax = plt.subplots(figsize=(14, 8))
     fig.patch.set_facecolor(hex_to_rgb(C["bg"]))
-    ax.set_xlim(0, 14); ax.set_ylim(0, 8)
+    ax.set_xlim(0, 14)
+    ax.set_ylim(0, 8)
     ax.axis("off")
     ax.set_facecolor(hex_to_rgb(C["bg"]))
     ax.set_title("Database Schema — Các bảng chính (PostgreSQL + pgvector)", fontsize=14,
@@ -587,7 +590,8 @@ def make_db_schema():
 def make_mcp_diagram():
     fig, ax = plt.subplots(figsize=(13, 6))
     fig.patch.set_facecolor(hex_to_rgb(C["bg"]))
-    ax.set_xlim(0, 13); ax.set_ylim(0, 6)
+    ax.set_xlim(0, 13)
+    ax.set_ylim(0, 6)
     ax.axis("off")
     ax.set_facecolor(hex_to_rgb(C["bg"]))
     ax.set_title("Tích hợp MCP — Claude ↔ Arkon Knowledge Base", fontsize=15,
@@ -645,7 +649,8 @@ def make_mcp_diagram():
 def make_notebooklm_diagram():
     fig, ax = plt.subplots(figsize=(14, 7))
     fig.patch.set_facecolor(hex_to_rgb(C["bg"]))
-    ax.set_xlim(0, 14); ax.set_ylim(0, 7)
+    ax.set_xlim(0, 14)
+    ax.set_ylim(0, 7)
     ax.axis("off")
     ax.set_facecolor(hex_to_rgb(C["bg"]))
     ax.set_title("Luồng tích hợp NotebookLM", fontsize=15,
@@ -836,7 +841,6 @@ def md_to_docx(doc: Document, md_text: str, skip_h1: bool = False):
     lines = md_text.split("\n")
     in_code = False
     code_buf = []
-    in_table = False
 
     def flush_code():
         nonlocal code_buf

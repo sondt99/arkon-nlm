@@ -1,0 +1,18 @@
+{
+  "_comment": [
+    "Ratchet baseline for `npm run lint`. CI fails if the error count rises above this.",
+    "It may only ever be lowered. When it reaches 0, replace the ratchet step in",
+    ".github/workflows/ci.yml with a plain `npm run lint` and delete this file.",
+    "",
+    "These are not arbitrary style debt. The dominant rules map directly to filed bugs:",
+    "  react-hooks/set-state-in-effect (51) -> the state-race and stale-response defects",
+    "                                          in issues #73 #74 #77 #79 #91",
+    "  react-hooks/refs (8)                 -> the ref-during-render reads in #80 #91",
+    "  react-hooks/immutability (3),        -> React Compiler correctness rules; this",
+    "  purity (1), preserve-manual-memo (1)    project has the compiler in devDependencies",
+    "So burning this number down is the same work as closing the frontend issues."
+  ],
+  "maxErrors": 86,
+  "recordedAt": "2026-08-19",
+  "recordedAtCommit": "79163d6"
+}

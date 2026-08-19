@@ -15,7 +15,6 @@ from app.ai.agent_protocol import (
 )
 from app.ai.providers.base import LLMProvider, ProviderConfig, VisionProvider
 
-
 # Models that reject temperature / top_p / top_k (400 invalid_request_error).
 _NO_SAMPLING_MARKERS = (
     "opus-4-8",

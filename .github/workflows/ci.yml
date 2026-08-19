@@ -1,0 +1,205 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  backend:
+    name: Backend — lint + tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # Matches Dockerfile's python:3.12-slim so CI and the image agree.
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install
+        run: pip install -e ".[dev]"
+
+      # Whole repo, not just app/ and tests/. The narrower command that CONTRIBUTING.md
+      # used to document reported success while 17 real errors sat in dedup.py and
+      # docs/export_docs.py.
+      #
+      # `ruff format --check` is deliberately NOT run here: the formatter has never been
+      # applied to this repo and would reformat 100 of 169 files. Adopting it belongs in
+      # its own commit, or every future diff is buried under it.
+      - name: Lint
+        run: ruff check .
+
+      - name: Tests
+        run: pytest
+
+  frontend:
+    name: Frontend — lint + typecheck + build
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: frontend
+    steps:
+      - uses: actions/checkout@v4
+
+      # Matches frontend/Dockerfile's node:22-alpine.
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Install
+        run: npm ci
+
+      # eslint currently reports 86 errors, dominated by react-hooks/set-state-in-effect
+      # (51) — which is not style debt but the actual state-race class behind the filed
+      # frontend bugs. A plain `npm run lint` would fail on arrival; marking it
+      # continue-on-error would mean nobody ever looks at it.
+      #
+      # So it is a ratchet: the count may only go down. Baseline in
+      # frontend/.eslint-baseline.json. When it reaches 0, replace this with
+      # `run: npm run lint` and delete the baseline file.
+      - name: Lint (ratchet — count may not increase)
+        run: |
+          npx eslint . -f json > /tmp/eslint.json || true
+          node -e '
+            const fs = require("fs");
+            const report = JSON.parse(fs.readFileSync("/tmp/eslint.json", "utf8"));
+            const base = JSON.parse(
+              fs.readFileSync("./.eslint-baseline.json", "utf8")
+            ).maxErrors;
+            const errors = report.reduce((a, f) => a + f.errorCount, 0);
+            const byRule = {};
+            for (const f of report)
+              for (const m of f.messages)
+                if (m.severity === 2)
+                  byRule[m.ruleId] = (byRule[m.ruleId] || 0) + 1;
+            console.log("eslint errors: %d (baseline %d)", errors, base);
+            console.log(JSON.stringify(byRule, null, 1));
+            if (errors > base) {
+              console.error(
+                `::error::eslint errors rose from ${base} to ${errors}. ` +
+                "Fix the new ones, or justify raising the baseline."
+              );
+              process.exit(1);
+            }
+            if (errors < base) {
+              console.log(
+                `::notice::eslint errors down to ${errors} — lower maxErrors in ` +
+                "frontend/.eslint-baseline.json to lock the improvement in."
+              );
+            }
+          '
+
+      # tsc --noEmit covers every file, not only those reachable from the build graph,
+      # which is why it runs in addition to the build below. This one is already clean,
+      # so it is a hard gate.
+      - name: Typecheck
+        run: npm run typecheck
+
+      - name: Build
+        run: npm run build
+
+  images:
+    name: Docker images build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: docker/setup-buildx-action@v3
+
+      # Build-verify both images so a pip/npm resolution break is caught here rather
+      # than during a production deploy — where entrypoint.sh would then run
+      # `alembic upgrade head` unattended against a real database.
+      - name: Build backend image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: false
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Build frontend image
+        uses: docker/build-push-action@v6
+        with:
+          context: ./frontend
+          push: false
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+  migrations:
+    name: Migrations apply and reverse
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: pgvector/pgvector:pg16
+        env:
+          POSTGRES_USER: arkon
+          POSTGRES_PASSWORD: ci_test_password
+          POSTGRES_DB: arkon
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U arkon -d arkon"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
+    env:
+      ARKON_ALLOW_DEFAULT_SECRET: "1"
+      DATABASE_URL: postgresql+asyncpg://arkon:ci_test_password@localhost:5432/arkon
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install
+        run: pip install -e ".[dev]"
+
+      - name: Enable pgvector
+        run: |
+          PGPASSWORD=ci_test_password psql -h localhost -U arkon -d arkon \
+            -c "CREATE EXTENSION IF NOT EXISTS vector;"
+
+      - name: Upgrade to head
+        run: alembic upgrade head
+
+      # Migration 018 shipped a downgrade that could not run at all — it rebuilt an index
+      # on a column 015 had dropped, and called drop_constraint(None). Nothing caught it
+      # because nothing ever ran a downgrade. This step does.
+      - name: Reverse the newest migrations and re-apply
+        run: |
+          alembic downgrade -2
+          alembic upgrade head
+
+      # Autogenerate against a database at head must propose no *structural* change.
+      # This is the gate that would have caught migration 018 dropping four live indexes
+      # (including the only uniqueness guarantee on wiki_pages.slug) because they were
+      # created with raw SQL and therefore invisible to Base.metadata.
+      #
+      # Scope note: alter_column is deliberately NOT gated. There are ~20 pre-existing
+      # column-attribute drifts — comment text, created_at/updated_at nullability, and the
+      # chat_messages.sources JSON-vs-JSONB mismatch — none destructive, all tracked in
+      # issue #85. Gating them today would make CI red on arrival, and a permanently red
+      # check teaches people to ignore it. Narrow the exclusion as #85 is fixed.
+      - name: Fail if models have structurally drifted from migrations
+        run: |
+          alembic revision --autogenerate -m ci_drift_probe
+          PROBE=$(ls -t alembic/versions/*ci_drift_probe*.py | head -1)
+          STRUCTURAL='op\.(drop_index|drop_table|drop_column|drop_constraint|create_index|create_table|add_column|create_unique_constraint|create_foreign_key)'
+          if grep -qE "^\s+$STRUCTURAL" "$PROBE"; then
+            echo "::error::Structural drift between models and migrations. Autogenerate proposed:"
+            grep -nE "^\s+$STRUCTURAL" "$PROBE"
+            rm -f "$PROBE"
+            exit 1
+          fi
+          rm -f "$PROBE"
+          echo "No structural drift."

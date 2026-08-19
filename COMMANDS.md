@@ -139,19 +139,24 @@ docker compose --env-file .env.docker up -d --build frontend
 > Tests live in **`tests/`** at the repo root, **not** `app/tests/`. `pytest app/tests/` fails
 > with "file or directory not found".
 
-With a local virtualenv (see `README.md` "Development"):
+`pytest` and `ruff` live in the **`dev`** extra, not the default dependency set, so a bare
+`uv run pytest` cannot resolve them. Pass `--extra dev`:
+
+```bash
+uv run --extra dev pytest tests/ -q
+uv run --extra dev ruff check .        # whole repo — CI does the same
+```
+
+With a local virtualenv installed via `pip install -e ".[dev]"` (see `README.md`
+"Development"):
 
 ```bash
 .venv/bin/python -m pytest tests/ -q
-.venv/bin/python -m ruff check app/ tests/
+.venv/bin/python -m ruff check .
 ```
 
-Without one, `uv` runs both without a persistent venv:
-
-```bash
-uv run pytest tests/ -q
-uv run ruff check app/ tests/
-```
+> Lint the **whole repo**, not just `app/ tests/`. The narrower command reported success
+> while 17 real errors sat in files outside it.
 
 Import smoke-test inside the running container:
 

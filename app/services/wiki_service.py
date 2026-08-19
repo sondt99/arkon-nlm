@@ -17,7 +17,8 @@ from datetime import datetime, timezone
 from typing import Optional
 
 from loguru import logger
-from sqlalchemy import and_, delete, false as sql_false, func, or_, select, text
+from sqlalchemy import and_, delete, func, or_, select, text
+from sqlalchemy import false as sql_false
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 

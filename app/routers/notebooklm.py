@@ -29,7 +29,11 @@ from sqlalchemy.orm import selectinload
 from app.database import get_db
 from app.database.models import NotebookLMArtifact, NotebookLMNotebook, Source
 from app.services.audit_service import log_audit
-from app.services.auth_service import get_current_user, require_admin, require_permission
+from app.services.auth_service import (
+    get_current_user,
+    require_admin,
+    require_permission,
+)
 from app.worker import get_arq_pool
 
 router = APIRouter()

@@ -109,14 +109,29 @@ class Settings(BaseSettings):
         ),
     )
 
-    model_config = {"env_file": ".env", "env_file_encoding": "utf-8", "extra": "ignore"}
+    # --- Development escape hatches ---
+    # Declared as real settings fields so they can be set in .env / .env.local as the
+    # docs instruct. Reading them via os.environ made a dotenv entry silently invisible,
+    # because pydantic-settings never writes to os.environ.
+    arkon_allow_default_secret: bool = Field(
+        default=False,
+        description="Skip the weak-secret validation below. Development only.",
+    )
+    arkon_allow_cors_wildcard: bool = Field(
+        default=False,
+        description="Permit CORS_ORIGINS='*' together with credentials. Development only.",
+    )
+
+    # Later files win, so .env.local overrides .env for local development.
+    model_config = {
+        "env_file": (".env", ".env.local"),
+        "env_file_encoding": "utf-8",
+        "extra": "ignore",
+    }
 
     @model_validator(mode="after")
     def validate_secrets(self):
-        import os
-        import sys
-        bypass = "pytest" in sys.modules or os.environ.get("ARKON_ALLOW_DEFAULT_SECRET") == "1"
-        if bypass:
+        if self.arkon_allow_default_secret:
             return self
 
         if self.secret_key == "change-me-to-a-random-secret-string":
@@ -129,10 +144,27 @@ class Settings(BaseSettings):
             raise ValueError(
                 "DEFAULT_ADMIN_PASSWORD is a weak default. Set a strong password in your .env file."
             )
-        if self.minio_access_key == "minioadmin" and self.minio_secret_key == "minioadmin123":
+
+        # Each credential is checked independently. The previous `and` over one exact
+        # pair meant the values this repo actually ships in .env.docker.example
+        # (minioadmin / change-me-minio-secret-key) passed validation cleanly.
+        weak_minio_access = {"minioadmin"}
+        weak_minio_secret = {"minioadmin123", "change-me-minio-secret-key"}
+        if self.minio_access_key in weak_minio_access:
             raise ValueError(
-                "MINIO_ACCESS_KEY / MINIO_SECRET_KEY are still MinIO factory defaults. "
-                "Set unique credentials in your .env file."
+                "MINIO_ACCESS_KEY is a known default. Set a unique value in your .env file."
+            )
+        if self.minio_secret_key in weak_minio_secret:
+            raise ValueError(
+                "MINIO_SECRET_KEY is a known default. Set a unique value in your .env file."
+            )
+        if self.redis_password in {"", "change-me-redis-password"}:
+            raise ValueError(
+                "REDIS_PASSWORD is unset or a known default. Set a unique value in your .env file."
+            )
+        if "arkon_secret" in self.database_url or "change-me-postgres-password" in self.database_url:
+            raise ValueError(
+                "DATABASE_URL still embeds a default password. Set a unique value in your .env file."
             )
         return self
 

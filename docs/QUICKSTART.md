@@ -79,18 +79,29 @@ NGINX_PORT=3119
 
 Always pass `--env-file .env.docker`. Without it, Compose substitutes empty passwords and the containers cannot talk to each other.
 
-Two steps: migrations run as their own one-shot service, not on container start.
-Skipping the first leaves the schema behind the code.
-
 ```bash
-docker compose --env-file .env.docker run --rm migrate
 docker compose --env-file .env.docker up -d --build
 docker compose --env-file .env.docker ps
 ```
 
-`migrate` exits 0 and stays stopped. On a brand-new database it applies everything;
-on an existing one it refuses first if a pending revision would destroy data, naming
-the file and line. See DOCKER.md for the override.
+Migrations are applied by a one-shot `migrate` service that `api` waits on
+(`depends_on: {migrate: {condition: service_completed_successfully}}`), so `up -d`
+handles them and they cannot be skipped. They no longer run from every container's
+entrypoint, which is what previously made `restart worker` re-migrate production.
+
+**This fails closed.** If a pending revision would destroy data, `migrate` refuses and
+exits 1, `api` never starts, and the schema is left untouched — verified against a
+database at revision `013`, which yielded `migrate exit=1`, `api state=created`, and
+the schema still at `013`. The API is never served against a stale schema.
+
+To run the migration alone — to read the pre-flight output, or to pass
+`ALLOW_DESTRUCTIVE_MIGRATIONS=1`:
+
+```bash
+docker compose --env-file .env.docker run --rm migrate
+```
+
+See DOCKER.md for the override and the backup command it prints.
 
 Wait until `arkon_api`, `arkon_frontend`, and `arkon_nginx` are healthy (about 30–60 seconds).
 

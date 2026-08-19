@@ -16,11 +16,20 @@ Not "it should work" — what you actually ran and observed. Paste the commands.
 A PR whose only verification is "typechecks" has not been verified.
 -->
 
-- [ ] `uv run --extra dev ruff check app/ tests/`
-- [ ] `uv run --extra dev pytest tests/ -q`  <!-- --extra dev is required: pytest is an optional dep -->
+CI runs all of these on every PR and they are **required to pass before merge**
+(branch protection on `main`). Run them locally first so review is not spent on
+a red build:
 
-- [ ] `cd frontend && ./node_modules/.bin/tsc --noEmit`
-- [ ] `cd frontend && npm run lint`
+- [ ] `uv run --extra dev ruff check .`
+- [ ] `uv run --extra dev python -m pytest -q`  <!-- --extra dev is required: pytest is an optional dep -->
+- [ ] `ARKON_ALLOW_DEFAULT_SECRET=1 uv run --extra dev python -c "import app.main as m; m.app.openapi()"`
+      <!-- FastAPI 0.141 includes routers LAZILY, so a plain import proves nothing.
+           openapi() forces materialization — this is what catches a bad signature. -->
+
+- [ ] `cd frontend && npm run typecheck`
+- [ ] `cd frontend && npm run test`
+- [ ] `cd frontend && npm run lint`  <!-- ratchet: the error count may not rise; see .eslint-baseline.json -->
+- [ ] `cd frontend && npm run build`
 - [ ] Exercised the affected flow in a running stack, not just tests
 
 <details>

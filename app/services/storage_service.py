@@ -2,6 +2,7 @@
 MinIO storage service — file upload, download, presigned URLs.
 """
 
+import asyncio
 import io
 from datetime import timedelta
 from typing import IO, Optional
@@ -27,7 +28,14 @@ def safe_relative_path(path: str) -> str:
 
 
 class StorageService:
-    """S3-compatible object storage via MinIO."""
+    """S3-compatible object storage via MinIO.
+
+    Every method here is synchronous: the MinIO SDK is urllib3, so each call is a blocking
+    socket round-trip. Each one therefore has an `*_async` twin that offloads to a worker
+    thread — coroutines MUST use those. Calling the sync form from a coroutine holds the
+    event loop for the whole transfer, which is how one 300 MB upload used to stall every
+    other request in the process, `/health` included.
+    """
 
     def __init__(self):
         self._client: Optional[Minio] = None
@@ -64,7 +72,7 @@ class StorageService:
             self._presign_client = client
         return self._presign_client
 
-    async def ensure_bucket(self):
+    def ensure_bucket_sync(self):
         """Create the default bucket if it doesn't exist."""
         bucket = settings.minio_bucket
         try:
@@ -76,6 +84,16 @@ class StorageService:
         except S3Error as e:
             logger.error(f"Failed to ensure MinIO bucket: {e}")
             raise
+
+    async def ensure_bucket(self):
+        """Non-blocking wrapper for ensure_bucket_sync using asyncio.to_thread.
+
+        This was the most misleading site in the file: an `async def` whose body was two
+        bare urllib3 round-trips, so `await ensure_bucket()` looked like it yielded and
+        never did. It runs on the API's startup path, where a slow or unreachable MinIO
+        froze the loop before the server could answer anything at all.
+        """
+        await asyncio.to_thread(self.ensure_bucket_sync)
 
     def upload_file(
         self,
@@ -95,6 +113,15 @@ class StorageService:
         logger.debug(f"Uploaded {object_name} to MinIO ({len(data)} bytes)")
         return object_name
 
+    async def upload_file_async(
+        self,
+        object_name: str,
+        data: bytes,
+        content_type: str = "application/octet-stream",
+    ) -> str:
+        """Non-blocking wrapper for upload_file using asyncio.to_thread."""
+        return await asyncio.to_thread(self.upload_file, object_name, data, content_type)
+
     def download_file(self, object_name: str) -> bytes:
         """Download a file from MinIO and return its bytes."""
         bucket = settings.minio_bucket
@@ -106,6 +133,16 @@ class StorageService:
             if response:
                 response.close()
                 response.release_conn()
+
+    async def download_file_async(self, object_name: str) -> bytes:
+        """Non-blocking wrapper for download_file using asyncio.to_thread.
+
+        The offload has to cover `response.read()` as well as `get_object`, which is why
+        the whole sync method is handed to the thread rather than just the call that
+        returns the response — get_object only sends the request headers; the body is
+        streamed by read().
+        """
+        return await asyncio.to_thread(self.download_file, object_name)
 
     def upload_stream(
         self,
@@ -133,7 +170,6 @@ class StorageService:
         content_type: str = "application/octet-stream",
     ) -> str:
         """Non-blocking wrapper for upload_stream using asyncio.to_thread."""
-        import asyncio
         return await asyncio.to_thread(
             self.upload_stream, object_name, stream, length, content_type
         )
@@ -161,14 +197,41 @@ class StorageService:
             expires=expires,
         )
 
+    async def get_presigned_url_async(
+        self,
+        object_name: str,
+        expiry_hours: Optional[int] = None,
+    ) -> str:
+        """Non-blocking wrapper for get_presigned_url using asyncio.to_thread.
+
+        Signing itself is local HMAC, but presigned_get_object resolves the bucket region
+        first and only skips the network for the one bucket presign_client pre-seeds — any
+        other bucket, or a region-map miss, turns this into a blocking GetBucketLocation.
+        """
+        return await asyncio.to_thread(self.get_presigned_url, object_name, expiry_hours)
+
     def delete_object(self, object_name: str):
         """Delete a file from MinIO."""
         self.client.remove_object(settings.minio_bucket, object_name)
         logger.debug(f"Deleted {object_name} from MinIO")
 
+    async def delete_object_async(self, object_name: str):
+        """Non-blocking wrapper for delete_object using asyncio.to_thread."""
+        await asyncio.to_thread(self.delete_object, object_name)
+
     def list_objects(self, prefix: str, recursive: bool = True):
         """List all objects under a given prefix."""
         return self.client.list_objects(settings.minio_bucket, prefix=prefix, recursive=recursive)
+
+    async def list_objects_async(self, prefix: str, recursive: bool = True) -> list:
+        """Non-blocking wrapper for list_objects using asyncio.to_thread.
+
+        Returns a materialised list, not a generator. minio's list_objects is lazy: the
+        paginated ListObjects requests are issued while the generator is *drained*, so
+        offloading only the call that returns it would move nothing off the loop and leave
+        every `for obj in ...` step blocking. The drain has to happen inside the thread.
+        """
+        return await asyncio.to_thread(lambda: list(self.list_objects(prefix, recursive)))
 
     def delete_prefix(self, prefix: str):
         """Delete all objects with a given prefix (e.g. a source's files)."""
@@ -177,6 +240,15 @@ class StorageService:
             if obj.object_name:
                 self.client.remove_object(settings.minio_bucket, obj.object_name)
         logger.debug(f"Deleted all objects with prefix: {prefix}")
+
+    async def delete_prefix_async(self, prefix: str):
+        """Non-blocking wrapper for delete_prefix using asyncio.to_thread.
+
+        One offload covers the whole loop — the list drain plus one remove_object per
+        object. Deleting a source with hundreds of extracted images is that many
+        sequential round-trips.
+        """
+        await asyncio.to_thread(self.delete_prefix, prefix)
 
     def copy_object(self, src_key: str, dest_key: str):
         """Copy a single object within the same bucket."""
@@ -238,7 +310,13 @@ class StorageService:
             count += 1
         
         logger.info(f"Copied folder content ({count} objects) from {src_p} to {dest_p}")
-    
+
+    async def copy_prefix_async(
+        self, src_prefix: str, dest_prefix: str, is_file: Optional[bool] = None
+    ):
+        """Non-blocking wrapper for copy_prefix using asyncio.to_thread."""
+        await asyncio.to_thread(self.copy_prefix, src_prefix, dest_prefix, is_file)
+
     def move_prefix(self, src_prefix: str, dest_prefix: str):
         """Move all objects from one prefix to another (recursively), then delete source.
 
@@ -265,6 +343,15 @@ class StorageService:
             
         logger.info(f"Moved {src_prefix} to {dest_prefix}")
 
+    async def move_prefix_async(self, src_prefix: str, dest_prefix: str):
+        """Non-blocking wrapper for move_prefix using asyncio.to_thread.
+
+        The stat/copy/delete sequence must stay in one offload: splitting it would let the
+        loop interleave another mover between the copy and the delete, and move_prefix's
+        whole point is that the is_file determination is made once for both halves.
+        """
+        await asyncio.to_thread(self.move_prefix, src_prefix, dest_prefix)
+
     def calculate_prefix_hash(self, prefix: str) -> str:
         """
         Calculate a unique hash for all objects under a prefix.
@@ -284,8 +371,16 @@ class StorageService:
             # Combine path and etag
             hasher.update(rel_path.encode("utf-8"))
             hasher.update(obj.etag.encode("utf-8"))
-            
+
         return hasher.hexdigest()
+
+    async def calculate_prefix_hash_async(self, prefix: str) -> str:
+        """Non-blocking wrapper for calculate_prefix_hash using asyncio.to_thread.
+
+        `sorted(objects)` is the drain of a lazy minio generator, so the paginated listing
+        happens here rather than on the line above it.
+        """
+        return await asyncio.to_thread(self.calculate_prefix_hash, prefix)
 
 
 # Singleton

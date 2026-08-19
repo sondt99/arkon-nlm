@@ -8,6 +8,7 @@ from pydantic import BaseModel
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.config import settings
 from app.database import get_db
 from app.database.models import Employee, Skill
 from app.services.auth_service import (
@@ -27,6 +28,20 @@ router = APIRouter()
 def _assert_not_system(skill: Skill) -> None:
     if skill.is_system:
         raise HTTPException(403, "System skills are read-only and cannot be modified or deleted")
+
+
+def _assert_archive_within_limit(file: UploadFile) -> None:
+    """Reject an oversized skill archive before anything reads it.
+
+    All three skill upload endpoints hand the UploadFile straight to SkillService, which
+    does an unbounded `await file.read()` and then inflates the result with zipfile. Until
+    this guard the only cap on any of them was nginx's 500 MB.
+    """
+    from app.services.upload_guard import assert_upload_within_limit
+
+    assert_upload_within_limit(
+        file, limit_mb=settings.max_zip_upload_mb, what="Skill archive"
+    )
 
 
 # --- Pydantic Models ---
@@ -117,6 +132,9 @@ async def upload_skills(
             # Or just deny. Let's deny for now to be safe.
             raise HTTPException(403, "You do not have permission to create global skills")
 
+    for f in files:
+        _assert_archive_within_limit(f)
+
     if user.role != "admin":
         # Create contributions instead of direct skills
         results = []
@@ -150,6 +168,8 @@ async def reupload_skill(
         raise HTTPException(status_code=403, detail="Access denied")
     _assert_not_system(skill)
 
+    _assert_archive_within_limit(file)
+
     if user.role != "admin":
         # Create contribution instead of direct update
         contribution = await SkillService.create_contribution_from_zip(
@@ -171,6 +191,8 @@ async def inspect_skill_zip(
     _user: Employee = require_permission("skill:create"),
 ):
     """Peek into a ZIP package to extract metadata without saving anything to the database."""
+    _assert_archive_within_limit(file)
+
     result = await SkillService.inspect_zip(file)
     return result
 
@@ -271,13 +293,12 @@ async def list_skill_files(
         return []
 
     # List objects in MinIO
-    from app.config import settings
     logger.info(f"Listing MinIO objects with bucket={settings.minio_bucket} prefix={prefix}")
     # Ensure prefix ends with / for clean relative path replacement
     prefix_for_list = prefix if prefix.endswith("/") else f"{prefix}/"
     logger.info(f"[Debug] Listing files: skill_id={skill_id}, version={version}, prefix_for_list={prefix_for_list}")
-    objects = storage_service.client.list_objects(settings.minio_bucket, prefix=prefix_for_list, recursive=True)
-    
+    objects = await storage_service.list_objects_async(prefix_for_list, recursive=True)
+
     files = []
     for obj in objects:
         # Extract relative path from full object name
@@ -380,7 +401,7 @@ async def get_skill_file_content(
 
         for full_p, pth in combinations:
             try:
-                content_bytes = storage_service.download_file(full_p)
+                content_bytes = await storage_service.download_file_async(full_p)
                 logger.info(f"[Debug] Found file at: {full_p}")
                 return {"content": content_bytes.decode("utf-8", errors="ignore")}
             except Exception:
@@ -388,14 +409,12 @@ async def get_skill_file_content(
 
         # If all fail, list objects to find it (Fuzzy match)
         logger.info(f"[Debug] All standard paths failed, listing objects to find match for: {path}")
-        from app.config import settings
-        # Use client directly as StorageService doesn't have list_objects
-        objects = storage_service.client.list_objects(settings.minio_bucket, prefix=prefix, recursive=True)
+        objects = await storage_service.list_objects_async(prefix, recursive=True)
         target_suffix = path.split("/")[-1]
         for obj in objects:
             if obj.object_name.endswith(path) or (obj.object_name.endswith(target_suffix) and path in obj.object_name):
                 logger.info(f"[Debug] Found fuzzy match: {obj.object_name}")
-                content_bytes = storage_service.download_file(obj.object_name)
+                content_bytes = await storage_service.download_file_async(obj.object_name)
                 return {"content": content_bytes.decode("utf-8", errors="ignore")}
 
         raise HTTPException(status_code=404, detail=f"File {path} not found in skill storage.")

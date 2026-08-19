@@ -221,8 +221,9 @@ class FetchModelsResult(BaseModel):
     models: list[str]
 
 
-def _validate_external_url(raw_url: str) -> str:
+async def _validate_external_url(raw_url: str) -> str:
     """Block requests to private/internal networks (SSRF prevention)."""
+    import asyncio
     import ipaddress
     import socket
     from urllib.parse import urlparse
@@ -242,7 +243,12 @@ def _validate_external_url(raw_url: str) -> str:
         raise HTTPException(status_code=400, detail="Requests to localhost are not allowed")
 
     try:
-        resolved = socket.getaddrinfo(hostname, None, socket.AF_UNSPEC, socket.SOCK_STREAM)
+        # getaddrinfo blocks in C with no timeout of its own; the caller supplies the
+        # hostname, so a deliberately unresolvable one stalls the whole event loop for
+        # however long the resolver takes to give up.
+        resolved = await asyncio.to_thread(
+            socket.getaddrinfo, hostname, None, socket.AF_UNSPEC, socket.SOCK_STREAM
+        )
     except socket.gaierror:
         raise HTTPException(status_code=400, detail=f"Cannot resolve hostname: {hostname}")
 
@@ -263,7 +269,7 @@ async def fetch_models_from_url(
     import httpx
     from fastapi import HTTPException
 
-    _validate_external_url(body.base_url)
+    await _validate_external_url(body.base_url)
     url = body.base_url.rstrip("/") + "/models"
     headers: dict[str, str] = {}
     if body.api_key:

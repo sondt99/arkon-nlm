@@ -586,16 +586,16 @@ async def upload_workspace_source(
     await _require_workspace_role(db, user, project_id, WorkspaceRole.EDITOR.value)
 
     pid = uuid.UUID(project_id)
-    from app.services.upload_guard import read_upload_bounded
+    from app.services.upload_guard import spooled_upload
 
-    file_data = await read_upload_bounded(file, what="Upload")
+    file_stream, file_size = await spooled_upload(file, what="Upload")
     file_name = file.filename or "unknown"
 
     source = Source(
         title=title or file.filename,
         source_type="file",
         file_name=file_name,
-        file_size=len(file_data),
+        file_size=file_size,
         status="pending",
         progress=0,
         progress_message="Queued for ingestion...",
@@ -610,9 +610,12 @@ async def upload_workspace_source(
     from app.services.kb_service import _guess_content_type
     from app.services.storage_service import storage_service
     minio_key = f"sources/{source.id}/original/{file_name}"
-    storage_service.upload_file(
+    # put_object is synchronous urllib3: run on the loop, a large workspace upload stalls
+    # every other request this process is serving until the transfer completes.
+    await storage_service.upload_stream_async(
         object_name=minio_key,
-        data=file_data,
+        stream=file_stream,
+        length=file_size,
         content_type=_guess_content_type(file_name),
     )
     source.minio_key = minio_key

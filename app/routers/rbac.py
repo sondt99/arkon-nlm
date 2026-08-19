@@ -17,7 +17,7 @@ from app.database.models import Department, Employee
 from app.services.audit_service import log_audit
 from app.services.auth_service import (
     get_current_user,
-    hash_password,
+    hash_password_async,
     require_permission,
 )
 from app.services.employee_policy import (
@@ -265,10 +265,14 @@ async def create_employee(
     elif body.role != "employee":
         raise HTTPException(400, "Role must be 'admin' or 'employee'")
 
+    # bcrypt at cost 12 is ~250 ms of uninterruptible CPU; on the event loop it blocks every
+    # other request this process is serving, /health included.
+    password_hash = await hash_password_async(body.password)
+
     emp = Employee(
         name=body.name,
         email=body.email,
-        password_hash=hash_password(body.password),
+        password_hash=password_hash,
         role=body.role,
         department_id=uuid.UUID(body.department_id),
         custom_role_id=uuid.UUID(body.custom_role_id) if body.custom_role_id else None,
@@ -308,7 +312,7 @@ async def update_employee(
     if body.password:
         ensure_can_set_password(_user)
         ensure_password_strength(body.password)
-        emp.password_hash = hash_password(body.password)
+        emp.password_hash = await hash_password_async(body.password)
 
     await log_audit(db, _user, "update", "employee", str(emp.id), reason=emp.email)
     await db.flush()

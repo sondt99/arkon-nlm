@@ -121,7 +121,9 @@ async def proxy_wiki_image(
         raise HTTPException(status_code=403, detail="Access denied")
 
     try:
-        data = storage_service.download_file(row.minio_key)
+        # A wiki page resolves up to 100 images, so on the loop one page view became a
+        # burst of blocking fetches that stalled every other request in the process.
+        data = await storage_service.download_file_async(row.minio_key)
     except Exception as e:
         logger.warning(f"Failed to fetch image {image_id} from MinIO: {e}")
         raise HTTPException(status_code=502, detail="Could not retrieve image from storage")

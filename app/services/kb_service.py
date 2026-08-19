@@ -9,6 +9,7 @@ Provider-agnostic: uses ProviderRegistry to resolve embedding/LLM/vision
 providers from app_config at runtime.
 """
 
+import asyncio
 import uuid
 from typing import Optional
 
@@ -64,7 +65,7 @@ async def ingest_source(
         # --- Step 1: Upload original file ---
         if file_data and file_name:
             minio_key = f"sources/{source_id}/original/{file_name}"
-            storage_service.upload_file(
+            await storage_service.upload_file_async(
                 object_name=minio_key,
                 data=file_data,
                 content_type=_guess_content_type(file_name),
@@ -90,13 +91,17 @@ async def ingest_source(
         # --- Step 3: Extract & caption images, persist, inline markers ---
         images: list[ImageInfo] = []
         if file_data and file_name:
-            images = extract_images(file_data, file_name, str(source_id))
+            # extract_images decodes and re-encodes every embedded image through PyMuPDF
+            # and uploads each one to MinIO — CPU plus blocking I/O, per image.
+            images = await asyncio.to_thread(
+                extract_images, file_data, file_name, str(source_id)
+            )
             if vision_provider and images:
                 for idx, img in enumerate(images, 1):
                     try:
                         if idx % 5 == 0 or idx == 1 or idx == len(images):
                             logger.info(f"Vision AI analyzing image {idx}/{len(images)}...")
-                        img_bytes = storage_service.download_file(img.minio_key)
+                        img_bytes = await storage_service.download_file_async(img.minio_key)
                         raw = await vision_provider.analyze_image(
                             img_bytes, img.content_type, prompt=_VISION_PROMPT
                         )
@@ -262,37 +267,64 @@ def _clean_text(text: str) -> str:
     return (text or "").replace("\x00", "")
 
 
-async def _extract_text_from_file(file_data: bytes, file_name: str) -> list[dict]:
-    """Extract text from a binary file, returning per-page records."""
-    ext = file_name.rsplit(".", 1)[-1].lower() if "." in file_name else ""
+def _extract_pdf_pages(file_data: bytes) -> list[dict]:
+    """Per-page PDF text, with 300-dpi OCR for pages that carry no digital text.
+
+    Synchronous on purpose — _extract_text_from_file runs this in a thread.
+    """
+    import fitz
     pages_data: list[dict] = []
+    doc = fitz.open(stream=file_data, filetype="pdf")
+    for i, page in enumerate(doc):  # type: ignore[arg-type]
+        text = _clean_text(page.get_text() or "").strip()
+        if len(text) < _MIN_OCR_CHARS:
+            try:
+                tp = page.get_textpage_ocr(flags=0, language="vie+eng", dpi=300, full=True)
+                ocr_text = _clean_text(page.get_text(textpage=tp) or "").strip()
+                if len(ocr_text) > len(text):
+                    text = ocr_text
+            except Exception as ocr_err:
+                logger.warning(f"OCR failed for page {i + 1}: {ocr_err}")
+        pages_data.append({"content": text, "page_number": i + 1})
+    doc.close()
+    return pages_data
+
+
+def _extract_docx_pages(file_data: bytes) -> Optional[list[dict]]:
+    """Raw .docx text, or None when mammoth cannot read it so the caller falls through.
+
+    Synchronous on purpose — _extract_text_from_file runs this in a thread.
+    """
+    import io
+
+    import mammoth
+    try:
+        result = mammoth.extract_raw_text(io.BytesIO(file_data))
+        return [{"content": _clean_text(result.value or ""), "page_number": 1}]
+    except Exception:
+        return None
+
+
+async def _extract_text_from_file(file_data: bytes, file_name: str) -> list[dict]:
+    """Extract text from a binary file, returning per-page records.
+
+    The PDF and .docx paths are uninterruptible CPU inside C extensions: a 300-page
+    scanned PDF is minutes of 300-dpi rasterising plus in-process Tesseract (MuPDF links
+    libtesseract; there is no subprocess to wait on). Run inline they froze the arq
+    worker's event loop for that entire time, so its health_check_interval=30 heartbeat
+    never reached Redis, the container was marked unhealthy after ~90 s, and everything
+    behind `depends_on: service_healthy` went with it.
+    """
+    ext = file_name.rsplit(".", 1)[-1].lower() if "." in file_name else ""
 
     if ext == "pdf":
-        import fitz
-        doc = fitz.open(stream=file_data, filetype="pdf")
-        for i, page in enumerate(doc):  # type: ignore[arg-type]
-            text = _clean_text(page.get_text() or "").strip()
-            if len(text) < _MIN_OCR_CHARS:
-                try:
-                    tp = page.get_textpage_ocr(flags=0, language="vie+eng", dpi=300, full=True)
-                    ocr_text = _clean_text(page.get_text(textpage=tp) or "").strip()
-                    if len(ocr_text) > len(text):
-                        text = ocr_text
-                except Exception as ocr_err:
-                    logger.warning(f"OCR failed for page {i + 1}: {ocr_err}")
-            pages_data.append({"content": text, "page_number": i + 1})
-        doc.close()
-        return pages_data
+        return await asyncio.to_thread(_extract_pdf_pages, file_data)
 
     if ext == "docx":
-        import io
-
-        import mammoth
-        try:
-            result = mammoth.extract_raw_text(io.BytesIO(file_data))
-            return [{"content": _clean_text(result.value or ""), "page_number": 1}]
-        except Exception:
-            pass  # fall through to content_core
+        pages_data = await asyncio.to_thread(_extract_docx_pages, file_data)
+        if pages_data is not None:
+            return pages_data
+        # fall through to content_core
 
     if ext in ("txt", "md", "csv"):
         return [{"content": _clean_text(file_data.decode("utf-8", errors="ignore")), "page_number": 1}]
@@ -364,9 +396,20 @@ def _validate_url_not_internal(url: str) -> None:
             raise ValueError("URLs pointing to private/internal networks are not allowed")
 
 
+async def _validate_url_not_internal_async(url: str) -> None:
+    """Non-blocking wrapper for _validate_url_not_internal using asyncio.to_thread.
+
+    socket.getaddrinfo is a blocking C call with no timeout we control: a hostname served
+    by a deliberately slow authoritative nameserver holds the whole event loop for as long
+    as the resolver keeps retrying, and the redirect walk in _fetch_url_guarded resolves
+    once per hop.
+    """
+    await asyncio.to_thread(_validate_url_not_internal, url)
+
+
 async def _extract_text_from_url(url: str) -> list[dict]:
     """Extract text from a URL — markdown output preferred."""
-    _validate_url_not_internal(url)
+    await _validate_url_not_internal_async(url)
     try:
         from content_core.content.extraction import extract_content
         result = await extract_content({"url": url, "output_format": "markdown"})
@@ -390,7 +433,7 @@ async def _fetch_url_guarded(url: str) -> str:
     current = url
     async with httpx.AsyncClient(follow_redirects=False, timeout=30) as client:
         for _ in range(_MAX_REDIRECTS):
-            _validate_url_not_internal(current)
+            await _validate_url_not_internal_async(current)
             resp = await client.get(current)
             if resp.status_code in (301, 302, 303, 307, 308):
                 location = resp.headers.get("location")

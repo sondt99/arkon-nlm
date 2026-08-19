@@ -37,7 +37,9 @@ async def delete_source_completely(
     try:
         from app.services.storage_service import storage_service
 
-        storage_service.delete_prefix(f"sources/{source_id}/")
+        # delete_prefix issues one blocking remove_object per object, so a source with
+        # many extracted images held the loop for the whole sweep.
+        await storage_service.delete_prefix_async(f"sources/{source_id}/")
     except Exception as e:
         logger.warning(f"Failed to clean MinIO files for source {source_id}: {e}")
 

@@ -93,7 +93,7 @@ async def ingest_file_task(ctx: dict, source_id: str):
 
             # --- Step 1: Download from MinIO (10%) ---
             await tracker.update(5, "Loading file...")
-            file_data = storage_service.download_file(source.minio_key)
+            file_data = await storage_service.download_file_async(source.minio_key)
             await tracker.update(10, "File loaded")
 
             # --- Step 2: Extract text per page (25%) ---
@@ -113,7 +113,12 @@ async def ingest_file_task(ctx: dict, source_id: str):
             # Captioning is offloaded to caption_images_task (enqueued below) so
             # this job is not blocked by the number of images in the document.
             await tracker.update(30, "Extracting images...")
-            images = extract_images(file_data, file_name, source_id)
+            # PyMuPDF decode + re-encode per image, then a blocking put_object per image.
+            # Inline, a picture-heavy document starved this loop for the whole run, which is
+            # what stopped arq's 30 s health heartbeat from reaching Redis.
+            images = await asyncio.to_thread(
+                extract_images, file_data, file_name, source_id
+            )
 
             # Persist images so wiki content_md can reference them by uuid.
             #
@@ -365,7 +370,7 @@ async def ingest_skill_task(ctx: dict, skill_id: str, version_id: str, file_path
                         with zf.open(member) as f:
                             content = f.read()
                         
-                        storage_service.upload_file(
+                        await storage_service.upload_file_async(
                             object_name=object_name,
                             data=content,
                             content_type=_guess_content_type(filename)
@@ -380,7 +385,7 @@ async def ingest_skill_task(ctx: dict, skill_id: str, version_id: str, file_path
 
             # 3. Calculate content-based hash (consistent with contribution workflow)
             storage_path = f"skills/{skill_id}/versions/{version.version_number}/content/"
-            file_hash = storage_service.calculate_prefix_hash(storage_path)
+            file_hash = await storage_service.calculate_prefix_hash_async(storage_path)
 
             # 4. Update DB with extracted metadata
 
@@ -410,7 +415,7 @@ async def ingest_skill_task(ctx: dict, skill_id: str, version_id: str, file_path
             try:
                 from app.services.storage_service import storage_service
                 if version_id:
-                    storage_service.delete_prefix(
+                    await storage_service.delete_prefix_async(
                         f"skills/{skill_id}/versions/{version.version_number}/"
                     )
             except Exception as cleanup_exc:
@@ -464,13 +469,13 @@ async def delete_skill_task(ctx: dict, skill_id: str):
 
             # 2. Delete files from MinIO for the skill itself
             prefix = f"skills/{skill_id}/"
-            storage_service.delete_prefix(prefix)
-            
+            await storage_service.delete_prefix_async(prefix)
+
             # 3. Delete files for all associated contributions
             for contrib in skill.contributions:
                 if contrib.storage_path:
                     logger.info(f"Deleting storage for contribution {contrib.id}: {contrib.storage_path}")
-                    storage_service.delete_prefix(contrib.storage_path)
+                    await storage_service.delete_prefix_async(contrib.storage_path)
 
             # 4. Delete skill from DB (cascades to SkillVersion and SkillContribution DB rows)
             await session.delete(skill)
@@ -704,7 +709,7 @@ async def notebooklm_ingest_artifact_task(ctx: dict, artifact_db_id: str):
                 file_name = f"{title}.{ext}".replace("/", "-")
                 minio_key = f"notebooklm/{artifact_db_id}/{file_name}"
 
-                storage_service.upload_file(minio_key, data, mime)
+                await storage_service.upload_file_async(minio_key, data, mime)
                 artifact.minio_key = minio_key
 
                 source = Source(
@@ -1170,7 +1175,7 @@ async def caption_images_task(ctx: dict, source_id: str):
     async def _caption_one(image_id, minio_key: str, content_type: str, idx: int) -> None:
         async with sem:
             try:
-                img_bytes = storage_service.download_file(minio_key)
+                img_bytes = await storage_service.download_file_async(minio_key)
                 vision_prompt = (
                     "Describe this image concisely in 1-3 sentences. "
                     "Focus on what is shown (diagrams, charts, photos, illustrations) "

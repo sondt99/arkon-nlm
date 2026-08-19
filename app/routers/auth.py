@@ -20,8 +20,8 @@ from app.services.auth_service import (
     authenticate_employee,
     create_access_token,
     get_current_user,
-    hash_password,
-    verify_password,
+    hash_password_async,
+    verify_password_async,
 )
 from app.services.permission_engine import get_effective_permissions
 
@@ -184,13 +184,16 @@ async def change_password(
     if not current_user.password_hash:
         raise HTTPException(400, "No password set. Contact admin.")
 
-    if not verify_password(req.current_password, current_user.password_hash):
+    # bcrypt at cost 12 is ~250 ms of uninterruptible CPU. Called inline, four concurrent
+    # password operations saturate the loop for a second; per-IP rate limiting does not
+    # help because a handful of IPs is enough to starve it.
+    if not await verify_password_async(req.current_password, current_user.password_hash):
         raise HTTPException(401, "Current password is incorrect")
 
     if len(req.new_password) < 8:
         raise HTTPException(400, "New password must be at least 8 characters")
 
-    current_user.password_hash = hash_password(req.new_password)
+    current_user.password_hash = await hash_password_async(req.new_password)
     await db.flush()
     return {"message": "Password changed successfully"}
 

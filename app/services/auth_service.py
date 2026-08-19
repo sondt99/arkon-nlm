@@ -9,6 +9,7 @@ Handles:
   - Scoped permission checks (v2: resource:action:scope format)
 """
 
+import asyncio
 import uuid
 from datetime import datetime, timedelta, timezone
 from typing import Optional
@@ -34,6 +35,12 @@ security = HTTPBearer(auto_error=False)
 
 # ---------------------------------------------------------------------------
 # Password hashing
+#
+# bcrypt is deliberately expensive — roughly 250 ms of pure CPU per call at the default
+# cost. The sync forms below are for sync contexts only (startup seeding, the arq worker,
+# scripts). Coroutines MUST use the *_async twins: four concurrent logins on the sync form
+# saturate an API worker for a second, during which nothing else on that loop runs, and
+# per-IP rate limiting does not help because a handful of IPs is enough.
 # ---------------------------------------------------------------------------
 
 def hash_password(password: str) -> str:
@@ -41,9 +48,19 @@ def hash_password(password: str) -> str:
     return bcrypt.hashpw(password.encode("utf-8"), bcrypt.gensalt()).decode("utf-8")
 
 
+async def hash_password_async(password: str) -> str:
+    """Non-blocking wrapper for hash_password using asyncio.to_thread."""
+    return await asyncio.to_thread(hash_password, password)
+
+
 def verify_password(password: str, password_hash: str) -> bool:
     """Verify a password against its hash."""
     return bcrypt.checkpw(password.encode("utf-8"), password_hash.encode("utf-8"))
+
+
+async def verify_password_async(password: str, password_hash: str) -> bool:
+    """Non-blocking wrapper for verify_password using asyncio.to_thread."""
+    return await asyncio.to_thread(verify_password, password, password_hash)
 
 
 # ---------------------------------------------------------------------------
@@ -101,7 +118,7 @@ async def authenticate_employee(
 
     if not employee or not employee.password_hash:
         return None
-    if not verify_password(password, employee.password_hash):
+    if not await verify_password_async(password, employee.password_hash):
         return None
     return employee
 

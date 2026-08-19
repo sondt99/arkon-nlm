@@ -408,7 +408,7 @@ async def get_source(
     if source.minio_key:
         try:
             from app.services.storage_service import storage_service
-            download_url = storage_service.get_presigned_url(source.minio_key)
+            download_url = await storage_service.get_presigned_url_async(source.minio_key)
         except Exception:
             pass
 
@@ -502,9 +502,9 @@ async def upload_source(
             f"File type '{ext}' is not supported. Allowed: {', '.join(sorted(ALLOWED_EXTENSIONS))}",
         )
 
-    from app.services.upload_guard import read_upload_bounded
+    from app.services.upload_guard import spooled_upload
 
-    file_data = await read_upload_bounded(file, what="Upload")
+    file_stream, file_size = await spooled_upload(file, what="Upload")
 
     # Parse department_ids
     dept_uuids: list[uuid.UUID] = []
@@ -536,7 +536,7 @@ async def upload_source(
         title=title or file.filename,
         source_type="file",
         file_name=file_name,
-        file_size=len(file_data),
+        file_size=file_size,
         status="pending",
         progress=0,
         progress_message="Queued for ingestion...",
@@ -561,9 +561,13 @@ async def upload_source(
     from app.services.kb_service import _guess_content_type
     from app.services.storage_service import storage_service
     minio_key = f"sources/{source.id}/original/{file_name}"
-    storage_service.upload_file(
+    # Streamed in a worker thread: put_object is synchronous urllib3, so a 300 MB upload
+    # held the event loop for the whole transfer and stalled every other request in the
+    # process, /health included.
+    await storage_service.upload_stream_async(
         object_name=minio_key,
-        data=file_data,
+        stream=file_stream,
+        length=file_size,
         content_type=_guess_content_type(file_name),
     )
     source.minio_key = minio_key
@@ -684,7 +688,9 @@ async def upload_zip_archive(
         await db.flush()
 
         minio_key = f"sources/{source.id}/original/{extracted.filename}"
-        storage_service.upload_file(
+        # One request can carry 50 entries, so on the loop this was 50 sequential
+        # blocking urllib3 transfers with nothing else in the process able to run between.
+        await storage_service.upload_file_async(
             object_name=minio_key,
             data=extracted.data,
             content_type=_guess_content_type(extracted.filename),

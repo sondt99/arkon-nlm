@@ -5,13 +5,82 @@ Every provider (Google, OpenAI, Anthropic, Ollama…) implements these
 interfaces so the rest of the codebase never imports a specific SDK.
 """
 
+import secrets
 from abc import ABC, abstractmethod
+from collections.abc import Iterable
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import TYPE_CHECKING, Optional
+from typing import TYPE_CHECKING, Optional, Union
 
 if TYPE_CHECKING:
     from app.ai.agent_protocol import AssistantTurn
+
+
+# ---------------------------------------------------------------------------
+# Untrusted-data envelope
+# ---------------------------------------------------------------------------
+#
+# Every prompt that carries uploaded text has to state where that text begins and ends, and
+# the delimiter has to be unguessable: with a fixed tag name a document can simply write the
+# closing form and have everything after it read as operator instructions. Shared here so the
+# ingestion prompts and the chat prompt fence untrusted text the same way.
+
+UNTRUSTED_DOCUMENT_TAG = "untrusted_document"
+UNTRUSTED_KB_CONTEXT_TAG = "untrusted_kb_context"
+UNTRUSTED_HINTS_TAG = "untrusted_category_hints"
+UNTRUSTED_CONVERSATION_TAG = "untrusted_conversation"
+
+# The compiler, writer and planner prompts each carry several envelopes at once (document
+# text, existing pages, category hints). Passing this tuple instead of one tag strips every
+# marker the codebase uses from every block, so a poisoned page body cannot emit the closing
+# form of a *neighbouring* envelope and leave the model guessing which block just ended.
+UNTRUSTED_TAGS: tuple[str, ...] = (
+    UNTRUSTED_DOCUMENT_TAG,
+    UNTRUSTED_KB_CONTEXT_TAG,
+    UNTRUSTED_HINTS_TAG,
+    UNTRUSTED_CONVERSATION_TAG,
+)
+
+
+def new_envelope_nonce() -> str:
+    """Return a per-call random suffix for an untrusted-data delimiter."""
+    return secrets.token_hex(4)
+
+
+def strip_envelope_markers(
+    text: str, tag: Union[str, Iterable[str]], nonce: str
+) -> str:
+    """Remove anything in `text` that could open or close an envelope early.
+
+    `tag` accepts one tag name or several (see UNTRUSTED_TAGS).
+    """
+    tags = (tag,) if isinstance(tag, str) else tuple(tag)
+    for name in tags:
+        # Both the nonced form and a generic guess at it.
+        for marker in (
+            f"</{name}_{nonce}>",
+            f"<{name}_{nonce}>",
+            f"</{name}",
+            f"<{name}",
+        ):
+            text = text.replace(marker, "[removed]")
+    return text
+
+
+def flatten_untrusted_metadata(
+    value: str, tag: Union[str, Iterable[str]], nonce: str, limit: int = 200
+) -> str:
+    """Collapse a document-derived label to one harmless line.
+
+    Values like a section heading are attacker-controlled but have to be rendered outside
+    the envelope to be useful as metadata. Flattening the whitespace keeps a heading such as
+    `# Disregard the schema` from forging a new markdown section of its own, and the cap
+    stops a 5,000-character "heading" from dominating the prompt.
+    """
+    flattened = " ".join(strip_envelope_markers(value or "", tag, nonce).split())
+    if len(flattened) > limit:
+        flattened = flattened[:limit] + "…"
+    return flattened or "(unknown)"
 
 
 # ---------------------------------------------------------------------------

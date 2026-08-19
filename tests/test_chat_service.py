@@ -76,10 +76,14 @@ class _SequenceLLM(_LLM):
 
 
 def test_knowledge_context_is_bounded_per_page():
+    # Page bodies moved out of the system prompt into an untrusted user-turn block (#34);
+    # the per-page cap still applies where they are now rendered.
     page = SimpleNamespace(title="Long page", content_md="A" * 10_000)
-    prompt = chat_service._build_system_prompt([page])
-    assert "A" * chat_service.settings.chat_context_chars_per_page in prompt
-    assert "A" * (chat_service.settings.chat_context_chars_per_page + 1) not in prompt
+    block = chat_service._build_kb_context_block([page])
+    assert "A" * chat_service.settings.chat_context_chars_per_page in block
+    assert "A" * (chat_service.settings.chat_context_chars_per_page + 1) not in block
+
+    prompt = chat_service._build_system_prompt()
     assert "Do not impose an" in prompt
     assert "arbitrary word limit" in prompt
 

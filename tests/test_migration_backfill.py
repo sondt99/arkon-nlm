@@ -20,6 +20,7 @@ import inspect
 import pathlib
 import re
 
+import app.database.models as models
 from app.database.models import AppConfig, WikiPageDraft
 from app.services.config_service import ALL_CONFIG_KEYS, _is_sensitive
 
@@ -371,3 +372,131 @@ def _inserted_columns(sql: str, table: str) -> set[str]:
     if match is None:
         return set()
     return {c.strip() for c in match.group("cols").split(",") if c.strip()}
+
+
+# --------------------------------------------------------------------------- #
+# Migration 034 — status vocabularies (issue #85)
+#
+# Six columns were free-text `String(n)` compared against bare literals in ~30 places, so a
+# typo on either side produced a row that every listing filter skipped: the source vanished
+# from the UI with no error logged anywhere. 034 adds CHECK constraints built from the
+# vocabularies in models.py.
+#
+# That fix introduces a new failure mode of its own, which is what these tests guard: if
+# somebody adds a status value in code without adding it to the vocabulary, the write stops
+# being a silently-invisible row and becomes a production IntegrityError. The last test
+# below is the ratchet that catches it in CI instead.
+# --------------------------------------------------------------------------- #
+
+_M034 = _load("034")
+
+# Vocabulary tuple in models.py -> constraint name in 034.
+_VOCAB_BY_CONSTRAINT = {
+    "ck_sources_status": "SOURCE_STATUSES",
+    "ck_sources_scope_type": "SCOPE_TYPES",
+    "ck_source_compilation_plans_status": "COMPILATION_PLAN_STATUSES",
+    "ck_wiki_page_drafts_status": "WIKI_DRAFT_STATUSES",
+    "ck_embedding_jobs_status": "EMBEDDING_JOB_STATUSES",
+    "ck_notebooklm_artifacts_status": "NLM_ARTIFACT_STATUSES",
+}
+
+
+def test_check_constraints_match_the_model_vocabularies():
+    """034 spells its vocabularies out instead of importing them, deliberately — a revision
+    has to keep applying to the database it was written for. This is the test that keeps the
+    two copies honest, and 034's own comment names it.
+    """
+    checks = {name: values for name, _t, _c, values in _M034._CHECKS}
+    assert set(checks) == set(_VOCAB_BY_CONSTRAINT), (
+        "034._CHECKS and this test's mapping have diverged"
+    )
+
+    for constraint, attr in _VOCAB_BY_CONSTRAINT.items():
+        model_values = getattr(models, attr)
+        assert tuple(checks[constraint]) == tuple(model_values), (
+            f"{constraint} allows {checks[constraint]} but models.{attr} is {model_values}. "
+            "A value the model permits but the constraint rejects is an IntegrityError in "
+            "production; the reverse is a row the UI cannot see."
+        )
+
+
+def test_every_constrained_column_is_actually_constrained_in_the_model():
+    """A CHECK in the migration with no matching constraint on the model would be dropped by
+    the next autogenerate — the mechanism that made 018 drop four live indexes.
+    """
+    declared = {
+        c.name
+        for table in models.Base.metadata.tables.values()
+        for c in table.constraints
+        if getattr(c, "name", None) and str(c.name).startswith("ck_")
+    }
+    for name, _t, _c, _v in _M034._CHECKS:
+        assert name in declared, (
+            f"{name} exists in migration 034 but not in models.py, so autogenerate will "
+            "propose dropping it"
+        )
+
+
+def test_every_status_the_code_writes_is_in_its_vocabulary():
+    """The ratchet. Adding a status value in code without adding it here now FAILS the write.
+
+    Before 034 an unknown value produced a row that every filter skipped — bad, but silent.
+    After 034 it is an IntegrityError. That is the better failure, but only if this test
+    catches it first.
+    """
+    app_dir = pathlib.Path(__file__).resolve().parents[1] / "app"
+    # `x.status = "value"` and `status="value"` as a constructor kwarg.
+    pattern = re.compile(r'\bstatus\s*=\s*"([a-z_]+)"')
+
+    written: set[str] = set()
+    for path in app_dir.rglob("*.py"):
+        written |= set(pattern.findall(path.read_text(encoding="utf-8")))
+
+    assert written, "the scan found no status writes at all — the pattern has rotted"
+
+    # Every vocabulary that a CHECK enforces, plus the columns deliberately left
+    # unconstrained (see test_unconstrained_status_columns_are_a_known_list).
+    allowed = set()
+    for attr in _VOCAB_BY_CONSTRAINT.values():
+        allowed |= set(getattr(models, attr))
+    # Skill.status is a PgEnum, not a CHECK, and legitimately carries these.
+    allowed |= {"active", "processing", "deleting", "deprecated", "archived"}
+
+    unknown = sorted(written - allowed)
+    assert not unknown, (
+        f"app/ writes status values that no vocabulary permits: {unknown}. If these belong "
+        "to a constrained column the write will now raise IntegrityError — add them to the "
+        "tuple in models.py AND ship a migration replacing the constraint. If they belong "
+        "to an unconstrained column, add them to this test's allow-list with a comment."
+    )
+
+
+def test_unconstrained_status_columns_are_a_known_list():
+    """Two status-ish columns are deliberately NOT constrained. Keep the gap visible.
+
+    `wiki_pages.status` and the chat scope column are written only through helpers that
+    normalise the value, so the exposure is smaller — but "smaller" is not "none", and an
+    undocumented omission reads as an oversight. 034's docstring points here.
+    """
+    constrained = {(t, c) for _n, t, c, _v in _M034._CHECKS}
+    assert ("sources", "status") in constrained
+    assert ("wiki_pages", "status") not in constrained, (
+        "wiki_pages.status is now constrained — remove it from this known-gap list"
+    )
+
+
+def test_034_creates_no_index_it_does_not_also_document():
+    """Every index 034 adds must be guarded with IF NOT EXISTS.
+
+    034 runs on databases that may already carry a hand-made index of the same name; an
+    unguarded CREATE INDEX aborts the whole upgrade on those.
+    """
+    # Scan the code, not the docstring — the docstring says "Every CREATE INDEX uses IF NOT
+    # EXISTS", which a naive negative lookahead matches as an offender.
+    src = inspect.getsource(_M034)
+    body = src.replace(_M034.__doc__ or "", "", 1)
+    creates = re.findall(r"CREATE INDEX(?: CONCURRENTLY)?(?! IF NOT EXISTS)", body)
+    assert not creates, f"{len(creates)} unguarded CREATE INDEX in 034"
+
+    # And the scan must not be vacuous.
+    assert body.count("CREATE INDEX IF NOT EXISTS") >= 3

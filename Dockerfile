@@ -28,8 +28,18 @@ RUN pip install --upgrade pip --no-cache-dir
 # at the bottom only; nothing above them was.
 COPY --from=ghcr.io/astral-sh/uv:0.9.21@sha256:15f68a476b768083505fe1dbfcc998344d0135f0ca1b8465c4760b323904f05a /uv /usr/local/bin/uv
 COPY pyproject.toml uv.lock ./
+#
+# `--no-deps` is load-bearing, not an optimisation. Without it pip RE-RESOLVES the exported
+# file, so it re-applies every transitive constraint and can pick versions the lockfile does
+# not contain — which made the claim above only partly true. It also loses `[tool.uv]
+# override-dependencies`, which pip does not implement: the pillow security upgrade failed
+# here with ResolutionImpossible against moviepy's `pillow<12.0` even though uv.lock pins
+# pillow 12.3.0.
+#
+# An exported lockfile is already a complete, fully-pinned graph. Re-resolving it is the
+# thing `--frozen` exists to prevent.
 RUN uv export --frozen --no-dev --no-emit-project -o /tmp/requirements.txt \
-    && pip install --no-cache-dir -r /tmp/requirements.txt
+    && pip install --no-cache-dir --no-deps -r /tmp/requirements.txt
 
 # --- Runtime stage: no build tools ---
 FROM python:3.12-slim@sha256:2c941e860699f878900b0edc2403613c234d4b32eda3cc9fa7036991a2a63c4a AS runtime

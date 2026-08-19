@@ -1,0 +1,63 @@
+version: 2
+
+# Every base image and compose image in this repo is pinned by digest (see Dockerfile,
+# frontend/Dockerfile, nginx/Dockerfile, docker-compose.yml). A digest pin only stops silent
+# drift — on its own it also stops security patches from ever arriving. Dependabot is the
+# other half: it turns each bump into a reviewable pull request instead of a side effect of
+# whoever rebuilt last.
+#
+# Ecosystems deliberately NOT enabled: pip and npm. Backend dependencies are locked in
+# uv.lock with explicit security floors in pyproject.toml, and the frontend in
+# package-lock.json; opening those to weekly automated PRs on a repo with a 4-job required
+# CI suite would produce more noise than it retires. Revisit per-ecosystem, not wholesale.
+updates:
+  # Backend image + the uv stage it copies from.
+  - package-ecosystem: docker
+    directory: /
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5
+    labels: [area:infra]
+    commit-message:
+      prefix: "chore(deps)"
+
+  - package-ecosystem: docker
+    directory: /frontend
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5
+    labels: [area:infra]
+    commit-message:
+      prefix: "chore(deps)"
+
+  # The sole ingress for the whole stack. This is the one that was `FROM nginx:alpine` with
+  # no version at all.
+  - package-ecosystem: docker
+    directory: /nginx
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5
+    labels: [area:infra]
+    commit-message:
+      prefix: "chore(deps)"
+
+  # docker-compose.yml `image:` entries — postgres/pgvector, redis, minio.
+  - package-ecosystem: docker-compose
+    directory: /
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5
+    labels: [area:infra]
+    commit-message:
+      prefix: "chore(deps)"
+
+  # GitHub Actions majors. Left to Dependabot rather than hand-bumped, because a workflow
+  # change cannot be verified locally — only by running it on a real runner.
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5
+    labels: [area:infra]
+    commit-message:
+      prefix: "chore(ci)"

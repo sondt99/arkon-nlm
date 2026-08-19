@@ -37,7 +37,11 @@ services:
   # ── Infrastructure ────────────────────────────────────────────
 
   postgres:
-    image: pgvector/pgvector:pg16
+    # Digest-pinned. `pgvector/pgvector:pg16` is a floating tag: the maintainers re-publish
+    # it for every Postgres 16 patch and every pgvector release, so a `docker compose pull`
+    # could move the database engine under a live volume with nobody choosing to. Bumps
+    # arrive as reviewable Dependabot PRs (.github/dependabot.yml).
+    image: pgvector/pgvector:pg16@sha256:ccc6e83d6e35e931dc7c5def2022729d5a6c370318d099181995567ff1fb4d6b
     container_name: arkon_postgres
     env_file: [.env.docker]
     restart: always
@@ -68,7 +72,8 @@ services:
       - backend
 
   redis:
-    image: redis:7-alpine
+    # Digest-pinned; see the note on postgres above.
+    image: redis:7-alpine@sha256:e7723ff73d963f5cc6d9c4643ea3d989527a402a319239054e9472a7fb9219a2
     container_name: arkon_redis
     env_file: [.env.docker]
     restart: always
@@ -95,7 +100,8 @@ services:
       - backend
 
   minio:
-    image: minio/minio:RELEASE.2025-04-22T22-12-26Z
+    # Already pinned to an immutable RELEASE tag; the digest makes it verifiable as well.
+    image: minio/minio:RELEASE.2025-04-22T22-12-26Z@sha256:a1ea29fa28355559ef137d71fc570e508a214ec84ff8083e39bc5428980b015e
     container_name: arkon_minio
     env_file: [.env.docker]
     restart: always
@@ -127,6 +133,33 @@ services:
     networks:
       - backend
 
+  # ── Schema migration (one-shot) ────────────────────────────────
+  # The ONLY thing that migrates the database. Migrations and skill seeding used to live in
+  # the shared x-backend entrypoint, so api, worker and worker_skills each ran them on every
+  # start and every restart: three unsynchronised writers at boot, `docker compose restart
+  # worker` re-migrating production, and — with `restart: always` and `set -e` — a failing
+  # migration turning into a crash-loop with no circuit breaker.
+  #
+  # This service runs once, in one container, with `restart: "no"` so a failure stops and
+  # stays stopped where you can read the log. migrate.sh additionally REFUSES to apply a
+  # pending revision that drops tables/columns or issues DELETE/TRUNCATE unless
+  # ALLOW_DESTRUCTIVE_MIGRATIONS=1 is set — see migrate.sh and DOCKER.md.
+  #
+  # `docker compose up -d` still migrates automatically (api gates on this service
+  # completing), so routine deploys are unchanged. To bring the API up WITHOUT migrating —
+  # e.g. to diagnose a failed migration against the old schema:
+  #   docker compose --env-file .env.docker up -d --no-deps api
+  migrate:
+    <<: *backend
+    container_name: arkon_migrate
+    command: ["./migrate.sh"]
+    # Must override the anchor's `restart: always`. A one-shot that exits 0 and gets
+    # restarted forever is exactly the loop this change removes.
+    restart: "no"
+    stop_grace_period: 60s
+    mem_limit: ${MIGRATE_MEM_LIMIT:-1g}
+    cpus: ${MIGRATE_CPUS:-1.0}
+
   # ── Application ───────────────────────────────────────────────
 
   api:
@@ -135,6 +168,17 @@ services:
     networks:
       - frontend
       - backend
+    # YAML merge keys replace wholesale, so the anchor's infrastructure conditions are
+    # repeated here alongside the migrate gate.
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
     # Access via nginx on port 80. Uncomment for direct dev access.
     # ports:
     #   - "5055:5055"

@@ -12,17 +12,26 @@ build/
 # Git
 .git/
 .gitignore
+.gitattributes
 
 # Env / secrets
+# Covers .env, .env.docker, .env.local AND the .example templates — none of them belong in
+# an image layer, where `docker history` makes them readable to anyone who can pull it.
 .env*
-!.env.example
 
-# Frontend (built separately)
+# Frontend (built separately, from ./frontend as its own context)
 frontend/
+
+# Reverse proxy (built separately, from ./nginx as its own context)
+nginx/
+
+# Not needed at runtime. Keeping them out shrinks the build context and means the shipped
+# image contains no test code to be imported by accident.
+tests/
+.github/
 
 # Dev tooling
 .claude/
 .ruff_cache/
 *.md
 docs/
-

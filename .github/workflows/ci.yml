@@ -15,10 +15,10 @@ jobs:
     name: Backend — lint + tests
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       # Matches Dockerfile's python:3.12-slim so CI and the image agree.
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v6
         with:
           python-version: "3.12"
           cache: pip
@@ -46,10 +46,10 @@ jobs:
       run:
         working-directory: frontend
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       # Matches frontend/Dockerfile's node:22-alpine.
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v5
         with:
           node-version: "22"
           cache: npm
@@ -117,13 +117,12 @@ jobs:
     name: Docker images build
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - uses: docker/setup-buildx-action@v3
 
-      # Build-verify both images so a pip/npm resolution break is caught here rather
-      # than during a production deploy — where entrypoint.sh would then run
-      # `alembic upgrade head` unattended against a real database.
+      # Build-verify all three images so a pip/npm resolution break, or a bad nginx
+      # directive, is caught here rather than during a production deploy.
       - name: Build backend image
         uses: docker/build-push-action@v6
         with:
@@ -136,6 +135,19 @@ jobs:
         uses: docker/build-push-action@v6
         with:
           context: ./frontend
+          push: false
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      # nginx was previously the one image CI never built, despite being the sole ingress
+      # for the whole stack and carrying the config baked in. Its Dockerfile ends in
+      # `RUN nginx -t`, so this step is also the config syntax check: a typo in
+      # nginx.conf or http-common.conf fails the build here instead of taking the
+      # ingress down on deploy.
+      - name: Build nginx image (runs nginx -t)
+        uses: docker/build-push-action@v6
+        with:
+          context: ./nginx
           push: false
           cache-from: type=gha
           cache-to: type=gha,mode=max
@@ -160,9 +172,9 @@ jobs:
       ARKON_ALLOW_DEFAULT_SECRET: "1"
       DATABASE_URL: postgresql+asyncpg://arkon:ci_test_password@localhost:5432/arkon
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v6
         with:
           python-version: "3.12"
           cache: pip
@@ -209,3 +221,54 @@ jobs:
           fi
           rm -f "$PROBE"
           echo "No structural drift."
+
+      # migrate.sh is the only thing that migrates the database now, and its pre-flight is
+      # what stops a destructive revision from being applied unattended (issue #41's
+      # mechanism). Both halves are asserted, because a guard that silently stopped firing
+      # would look exactly like a guard that has nothing to complain about.
+      #
+      # Runs last: the negative test writes a throwaway revision file, and nothing after it
+      # should ever see one.
+      - name: Migration guard fires on destructive steps, and only on those
+        run: |
+          set -euo pipefail
+
+          echo "--- positive: at head, nothing pending, must pass ---"
+          ./migrate.sh --check
+
+          echo "--- negative: a pending destructive revision must be refused ---"
+          HEAD_REV=$(alembic heads | awk 'NF {print $1; exit}')
+          PROBE=alembic/versions/zzz_ci_destructive_probe.py
+          cat > "$PROBE" <<PY
+          """ci destructive probe
+
+          Revision ID: zzz_ci_destructive_probe
+          Revises: ${HEAD_REV}
+          """
+          from alembic import op
+
+          revision = "zzz_ci_destructive_probe"
+          down_revision = "${HEAD_REV}"
+          branch_labels = None
+          depends_on = None
+
+
+          def upgrade() -> None:
+              op.drop_table("employees")
+
+
+          def downgrade() -> None:
+              pass
+          PY
+
+          STATUS=0
+          ./migrate.sh --check || STATUS=$?
+          rm -f "$PROBE"
+
+          if [ "$STATUS" -eq 0 ]; then
+            echo "::error::migrate.sh --check passed a revision that drops a table. The"
+            echo "::error::pre-flight guard is not working; a destructive migration would"
+            echo "::error::now apply unattended on deploy."
+            exit 1
+          fi
+          echo "Guard refused as expected (exit $STATUS)."

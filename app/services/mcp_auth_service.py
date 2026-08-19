@@ -10,10 +10,11 @@ This service is called by the MCP server to:
 Permission model v2: uses source_departments M2M and scoped permissions.
 """
 
+import hashlib
 import secrets
 import uuid
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Optional
 
 from fastapi import Depends, HTTPException
@@ -23,6 +24,7 @@ from sqlalchemy import exists, or_, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
+from app.config import settings
 from app.database import get_db
 from app.database.models import (
     Employee,
@@ -62,6 +64,22 @@ class ResolvedIdentity:
         return self.allowed_knowledge_types, combined
 
 
+
+# Throttle window for the last_connected write on the MCP read path.
+_LAST_CONNECTED_THROTTLE = timedelta(minutes=5)
+
+
+def hash_mcp_token(token: str) -> str:
+    """SHA-256 hex digest of a bearer token.
+
+    A plain digest is correct here rather than a slow KDF: the token is 256 bits of
+    `secrets.token_urlsafe(32)` output, so there is no low-entropy secret to brute-force,
+    and the lookup must stay indexable. The property we need is that a database read does
+    not yield a usable credential.
+    """
+    return hashlib.sha256(token.encode("utf-8")).hexdigest()
+
+
 class MCPAuthService:
     """Handles MCP token auth and knowledge scope resolution."""
 
@@ -73,9 +91,14 @@ class MCPAuthService:
         Verify an MCP bearer token and return the resolved identity.
         Returns None if token is invalid/inactive.
         """
+        # Look up by digest — the plaintext token is never stored, so a database read
+        # cannot yield usable credentials.
         stmt = (
             select(Employee)
-            .where(Employee.mcp_token == token, Employee.is_active.is_(True))
+            .where(
+                Employee.mcp_token_hash == hash_mcp_token(token),
+                Employee.is_active.is_(True),
+            )
             .options(
                 selectinload(Employee.department),
                 selectinload(Employee.custom_role),
@@ -87,9 +110,24 @@ class MCPAuthService:
         if not employee:
             return None
 
-        # Update last_connected
-        employee.last_connected = datetime.now(timezone.utc)
-        await self.db.flush()
+        now = datetime.now(timezone.utc)
+
+        # Hard expiry. Previously a leaked token was valid forever unless an admin
+        # happened to revoke it, so one exfiltrated from a developer's Claude Desktop
+        # config years earlier still worked.
+        if employee.mcp_token_expires_at is not None and employee.mcp_token_expires_at <= now:
+            logger.info(f"Rejected expired MCP token for employee {employee.id}")
+            return None
+
+        # Throttle the last_connected write. This used to fire on EVERY tool call, turning
+        # each read-only MCP request into an UPDATE + COMMIT on the employee row, so an
+        # agent making 50 calls serialised 50 writes against the same row's lock.
+        if (
+            employee.last_connected is None
+            or (now - employee.last_connected) > _LAST_CONNECTED_THROTTLE
+        ):
+            employee.last_connected = now
+            await self.db.flush()
 
         # Resolve knowledge scope
         identity = await self._resolve_scope(employee)
@@ -253,18 +291,33 @@ class MCPAuthService:
     # --- Token Management ---
 
     async def generate_token(self, employee_id: uuid.UUID) -> str:
-        """Generate a new MCP token for an employee."""
+        """Mint a new MCP token, store only its digest, and return the plaintext ONCE.
+
+        Generating always rotates: any previous token's digest is overwritten, so the old
+        credential stops working immediately. That is what makes the portal's "Regenerate
+        Token" button honest — it previously called an idempotent endpoint that returned
+        the existing token unchanged, so a user who believed they had rotated a leaked
+        credential had not.
+        """
         token = f"ark_{secrets.token_urlsafe(32)}"
+        expires_at = datetime.now(timezone.utc) + timedelta(
+            days=settings.mcp_token_expiry_days
+        )
 
         stmt = (
             update(Employee)
             .where(Employee.id == employee_id)
-            .values(mcp_token=token)
+            .values(
+                mcp_token_hash=hash_mcp_token(token),
+                mcp_token_expires_at=expires_at,
+            )
         )
         await self.db.execute(stmt)
         await self.db.flush()
 
-        logger.info(f"Generated MCP token for employee {employee_id}")
+        logger.info(
+            f"Generated MCP token for employee {employee_id} (expires {expires_at.isoformat()})"
+        )
         return token
 
     async def revoke_token(self, employee_id: uuid.UUID) -> bool:
@@ -272,7 +325,7 @@ class MCPAuthService:
         stmt = (
             update(Employee)
             .where(Employee.id == employee_id)
-            .values(mcp_token=None)
+            .values(mcp_token_hash=None, mcp_token_expires_at=None)
         )
         result = await self.db.execute(stmt)
         await self.db.flush()

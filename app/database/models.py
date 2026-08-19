@@ -596,9 +596,17 @@ class Employee(Base):
         UUID(as_uuid=True), ForeignKey("roles.id", ondelete="SET NULL"),
         nullable=True,
     )
-    mcp_token: Mapped[Optional[str]] = mapped_column(
-        String(500), unique=True,
-        comment="Bearer token for MCP authentication",
+    # SHA-256 of the bearer token, never the token itself. Storing it in plaintext meant
+    # any read of this table — a pg_dump, a replica, a support query, an over-broad
+    # analytics grant — yielded directly usable credentials for every employee's full
+    # document scope, with no expiry to bound the window.
+    mcp_token_hash: Mapped[Optional[str]] = mapped_column(
+        String(64), unique=True,
+        comment="SHA-256 hex digest of the MCP bearer token. The token itself is shown once at generation and never stored.",
+    )
+    mcp_token_expires_at: Mapped[Optional[datetime]] = mapped_column(
+        DateTime(timezone=True),
+        comment="Hard expiry for the MCP token; enforced in MCPAuthService.verify_token.",
     )
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
     last_connected: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
@@ -614,7 +622,7 @@ class Employee(Base):
     custom_role: Mapped[Optional["Role"]] = relationship(back_populates="employees")
 
     __table_args__ = (
-        Index("ix_employees_mcp_token", "mcp_token"),
+        Index("ix_employees_mcp_token_hash", "mcp_token_hash"),
         Index("ix_employees_department_id", "department_id"),
         Index("ix_employees_email", "email"),
     )

@@ -187,7 +187,7 @@ class _FakeSession:
         self.flushed = True
 
 
-def _employee(*perms: str, role="employee", active=True):
+def _employee(*perms: str, role="employee", active=True, expires_at=None):
     return SimpleNamespace(
         id=uuid.uuid4(),
         name="Emp",
@@ -197,6 +197,8 @@ def _employee(*perms: str, role="employee", active=True):
         department=SimpleNamespace(name="Dept"),
         custom_role=SimpleNamespace(permissions=list(perms)),
         last_connected=None,
+        mcp_token_hash="0" * 64,
+        mcp_token_expires_at=expires_at,
     )
 
 
@@ -237,6 +239,62 @@ async def test_employee_without_doc_read_gets_an_empty_scope_not_none():
     # And that empty scope must compile to a query that returns nothing.
     sql = _compiled(apply_scope_filter(select(Source.id), identity))
     assert "WHERE" in sql.upper()
+
+
+@pytest.mark.asyncio
+async def test_expired_token_is_rejected():
+    """A token past its expiry must not authenticate.
+
+    Before this there was no expiry column at all, so a token exfiltrated from a
+    developer's Claude Desktop config years earlier still worked.
+    """
+    from datetime import datetime, timedelta, timezone
+
+    emp = _employee(
+        "doc:read:all",
+        expires_at=datetime.now(timezone.utc) - timedelta(days=1),
+    )
+    svc = MCPAuthService(_FakeSession(emp))
+    assert await svc.verify_token("ark_expired") is None
+
+
+@pytest.mark.asyncio
+async def test_unexpired_token_still_authenticates():
+    from datetime import datetime, timedelta, timezone
+
+    emp = _employee(
+        "doc:read:all",
+        expires_at=datetime.now(timezone.utc) + timedelta(days=30),
+    )
+    svc = MCPAuthService(_FakeSession(emp))
+    assert await svc.verify_token("ark_valid") is not None
+
+
+def test_token_is_never_stored_in_plaintext():
+    """The Employee model must not carry a plaintext token column any more."""
+    from app.database.models import Employee
+
+    cols = set(Employee.__table__.columns.keys())
+    assert "mcp_token" not in cols, "plaintext MCP token column is back"
+    assert "mcp_token_hash" in cols
+    assert "mcp_token_expires_at" in cols
+
+
+def test_hash_matches_the_digest_the_migration_computes():
+    """Guards the app/migration contract.
+
+    Migration 031 hashes existing plaintext tokens with Postgres'
+    encode(sha256(...), 'hex'). If the Python side ever changes algorithm or encoding,
+    every already-migrated token stops authenticating — silently, because a mismatched
+    digest just looks like an unknown token. This pins the expected digest.
+    """
+    from app.services.mcp_auth_service import hash_mcp_token
+
+    # sha256("ark_KNOWN_TEST_TOKEN_VALUE") — verified equal to the value migration 031
+    # produced inside Postgres.
+    assert hash_mcp_token("ark_KNOWN_TEST_TOKEN_VALUE") == (
+        "a972fc56e6a3ce5a5df1999adaa4150dcbfabac166014d5e09db3c3f0abd6218"
+    )
 
 
 @pytest.mark.asyncio

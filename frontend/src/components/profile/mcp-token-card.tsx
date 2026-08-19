@@ -95,7 +95,7 @@ export function McpTokenCard() {
         <div className="flex flex-col gap-3">
           <div className="flex items-center gap-2 text-sm text-green-700 bg-green-50 px-4 py-3 rounded-lg border border-green-200">
             <span className="material-symbols-outlined text-base">check_circle</span>
-            <span>MCP Token is active. Your token was shown when generated — it cannot be retrieved again for security.</span>
+            <span>MCP Token is active. Your token was shown when generated — only its hash is stored, so it cannot be retrieved again. Regenerating immediately invalidates the current token.</span>
           </div>
           <div className="flex gap-2">
             <Button

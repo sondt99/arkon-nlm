@@ -168,7 +168,7 @@ async def get_profile(
         department_id=str(current_user.department_id),
         department_name=current_user.department.name if current_user.department else "",
         is_active=current_user.is_active,
-        has_mcp_token=bool(current_user.mcp_token),
+        has_mcp_token=bool(current_user.mcp_token_hash),
         permissions=permissions,
         workspace_memberships=workspace_memberships,
     )

@@ -232,7 +232,7 @@ async def list_employees(
                 department_id=str(e.department_id),
                 department_name=e.department.name if e.department else "",
                 is_active=e.is_active,
-                has_token=bool(e.mcp_token),
+                has_token=bool(e.mcp_token_hash),
                 last_connected=e.last_connected.isoformat() if e.last_connected else None,
                 custom_role_id=str(e.custom_role_id) if e.custom_role_id else None,
                 custom_role_name=e.custom_role.name if e.custom_role else None,
@@ -406,10 +406,11 @@ async def get_my_mcp_token(
     """
     auth_svc = MCPAuthService(db)
 
-    if not current_user.mcp_token:
-        token = await auth_svc.generate_token(current_user.id)
-    else:
-        token = current_user.mcp_token
+    # Always rotates. This endpoint used to return the existing token unchanged when one
+    # already existed, which made the portal's "Regenerate Token" button a no-op: a user
+    # who believed they had rotated a leaked credential had not. Only the digest is stored,
+    # so there is nothing to return on a second call even if we wanted to.
+    token = await auth_svc.generate_token(current_user.id)
 
     return TokenResponse(
         token=token,
@@ -438,4 +439,4 @@ async def get_my_mcp_token_status(
     current_user: Employee = Depends(get_current_user),
 ):
     """Check if the current employee has an active MCP token (without revealing it)."""
-    return {"has_token": bool(current_user.mcp_token)}
+    return {"has_token": bool(current_user.mcp_token_hash)}

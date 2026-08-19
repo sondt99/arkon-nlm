@@ -50,6 +50,13 @@ class Settings(BaseSettings):
     minio_secure: bool = Field(default=False)
     minio_presign_expiry_hours: int = Field(default=24)
 
+    # --- MCP tokens ---
+    mcp_token_expiry_days: int = Field(
+        default=90,
+        description="Lifetime of a generated MCP bearer token. Enforced in "
+                    "MCPAuthService.verify_token; expired tokens are rejected.",
+    )
+
     # --- CORS ---
     # Empty = same-origin only (safe default for the nginx-fronted setup).
     # Set to explicit origin(s) only if the API is called cross-origin.

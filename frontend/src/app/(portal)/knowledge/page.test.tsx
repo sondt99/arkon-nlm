@@ -18,6 +18,7 @@ import userEvent from "@testing-library/user-event";
 
 import KnowledgePage from "./page";
 import { api } from "@/lib/api";
+import { tick } from "@/test/tick";
 
 vi.mock("@/lib/api", () => ({ api: vi.fn(), apiUpload: vi.fn() }));
 
@@ -89,7 +90,7 @@ describe("stale response ordering (#91)", () => {
     await waitFor(() => expect(screen.getByText("Everything")).toBeInTheDocument());
 
     // Let one poll tick leave.
-    await vi.advanceTimersByTimeAsync(3200);
+    await tick(3200);
     await waitFor(() => expect(sourceCalls().length).toBeGreaterThanOrEqual(2));
 
     // Search, and let it come back first.
@@ -100,7 +101,7 @@ describe("stale response ordering (#91)", () => {
     stalePoll.release(page([source("Everything", "processing")]));
     // Flushed generously: without the guard the overwrite does land, just a couple of
     // scheduler turns later, and a short flush would let this test pass either way.
-    await vi.advanceTimersByTimeAsync(250);
+    await tick(250);
     await new Promise((resolve) => setTimeout(resolve, 0));
 
     expect(screen.getByText("Filtered result")).toBeInTheDocument();
@@ -126,7 +127,7 @@ describe("poll lifecycle (#91)", () => {
     render(<KnowledgePage />);
     await waitFor(() => expect(screen.getByText("Working")).toBeInTheDocument());
 
-    await vi.advanceTimersByTimeAsync(9500); // three ticks
+    await tick(9500); // three ticks
     await waitFor(() => expect(sourceCalls().length).toBeGreaterThanOrEqual(4));
 
     // The old effect depended on `sources`, so each response tore the timer down and built a
@@ -147,7 +148,7 @@ describe("poll lifecycle (#91)", () => {
     await waitFor(() => expect(screen.getByText("Awaiting review")).toBeInTheDocument());
 
     const before = sourceCalls().length;
-    await vi.advanceTimersByTimeAsync(12_000);
+    await tick(12_000);
     expect(sourceCalls().length).toBe(before);
   });
 
@@ -164,7 +165,7 @@ describe("poll lifecycle (#91)", () => {
     await waitFor(() => expect(screen.getByText("Working")).toBeInTheDocument());
 
     const before = sourceCalls().length;
-    await vi.advanceTimersByTimeAsync(3200);
+    await tick(3200);
     await waitFor(() => expect(sourceCalls().length).toBeGreaterThan(before));
   });
 });
@@ -198,7 +199,7 @@ describe("load failure (#91)", () => {
     render(<KnowledgePage />);
     await waitFor(() => expect(screen.getByText("Working")).toBeInTheDocument());
 
-    await vi.advanceTimersByTimeAsync(3200);
+    await tick(3200);
     await waitFor(() => expect(sourceCalls().length).toBeGreaterThanOrEqual(2));
 
     // One failed tick is not evidence the library is empty, and no error banner either.

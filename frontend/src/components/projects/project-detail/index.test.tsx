@@ -15,6 +15,7 @@ import { render, screen, waitFor } from "@testing-library/react";
 
 import { ProjectDetail } from "./index";
 import { api } from "@/lib/api";
+import { tick } from "@/test/tick";
 
 vi.mock("@/lib/api", () => ({ api: vi.fn() }));
 
@@ -81,7 +82,7 @@ describe("workspace status poll (#91)", () => {
     await waitFor(() => expect(screen.getByText("Acme")).toBeInTheDocument());
 
     const before = callsTo("/sources").length;
-    await vi.advanceTimersByTimeAsync(12_000);
+    await tick(12_000);
     expect(callsTo("/sources").length).toBe(before);
   });
 
@@ -91,7 +92,7 @@ describe("workspace status poll (#91)", () => {
     await waitFor(() => expect(screen.getByText("Acme")).toBeInTheDocument());
 
     const before = callsTo(`/projects/${PROJECT.id}/sources`).length;
-    await vi.advanceTimersByTimeAsync(3200);
+    await tick(3200);
     await waitFor(() =>
       expect(callsTo(`/projects/${PROJECT.id}/sources`).length).toBeGreaterThan(before)
     );
@@ -126,14 +127,14 @@ describe("workspace status poll (#91)", () => {
     render(<ProjectDetail project={PROJECT} isAdmin onBack={vi.fn()} />);
     await waitFor(() => expect(screen.getByText("Acme")).toBeInTheDocument());
 
-    await vi.advanceTimersByTimeAsync(3100);
+    await tick(3100);
     await waitFor(() => expect(wikiCall).toBeGreaterThan(1));
 
     // Still in flight — the list must not have been replaced by a spinner.
     expect(screen.getByText("Acme")).toBeInTheDocument();
 
     releasePoll(WIKI_PAGES);
-    await vi.advanceTimersByTimeAsync(50);
+    await tick(50);
     expect(screen.getByText("Acme")).toBeInTheDocument();
   });
 });

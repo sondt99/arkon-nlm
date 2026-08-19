@@ -7,7 +7,7 @@
 # Bumps are meant to arrive as reviewable pull requests, not as a side effect of a rebuild:
 # see .github/dependabot.yml, which watches every Dockerfile and docker-compose.yml image
 # in this repo.
-FROM python:3.12-slim@sha256:2c941e860699f878900b0edc2403613c234d4b32eda3cc9fa7036991a2a63c4a AS builder
+FROM python:3.14-slim@sha256:ce40764625a4ff50df3548277632e7f96c4e77fe75fa848aae9885476e7df5a4 AS builder
 
 WORKDIR /app
 
@@ -32,7 +32,7 @@ RUN uv export --frozen --no-dev --no-emit-project -o /tmp/requirements.txt \
     && pip install --no-cache-dir -r /tmp/requirements.txt
 
 # --- Runtime stage: no build tools ---
-FROM python:3.12-slim@sha256:2c941e860699f878900b0edc2403613c234d4b32eda3cc9fa7036991a2a63c4a AS runtime
+FROM python:3.14-slim@sha256:ce40764625a4ff50df3548277632e7f96c4e77fe75fa848aae9885476e7df5a4 AS runtime
 
 WORKDIR /app
 

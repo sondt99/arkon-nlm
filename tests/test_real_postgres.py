@@ -237,3 +237,94 @@ async def test_notin_actually_filters(pg_sessionmaker):
             WikiPage.slug.in_(["_log", "_index", "pg-tier-real-page"])
         ))
         await s.commit()
+
+
+# --------------------------------------------------------------------------- #
+# rag_search's 1-hop scope filter — an injection control with zero coverage.
+#
+# `chat_service.rag_search` expands from its top results via `wiki_links`, and constrains
+# that expansion with `_scope_filter`. Its own comment explains why: wiki_links edges are
+# keyed on slugs that are only unique per (slug, scope_type, scope_id), so without the
+# filter a `[[budget]]` link in one workspace also matches a `budget` page in another —
+# whose content_md is then spliced into the system prompt. Link targets are
+# contributor-authored, so the omission was an injection vector, not merely a leak.
+#
+# Deleting that filter SURVIVED the whole suite, because `rag_search` is monkeypatched out
+# in all four tests that reach it. This is the test that makes the mutation fail. It needs a
+# real database: the expansion is a JOIN across scopes, and FakeDB cannot execute it.
+# --------------------------------------------------------------------------- #
+
+async def test_the_1_hop_expansion_cannot_cross_a_workspace_boundary(pg_sessionmaker):
+    from app.database.models import WikiLink, WikiPageEmbedding1536
+    from app.services import chat_service
+    from app.services.embedding_storage import compute_content_hash
+
+    ws_a, ws_b = uuid.uuid4(), uuid.uuid4()
+    slugs = ("rag-hop-seed", "budget")
+
+    # A real embedding row is required, otherwise search_pages_semantic returns nothing and
+    # the 1-hop expansion never runs — the test would pass vacuously.
+    # A REAL catalog id, not a made-up one: rag_search resolves the spec through
+    # EMBEDDING_CATALOG to pick the per-dimension table, and an unknown id raises.
+    spec = "openai/text-embedding-3-small"  # 1536d
+    vec = [0.01] * 1536
+
+    class _Emb:
+        async def embed(self, _text):
+            return vec
+
+    class _Registry:
+        async def get_embedding(self, task=None):
+            return _Emb()
+
+        async def get_active_embedding_spec_id(self):
+            return spec
+
+    async with pg_sessionmaker() as s:
+        await s.execute(delete(WikiLink).where(WikiLink.from_slug.in_(slugs)))
+        await s.execute(delete(WikiPage).where(WikiPage.slug.in_(slugs)))
+
+        def page(slug, scope_id, body):
+            return WikiPage(
+                id=uuid.uuid4(), slug=slug, title=slug, page_type="topic",
+                content_md=body, summary="", knowledge_type_slugs=[], source_ids=[],
+                scope_type="project", scope_id=scope_id,
+            )
+
+        # Workspace A links [[budget]]. BOTH workspaces have a page with that slug.
+        s.add(page("rag-hop-seed", ws_a, "see [[budget]]"))
+        s.add(page("budget", ws_a, "WORKSPACE-A-BUDGET"))
+        s.add(page("budget", ws_b, "WORKSPACE-B-SECRET-BUDGET"))
+        s.add(WikiLink(from_slug="rag-hop-seed", to_slug="budget"))
+        await s.flush()
+
+        # Only the SEED gets an embedding. The `budget` pages must arrive via the wiki_links
+        # expansion, which is the code path under test — if they came back from the semantic
+        # search instead, the assertion would be about the wrong filter.
+        seed = (await s.execute(
+            select(WikiPage).where(WikiPage.slug == "rag-hop-seed", WikiPage.scope_id == ws_a)
+        )).scalar_one()
+        s.add(WikiPageEmbedding1536(
+            page_id=seed.id, model_spec_id=spec, embedding=vec,
+            content_hash=compute_content_hash(seed.title, seed.summary or "", seed.content_md or ""),
+        ))
+        await s.commit()
+
+    try:
+        async with pg_sessionmaker() as s:
+            pages = await chat_service.rag_search(
+                s, _Registry(), "budget question",
+                scope_type="project", scope_id=ws_a,
+            )
+        bodies = " ".join(p.content_md or "" for p in pages)
+        assert "WORKSPACE-B-SECRET-BUDGET" not in bodies, (
+            "the 1-hop expansion crossed a workspace boundary — another workspace's page "
+            "would be spliced into the system prompt"
+        )
+        for p in pages:
+            assert p.scope_id == ws_a, f"page {p.slug!r} came from scope {p.scope_id}"
+    finally:
+        async with pg_sessionmaker() as s:
+            await s.execute(delete(WikiLink).where(WikiLink.from_slug.in_(slugs)))
+            await s.execute(delete(WikiPage).where(WikiPage.slug.in_(slugs)))
+            await s.commit()

@@ -27,7 +27,6 @@ vi.mock("@/lib/auth", () => ({
 
 vi.mock("@/lib/api", () => ({
   api: vi.fn().mockResolvedValue({}),
-  apiUpload: vi.fn().mockResolvedValue({}),
 }));
 
 function renderTable(overrides: Partial<React.ComponentProps<typeof SkillTable>> = {}) {

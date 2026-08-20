@@ -89,6 +89,25 @@ def test_knowledge_context_is_bounded_per_page():
 
 
 @pytest.mark.asyncio
+async def test_rag_search_skips_when_no_embedding_model_is_active():
+    """A missing embedding slot must not raise — chat still has an LLM to talk to."""
+
+    class _Reg:
+        async def get_active_embedding_spec_id(self):
+            return None
+
+        async def get_embedding(self, **_k):
+            raise AssertionError("must not construct an embedding provider when none is selected")
+
+    pages = await chat_service.rag_search(
+        session=SimpleNamespace(),
+        registry=_Reg(),
+        question="hi",
+    )
+    assert pages == []
+
+
+@pytest.mark.asyncio
 async def test_current_question_is_not_duplicated_in_history(monkeypatch):
     current_id = uuid.uuid4()
     conversation = SimpleNamespace(id=uuid.uuid4(), scope_type="global", scope_id=None)

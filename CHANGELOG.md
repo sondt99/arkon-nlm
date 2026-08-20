@@ -11,12 +11,19 @@ Repository: [github.com/sondt99/arkon-nlm](https://github.com/sondt99/arkon-nlm)
 
 ## [Unreleased]
 
+### Added
+
+- Omniroute provider (OpenAI-compatible): API key, base URL, and model, with `OMNIROUTE_*` env bootstrap for the LLM slot (#145).
+
 ### Changed
 
 - Portal chrome, operator docs, comments, and the generated Word export are English. Functional Vietnamese (compiler few-shots, chat intent regexes, unicode tests, skill-name `À-ỹ`) is unchanged (#140, #141, #142, #143).
 
 ### Fixed
 
+- Embedding Test Connection now reports "no model selected" instead of "Could not reach the provider" (#146).
+- Omniroute Fetch Models no longer requires re-entering an API key (`/v1/models` is unauthenticated) (#147).
+- Chatbot still answers when no embedding model is configured; RAG is skipped instead of a generic sorry (#148).
 - `org:employees:manage` can no longer promote anyone to admin, reset passwords, or deactivate the last admin (#6).
 - Skill-contribution approval follows the target skill's departments, not the submitter's claimed `scope_type`. Approving no longer strips department ACLs unless an admin explicitly widens scope (#9).
 - MCP and export tokens now get a real `allowed_knowledge_types` value. Wiki search, page reads, the index, RAG, and export chat all honor it; empty KT arrays fail closed (#11).

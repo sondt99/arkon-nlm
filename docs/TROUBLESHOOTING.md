@@ -122,7 +122,8 @@ Presigned URLs use `MINIO_PUBLIC_ENDPOINT`. On Docker it must be a host the **br
 
 - Key prefix: Google `AIza…`, OpenAI `sk-…`, Anthropic `sk-ant-…`
 - Ollama URL from inside Docker is `http://host.docker.internal:11434/v1`, not `localhost`
-- 9Router: click **Fetch Models** after setting the base URL
+- 9Router / Omniroute: click **Fetch Models** after setting the base URL
+- Omniroute Test returns empty: the model is thinking (GLM-5.3). The Test probe already uses 256 tokens; a 10-token call will look blank.
 
 ### Changed embedding model, search is empty or errors
 

@@ -29,6 +29,7 @@ from loguru import logger
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.ai.providers.base import (
+    OPENAI_COMPATIBLE,
     EmbeddingProvider,
     LLMProvider,
     ProviderConfig,
@@ -44,7 +45,7 @@ def _get_embedding_class(provider: ProviderType) -> type[EmbeddingProvider]:
     if provider == ProviderType.GOOGLE:
         from app.ai.providers.google import GoogleEmbedding
         return GoogleEmbedding
-    elif provider in (ProviderType.OPENAI, ProviderType.OLLAMA, ProviderType.NINEROUTER):
+    elif provider in OPENAI_COMPATIBLE:
         from app.ai.providers.openai_provider import OpenAIEmbedding
         return OpenAIEmbedding
     raise ValueError(f"Unsupported embedding provider: {provider}")
@@ -54,7 +55,7 @@ def _get_llm_class(provider: ProviderType) -> type[LLMProvider]:
     if provider == ProviderType.GOOGLE:
         from app.ai.providers.google import GoogleLLM
         return GoogleLLM
-    elif provider in (ProviderType.OPENAI, ProviderType.OLLAMA, ProviderType.NINEROUTER):
+    elif provider in OPENAI_COMPATIBLE:
         from app.ai.providers.openai_provider import OpenAILLM
         return OpenAILLM
     elif provider == ProviderType.ANTHROPIC:
@@ -67,7 +68,7 @@ def _get_vision_class(provider: ProviderType) -> type[VisionProvider]:
     if provider == ProviderType.GOOGLE:
         from app.ai.providers.google import GoogleVision
         return GoogleVision
-    elif provider in (ProviderType.OPENAI, ProviderType.OLLAMA, ProviderType.NINEROUTER):
+    elif provider in OPENAI_COMPATIBLE:
         from app.ai.providers.openai_provider import OpenAIVision
         return OpenAIVision
     elif provider == ProviderType.ANTHROPIC:
@@ -158,12 +159,10 @@ class ProviderRegistry:
         elif config.model_id.strip().lower() in {"optimize", "auto"}:
             try:
                 explicit = await self._load_config("vision")
-                if explicit.model_id and explicit.provider in {
-                    ProviderType.OPENAI,
-                    ProviderType.NINEROUTER,
-                    ProviderType.GOOGLE,
-                    ProviderType.ANTHROPIC,
-                }:
+                if explicit.model_id and (
+                    explicit.provider in OPENAI_COMPATIBLE
+                    or explicit.provider in {ProviderType.GOOGLE, ProviderType.ANTHROPIC}
+                ):
                     logger.warning(
                         "MRP ingestion: router alias model '{}' replaced by explicit model '{}'",
                         config.model_id,
@@ -341,7 +340,7 @@ class ProviderRegistry:
             provider=ProviderType(provider_str),
             api_key=api_key or "",
             model_id=model_id,
-            # 9router needs its own base URL; Ollama gets its from llm_base_url
+            # Omniroute / 9Router / Ollama each carry their own base URL.
             base_url=base_url,
             dimensions=int(dimensions_str) if dimensions_str else None,
             extra={},
@@ -383,6 +382,9 @@ SUPPORTED_PROVIDERS = {
             "openai/gpt-4o", "openai/gpt-4o-mini",
             "meta-llama/llama-3.3-70b-instruct",
         ]},
+        {"id": "omniroute", "name": "Omniroute", "models": [
+            "nosiaht", "glm/glm-5.3",
+        ]},
     ],
     "vision": [
         {"id": "google", "name": "Google Gemini", "models": [
@@ -399,6 +401,9 @@ SUPPORTED_PROVIDERS = {
         ]},
         {"id": "ninerouter", "name": "9Router", "models": [
             "google/gemini-2.5-flash", "openai/gpt-4o", "anthropic/claude-sonnet-4-6",
+        ]},
+        {"id": "omniroute", "name": "Omniroute", "models": [
+            "nosiaht", "glm/glm-5.3",
         ]},
     ],
 }

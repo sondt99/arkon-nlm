@@ -142,12 +142,20 @@ async def rag_search(
 ) -> list[WikiPage]:
     """Embed question and return relevant wiki pages (semantic + 1-hop expansion)."""
     top_k = top_k or settings.chat_rag_top_k
-    emb = await registry.get_embedding(task="search_query")
     spec_id = await registry.get_active_embedding_spec_id()
     if not spec_id:
+        # Chat must still work with only an LLM configured. Asking get_embedding()
+        # first raised "No active embedding model" and the router turned that
+        # into a generic "Sorry, I encountered an error".
+        logger.debug("RAG skipped: no active embedding model")
         return []
 
-    query_vec = await emb.embed(question)
+    try:
+        emb = await registry.get_embedding(task="search_query")
+        query_vec = await emb.embed(question)
+    except Exception:
+        logger.exception("RAG embedding failed; answering without wiki context")
+        return []
 
     pairs = await wiki_service.search_pages_semantic(
         session=session,

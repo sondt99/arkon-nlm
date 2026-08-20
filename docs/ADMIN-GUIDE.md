@@ -77,9 +77,11 @@ Five slots, each with provider + model + key (or base URL):
 | Chatbot | No | Falls back to LLM |
 | Claude Code gateway | No | `/api/claude-gateway` |
 
-Supported providers: Google, OpenAI, Anthropic (no embeddings), Ollama, 9Router.
+Supported providers: Google, OpenAI, Anthropic (no embeddings), Ollama, 9Router, Omniroute.
 
-Ollama / 9Router: set the base URL, **Fetch Models**, pick one, **Test**.
+Ollama / 9Router / Omniroute: set the base URL, **Fetch Models**, pick one, **Test**.
+
+Omniroute can also be seeded from env (`OMNIROUTE_API_KEY`, `OMNIROUTE_BASE_URL`, `OMNIROUTE_MODEL`) so the LLM slot works before the first Settings save. Reasoning models such as `glm/glm-5.3` need more than a handful of tokens — the built-in Test uses 256.
 
 Keys are stored encrypted (`SECRET_KEY` → Fernet). Changing `SECRET_KEY` later makes old keys unreadable.
 

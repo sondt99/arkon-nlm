@@ -14,6 +14,8 @@ type ProviderDef = {
   staticModels: string[];  // fallback list; empty = must fetch
   needsKey: boolean;
   canFetch: boolean;       // supports /v1/models endpoint
+  /** When false, Fetch Models does not require a plaintext key. Defaults to needsKey. */
+  fetchNeedsKey?: boolean;
   defaultBaseUrl?: string;
   keyPlaceholder?: string;
   modelPlaceholder?: string;
@@ -68,6 +70,18 @@ const LLM_PROVIDERS: ProviderDef[] = [
     keyPlaceholder: "bearer-token",
     modelPlaceholder: "select or type model ID",
   },
+  {
+    value: "omniroute",
+    label: "Omniroute",
+    icon: "route",
+    staticModels: ["nosiaht", "glm/glm-5.3"],
+    needsKey: true,
+    canFetch: true,
+    fetchNeedsKey: false,
+    defaultBaseUrl: "https://ai.nosiaht.com/v1",
+    keyPlaceholder: "sk-...",
+    modelPlaceholder: "e.g. nosiaht or glm/glm-5.3",
+  },
 ];
 
 const VISION_PROVIDERS: ProviderDef[] = [
@@ -119,10 +133,22 @@ const VISION_PROVIDERS: ProviderDef[] = [
     keyPlaceholder: "bearer-token",
     modelPlaceholder: "select or type model ID",
   },
+  {
+    value: "omniroute",
+    label: "Omniroute",
+    icon: "route",
+    staticModels: ["nosiaht", "glm/glm-5.3"],
+    needsKey: true,
+    canFetch: true,
+    fetchNeedsKey: false,
+    defaultBaseUrl: "https://ai.nosiaht.com/v1",
+    keyPlaceholder: "sk-...",
+    modelPlaceholder: "e.g. nosiaht or glm/glm-5.3",
+  },
 ];
 
 const ALL_PROVIDERS = { llm: LLM_PROVIDERS, vision: VISION_PROVIDERS, chatbot: LLM_PROVIDERS, gateway: LLM_PROVIDERS };
-const PROVIDER_NAMES = ["google", "openai", "anthropic", "ollama", "ninerouter"] as const;
+const PROVIDER_NAMES = ["google", "openai", "anthropic", "ollama", "ninerouter", "omniroute"] as const;
 
 // Capabilities that offer a "fall back to LLM Provider" None option instead of
 // requiring their own dedicated provider.
@@ -198,9 +224,11 @@ export function ProviderConfigCard({ capability, testEndpoint }: Props) {
 
     // A saved key only ever comes back masked and the endpoint has no access to the stored
     // secret, so posting the mask (or an empty string over it) just returns 401. Ask for the
-    // key instead of firing a request that is guaranteed to fail.
+    // key instead of firing a request that is guaranteed to fail — unless this provider's
+    // /v1/models list is unauthenticated (Omniroute).
     const plainKey = isMasked ? "" : apiKey;
-    if (def?.needsKey && !plainKey) {
+    const fetchNeedsKey = def?.fetchNeedsKey ?? def?.needsKey ?? false;
+    if (fetchNeedsKey && !plainKey) {
       setFetchError(
         isMasked
           ? "Re-enter the API key to list models — the saved key is stored masked and cannot be reused here."
@@ -297,7 +325,7 @@ export function ProviderConfigCard({ capability, testEndpoint }: Props) {
     <>
       {/* Provider selector */}
       <div className="px-6 pb-4">
-        <div className={`grid gap-2 ${fallbackLabel ? "grid-cols-3 sm:grid-cols-6" : "grid-cols-3 sm:grid-cols-5"}`}>
+        <div className={`grid gap-2 ${fallbackLabel ? "grid-cols-3 sm:grid-cols-4 lg:grid-cols-7" : "grid-cols-3 sm:grid-cols-6"}`}>
           {/* Chatbot/Gateway: "None" option = fall back to LLM provider */}
           {fallbackLabel && (
             <button
@@ -415,6 +443,9 @@ export function ProviderConfigCard({ capability, testEndpoint }: Props) {
               API Key
               {!def.needsKey && (
                 <span className="ml-1.5 text-muted-foreground font-normal">(optional)</span>
+              )}
+              {def.needsKey && def.fetchNeedsKey === false && (
+                <span className="ml-1.5 text-muted-foreground font-normal">(not required to list models)</span>
               )}
               {!!apiKeys[provider] && (
                 <span className="ml-2 text-green-600 dark:text-green-400 font-normal">✓ saved</span>

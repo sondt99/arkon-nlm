@@ -125,6 +125,12 @@ async def _run_connection_test(
     try:
         ok, msg = await probe()
         return TestConnectionResult(success=ok, message=msg)
+    except ValueError as e:
+        # Registry raises ValueError when the slot is simply not configured
+        # ("No active embedding model. Pick one in Settings → Embedding.").
+        # Swallowing that into "Could not reach…" made a missing selection look
+        # like a downed API.
+        return TestConnectionResult(success=False, message=str(e))
     except Exception:
         logger.exception("Provider connection test failed for capability={}", capability)
         return TestConnectionResult(

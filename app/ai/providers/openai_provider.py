@@ -24,6 +24,7 @@ from app.ai.agent_protocol import (
 )
 from app.ai.providers.base import (
     EmbeddingProvider,
+    LLMGeneration,
     LLMProvider,
     ProviderConfig,
     VisionProvider,
@@ -118,6 +119,24 @@ class OpenAILLM(LLMProvider):
         temperature: float = 0.7,
         top_p: Optional[float] = None,
     ) -> str:
+        result = await self.generate_detailed(
+            prompt,
+            system=system,
+            max_tokens=max_tokens,
+            temperature=temperature,
+            top_p=top_p,
+        )
+        return result.text
+
+    async def generate_detailed(
+        self,
+        prompt: str,
+        system: Optional[str] = None,
+        max_tokens: Optional[int] = None,
+        temperature: float = 0.7,
+        top_p: Optional[float] = None,
+    ) -> LLMGeneration:
+        """generate() plus stop reason, so MRP merge can reject a truncated body."""
         messages = []
         if system:
             messages.append({"role": "system", "content": system})
@@ -127,6 +146,9 @@ class OpenAILLM(LLMProvider):
             "model": self.config.model_id,
             "messages": messages,
             "temperature": temperature,
+            # Omniroute (and some other proxies) stream SSE unless this is
+            # explicit — the SDK then fails to parse a JSON completion.
+            "stream": False,
         }
         if max_tokens is not None:
             kwargs["max_tokens"] = max_tokens
@@ -134,7 +156,17 @@ class OpenAILLM(LLMProvider):
             kwargs["top_p"] = top_p
 
         response = await self.client.chat.completions.create(**kwargs)
-        return response.choices[0].message.content or ""
+        choice = response.choices[0]
+        text = choice.message.content or ""
+        reason_map = {"stop": "end_turn", "length": "max_tokens", "tool_calls": "tool_use"}
+        stop_reason = reason_map.get(choice.finish_reason or "", None)
+        usage = None
+        if response.usage:
+            usage = {
+                "input_tokens": response.usage.prompt_tokens,
+                "output_tokens": response.usage.completion_tokens,
+            }
+        return LLMGeneration(text=text, stop_reason=stop_reason, usage=usage)
 
     async def generate_with_tools(
         self,
@@ -155,6 +187,7 @@ class OpenAILLM(LLMProvider):
             "messages": openai_messages,
             "tools": tools,
             "temperature": temperature,
+            "stream": False,
         }
         if max_tokens is not None:
             kwargs["max_tokens"] = max_tokens
@@ -199,8 +232,17 @@ class OpenAILLM(LLMProvider):
 
     async def test_connection(self) -> tuple[bool, str]:
         try:
-            result = await self.generate("Say 'OK'", max_tokens=10, temperature=0)
-            return True, f"OK — model={self.config.model_id}, response='{result[:50]}'"
+            # Reasoning models (GLM-5.3 via Omniroute) spend the first tens of
+            # tokens on hidden thinking; 10 used to return an empty body and
+            # still look like success.
+            result = await self.generate("Say 'OK'", max_tokens=256, temperature=0)
+            text = (result or "").strip()
+            if not text:
+                return False, (
+                    f"Empty response from model={self.config.model_id}. "
+                    "Try a larger max_tokens or a non-reasoning model."
+                )
+            return True, f"OK — model={self.config.model_id}, response='{text[:50]}'"
         except Exception as e:
             return False, f"OpenAI LLM error: {e}"
 
@@ -256,6 +298,7 @@ class OpenAIVision(VisionProvider):
                         }
                     ],
                     temperature=0.2,
+                    stream=False,
                 )
                 return response.choices[0].message.content or ""
             except Exception as e:

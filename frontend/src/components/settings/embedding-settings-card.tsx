@@ -99,6 +99,16 @@ const EMBEDDING_PROVIDERS: ProviderDef[] = [
     keyPlaceholder: "bearer-token",
     modelPlaceholder: "e.g. openai/text-embedding-3-small",
   },
+  {
+    value: "omniroute",
+    label: "Omniroute",
+    icon: "route",
+    needsKey: true,
+    canFetch: true,
+    defaultBaseUrl: "https://ai.nosiaht.com/v1",
+    keyPlaceholder: "sk-...",
+    modelPlaceholder: "custom embedding model ID",
+  },
 ];
 
 /**
@@ -164,7 +174,7 @@ export function EmbeddingSettingsCard() {
       setStatus(s);
 
       const masked: Record<string, string> = {};
-      for (const p of ["google", "openai", "anthropic", "ollama", "ninerouter"]) {
+      for (const p of ["google", "openai", "anthropic", "ollama", "ninerouter", "omniroute"]) {
         const v = settings[`embedding_api_key__${p}`];
         if (typeof v === "string" && v.length > 0) masked[p] = v;
       }
@@ -355,7 +365,7 @@ export function EmbeddingSettingsCard() {
     <>
       {/* Provider selector */}
       <div className="px-6 pb-4">
-        <div className="grid grid-cols-3 sm:grid-cols-5 gap-2">
+        <div className="grid grid-cols-3 sm:grid-cols-6 gap-2">
           {EMBEDDING_PROVIDERS.map((p) => {
             const active = selectedProvider === p.value;
             const hasSavedKey = !!maskedKeys[p.value];
@@ -419,6 +429,15 @@ export function EmbeddingSettingsCard() {
             <div className="p-3 rounded-lg bg-red-50 dark:bg-red-950/30 border border-red-200 dark:border-red-800 text-xs">
               <strong>Migration failed:</strong> {job.error_message || "unknown"}
             </div>
+          )}
+
+          {(selectedProvider === "omniroute" || selectedProvider === "ninerouter") && (
+            <p className="text-xs text-muted-foreground leading-relaxed rounded-lg border border-border bg-muted/40 px-3 py-2">
+              Chat models such as <code>nosiaht</code> and <code>glm/glm-5.3</code> cannot
+              produce embeddings. Use Google, OpenAI, or Ollama from the catalog, or a
+              custom embedding model ID this proxy actually serves on
+              {" "}<code>/v1/embeddings</code>.
+            </p>
           )}
 
           {/* 1. Base URL — first */}

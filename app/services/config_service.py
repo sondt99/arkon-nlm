@@ -77,10 +77,11 @@ ALL_CONFIG_KEYS = [
     "embedding_api_key__anthropic",
     "embedding_api_key__ollama",
     "embedding_api_key__ninerouter",
+    "embedding_api_key__omniroute",
     "embedding_base_url",        # optional, custom endpoint (Ollama, Azure, proxy)
 
     # --- LLM provider (for summarization, webhook gateway) ---
-    "llm_provider",              # "google" | "openai" | "anthropic" | "ollama" | "ninerouter"
+    "llm_provider",              # "google" | "openai" | "anthropic" | "ollama" | "ninerouter" | "omniroute"
     "llm_model_id",              # e.g. "gpt-4o-mini", "claude-sonnet-4-20250514"
     "llm_api_key",               # Legacy single key (kept for backwards compat)
     "llm_api_key__google",
@@ -88,10 +89,11 @@ ALL_CONFIG_KEYS = [
     "llm_api_key__anthropic",
     "llm_api_key__ollama",
     "llm_api_key__ninerouter",
+    "llm_api_key__omniroute",
     "llm_base_url",              # Custom endpoint
 
     # --- Vision provider (for image analysis during ingestion) ---
-    "vision_provider",           # "google" | "openai" | "ninerouter"
+    "vision_provider",           # "google" | "openai" | "ninerouter" | "omniroute"
     "vision_model_id",           # e.g. "gemini-2.0-flash", "gpt-4o"
     "vision_api_key",            # Legacy single key (kept for backwards compat)
     "vision_api_key__google",
@@ -99,6 +101,7 @@ ALL_CONFIG_KEYS = [
     "vision_api_key__anthropic",
     "vision_api_key__ollama",
     "vision_api_key__ninerouter",
+    "vision_api_key__omniroute",
     "vision_base_url",           # Custom endpoint
 
     # --- Custom embedding spec (set when user switches to a non-catalog model) ---
@@ -108,7 +111,7 @@ ALL_CONFIG_KEYS = [
     "embedding_custom_provider",
 
     # --- Chatbot provider (optional — falls back to LLM provider if unset) ---
-    "chatbot_provider",           # "google" | "openai" | "anthropic" | "ollama" | "ninerouter"
+    "chatbot_provider",           # "google" | "openai" | "anthropic" | "ollama" | "ninerouter" | "omniroute"
     "chatbot_model_id",
     "chatbot_api_key",
     "chatbot_api_key__google",
@@ -116,10 +119,11 @@ ALL_CONFIG_KEYS = [
     "chatbot_api_key__anthropic",
     "chatbot_api_key__ollama",
     "chatbot_api_key__ninerouter",
+    "chatbot_api_key__omniroute",
     "chatbot_base_url",
 
     # --- Gateway provider (optional — falls back to LLM provider if unset) ---
-    "gateway_provider",           # "google" | "openai" | "anthropic" | "ollama" | "ninerouter"
+    "gateway_provider",           # "google" | "openai" | "anthropic" | "ollama" | "ninerouter" | "omniroute"
     "gateway_model_id",
     "gateway_api_key",
     "gateway_api_key__google",
@@ -127,6 +131,7 @@ ALL_CONFIG_KEYS = [
     "gateway_api_key__anthropic",
     "gateway_api_key__ollama",
     "gateway_api_key__ninerouter",
+    "gateway_api_key__omniroute",
     "gateway_base_url",
 
     # --- Chat ---
@@ -193,9 +198,15 @@ class ConfigService:
 
     async def get(self, key: str) -> Optional[str]:
         """
-        Get a config value. Priority: DB > .env > default.
+        Get a config value. Priority: DB > Settings field > Omniroute env bootstrap.
         """
-        # 1. Try DB first
+        value = await self._get_db_or_settings_field(key)
+        if value:
+            return value
+        return await self._omniroute_env_fallback(key)
+
+    async def _get_db_or_settings_field(self, key: str) -> Optional[str]:
+        """DB row, then an identically named Settings field. No Omniroute mapping."""
         stmt = select(AppConfig).where(AppConfig.key == key)
         result = await self.db.execute(stmt)
         row = result.scalar_one_or_none()
@@ -206,12 +217,41 @@ class ConfigService:
                 value = self._decrypt(value, key)
             return value
 
-        # 2. Fallback to env/settings
         from app.config import settings
         env_value = getattr(settings, key, None)
         if env_value is not None:
             return str(env_value)
 
+        return None
+
+    async def _omniroute_env_fallback(self, key: str) -> Optional[str]:
+        """Fill Omniroute LLM keys from OMNIROUTE_* when Admin Settings has none.
+
+        Chatbot / gateway / vision stay unset so they keep falling back to the
+        LLM slot. embedding_api_key__omniroute is filled so a later custom
+        embedding spec can reuse the same token, but we never auto-select an
+        embedding model — this proxy may not offer one.
+        """
+        from app.config import settings
+
+        api_key = (settings.omniroute_api_key or "").strip()
+        base_url = (settings.omniroute_base_url or "").strip().rstrip("/")
+        model = (settings.omniroute_model or "").strip()
+        if not api_key:
+            return None
+
+        if key.endswith("_api_key__omniroute"):
+            return api_key
+
+        trio_complete = bool(base_url and model)
+        if key == "llm_provider" and trio_complete:
+            return "omniroute"
+        if key == "llm_model_id" and trio_complete:
+            return model
+        if key == "llm_base_url":
+            provider = await self._get_db_or_settings_field("llm_provider")
+            if provider == "omniroute" or (not provider and trio_complete):
+                return base_url
         return None
 
     async def set(self, key: str, value: str) -> None:

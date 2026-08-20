@@ -115,6 +115,7 @@ Runtime-selected, stored in `app_config` (Fernet via `SECRET_KEY`):
 | Anthropic | no | yes | yes |
 | Ollama | yes | yes | yes |
 | 9Router | yes | yes | yes |
+| Omniroute | yes | yes | yes |
 
 Embedding vectors go to one of `wiki_page_embeddings_{768,1024,1536,3072}`. Switching dimension enqueues `reembed_all_pages_task`.
 
@@ -364,7 +365,7 @@ Workspace Editor uploads with `scope=project`. Pages get `scope_id` = that works
 
 ### UC-4 Ask the chatbot
 
-User sends a message. Service embeds the query, pulls top wiki pages in scope, calls the chatbot (or fallback LLM) provider, stores the turn. Optional **Add to Wiki** creates a page from the thread.
+User sends a message. If an embedding model is active, the service embeds the query and pulls top wiki pages in scope; otherwise it skips retrieval and still calls the LLM. Then it stores the turn. Optional **Add to Wiki** creates a page from the thread.
 
 ### UC-5 Claude asks a question
 
@@ -618,7 +619,7 @@ and §7.3.
 
 ## Appendix — environment
 
-Infrastructure settings are env-only (`app/config.py`). AI keys are not env — they are in `app_config`.
+Infrastructure settings are env-only (`app/config.py`). AI keys live in `app_config`, except Omniroute which can be bootstrapped from env when the LLM slot is still empty: `OMNIROUTE_API_KEY`, `OMNIROUTE_BASE_URL`, `OMNIROUTE_MODEL`. A saved Admin Settings value always wins.
 
 Must-set in production: `SECRET_KEY`, `DEFAULT_ADMIN_PASSWORD`, `POSTGRES_PASSWORD` + matching `DATABASE_URL`, `REDIS_PASSWORD`, `MINIO_ACCESS_KEY`, `MINIO_SECRET_KEY`, `MINIO_PUBLIC_ENDPOINT`.
 
@@ -649,6 +650,7 @@ as well as from the process environment.
 | MCP | `MCP_TOKEN_EXPIRY_DAYS` |
 | MRP | `MRP_AUTO_APPROVE_PLAN`, `MRP_INGESTION_MODEL_ID`, and the chunk / concurrency / threshold / timeout knobs |
 | Chatbot | `CHAT_RAG_TOP_K`, `CHAT_LINKED_PAGES_LIMIT`, `CHAT_CONTEXT_CHARS_PER_PAGE`, `CHAT_HISTORY_MESSAGES`, `CHAT_GENERATION_TIMEOUT`, `CHAT_MIN_DETAILED_ANSWER_CHARS`, `CHAT_EXPAND_SHORT_ANSWERS` |
+| Omniroute | `OMNIROUTE_API_KEY`, `OMNIROUTE_BASE_URL`, `OMNIROUTE_MODEL` |
 | NotebookLM | `NOTEBOOKLM_STORAGE_PATH` |
 | Dev escape hatches | `ARKON_ALLOW_DEFAULT_SECRET`, `ARKON_ALLOW_CORS_WILDCARD` |
 

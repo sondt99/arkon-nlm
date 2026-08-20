@@ -147,7 +147,19 @@ Paste the same Google AI Studio key into each slot you use. Click **Test** on ea
 
 Same idea: pick the provider, pick a model, paste the key, test.
 
-Anthropic has no embedding model — keep embedding on Google, OpenAI, Ollama, or 9Router.
+Anthropic has no embedding model — keep embedding on Google, OpenAI, Ollama, 9Router, or Omniroute.
+
+### Omniroute
+
+Set in `.env.docker` (or `.env.local`) and recreate the API container — no Settings save required for the LLM slot:
+
+```env
+OMNIROUTE_API_KEY=sk-...
+OMNIROUTE_BASE_URL=https://ai.nosiaht.com/v1
+OMNIROUTE_MODEL=nosiaht
+```
+
+Or pick **Omniroute** in Settings, paste the key + base URL, **Fetch Models**, choose `nosiaht` or `glm/glm-5.3`, **Test**. This proxy's `nosiaht` alias currently routes to GLM-5.3; it does not offer embeddings.
 
 ### Ollama (offline)
 

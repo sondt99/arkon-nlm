@@ -10,9 +10,10 @@ from pydantic_settings import BaseSettings
 class Settings(BaseSettings):
     """
     Infrastructure settings loaded from .env or environment.
-    
-    AI provider settings (embedding, LLM, vision) are NOT here —
-    they are stored in the database and managed via Admin Portal.
+
+    Most AI provider settings live in app_config (Admin Portal). Omniroute is
+    the exception: OMNIROUTE_API_KEY / OMNIROUTE_BASE_URL / OMNIROUTE_MODEL
+    seed the LLM slot when nothing is saved in the database yet.
     See: app/services/config_service.py and app/ai/registry.py
     """
 
@@ -238,6 +239,22 @@ class Settings(BaseSettings):
     chat_generation_timeout: int = Field(default=240, ge=30, le=280)
     chat_min_detailed_answer_chars: int = Field(default=1_800, ge=400, le=8_000)
     chat_expand_short_answers: bool = Field(default=True)
+
+    # --- Omniroute (OpenAI-compatible proxy) ---
+    # Seeds the LLM provider when Admin Settings has no llm_provider yet.
+    # A saved Settings value always wins (DB > env).
+    omniroute_api_key: str = Field(
+        default="",
+        description="Bearer token for the Omniroute proxy (OMNIROUTE_API_KEY).",
+    )
+    omniroute_base_url: str = Field(
+        default="",
+        description="OpenAI-compatible base URL, e.g. https://ai.nosiaht.com/v1",
+    )
+    omniroute_model: str = Field(
+        default="",
+        description="Default Omniroute model id, e.g. nosiaht or glm/glm-5.3",
+    )
 
     # --- NotebookLM Integration ---
     notebooklm_storage_path: str = Field(

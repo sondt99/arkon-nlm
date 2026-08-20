@@ -161,6 +161,16 @@ class ProviderType(str, Enum):
     VOYAGE = "voyage"
     COHERE = "cohere"
     NINEROUTER = "ninerouter"  # OpenAI-compatible AI routing proxy
+    OMNIROUTE = "omniroute"  # OpenAI-compatible AI routing proxy (key + base URL + model)
+
+
+# Chat/embeddings/vision that speak the OpenAI HTTP surface.
+OPENAI_COMPATIBLE: frozenset[ProviderType] = frozenset({
+    ProviderType.OPENAI,
+    ProviderType.OLLAMA,
+    ProviderType.NINEROUTER,
+    ProviderType.OMNIROUTE,
+})
 
 
 # ---------------------------------------------------------------------------

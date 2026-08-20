@@ -11,6 +11,7 @@ const PROVIDER_LABELS: Record<string, string> = {
   anthropic: "Anthropic",
   ollama: "Ollama",
   ninerouter: "9Router",
+  omniroute: "Omniroute",
 };
 
 function InfoTip({ children }: { children: React.ReactNode }) {

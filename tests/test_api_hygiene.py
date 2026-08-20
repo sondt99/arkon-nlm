@@ -295,6 +295,26 @@ async def test_a_working_provider_message_is_still_passed_through(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_an_unconfigured_embedding_slot_says_so(monkeypatch):
+    """A missing selection used to come back as 'Could not reach the configured
+    embedding provider', which sent people to the API key field instead of the model picker."""
+
+    class _Registry:
+        def __init__(self, _db):
+            pass
+
+        async def get_embedding(self, **_k):
+            raise ValueError("No active embedding model. Pick one in Settings → Embedding.")
+
+    monkeypatch.setattr("app.ai.registry.ProviderRegistry", _Registry)
+
+    result = await settings_router.test_embedding(db=_EmptySession(), _user=_admin())
+    assert result.success is False
+    assert "No active embedding model" in result.message
+    assert "Could not reach" not in result.message
+
+
+@pytest.mark.asyncio
 async def test_conversation_to_wiki_does_not_echo_the_llm_error(monkeypatch):
     """`detail=f"LLM synthesis failed: {exc}. ..."` handed the provider's message straight to
     whoever clicked "save to wiki"."""

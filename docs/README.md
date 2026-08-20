@@ -1,6 +1,6 @@
 # Arkon documentation
 
-Version **0.1.0** · Source: [github.com/sondt99/arkon-nlm](https://github.com/sondt99/arkon-nlm)
+Version **0.2.0** · Source: [github.com/sondt99/arkon-nlm](https://github.com/sondt99/arkon-nlm)
 
 These pages are the source of truth. If something here disagrees with a comment in code, trust the running code and file an issue.
 
@@ -60,12 +60,12 @@ MRP writes wiki pages (with citations)
 
 ---
 
-## Release facts (v0.1.0)
+## Release facts (v0.2.0)
 
 | Item | Value |
 |---|---|
-| App version | `0.1.0` |
-| Latest migration | `033_nlm_passthrough_ownership` (`alembic heads` → `033`) |
+| App version | `0.2.0` |
+| Latest migration | `034_status_checks_listing_indexes` (`alembic heads` → `034`) |
 | Browser entry | `http://localhost:3119` |
 | MCP (Docker) | `http://localhost:3119/mcp` |
 | Health (Docker) | `http://localhost:3119/api/health` |

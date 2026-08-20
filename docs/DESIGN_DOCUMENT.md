@@ -1,7 +1,7 @@
 # Arkon — System design
 
-**Version:** 0.1.0  
-**Date:** 2026-08-18  
+**Version:** 0.2.0  
+**Date:** 2026-08-20  
 **Repo:** [github.com/sondt99/arkon-nlm](https://github.com/sondt99/arkon-nlm)
 
 This is the formal spec. Operator guides live next to it in `docs/`. When you change APIs, models, pipeline behavior, RBAC, or MCP tools, update the matching section here in the same change.
@@ -123,7 +123,7 @@ Embedding vectors go to one of `wiki_page_embeddings_{768,1024,1536,3072}`. Swit
 
 ## 3. Data model
 
-Latest revision: `033_nlm_passthrough_ownership` (`uv run --extra dev alembic heads` → `033`). Source of truth: `app/database/models.py`.
+Latest revision: `034_status_checks_listing_indexes` (`uv run --extra dev alembic heads` → `034`). Source of truth: `app/database/models.py`.
 
 ### 3.1 Identity
 

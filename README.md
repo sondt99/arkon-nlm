@@ -129,7 +129,7 @@ Start at the [docs index](docs/README.md).
 | [Wiki & MRP](docs/WIKI.md) | How documents become pages |
 | [MCP](docs/MCP.md) | Claude Desktop / Claude Code |
 | [Troubleshooting](docs/TROUBLESHOOTING.md) | Something is broken |
-| [Changelog](CHANGELOG.md) | What shipped in v0.1.0 |
+| [Changelog](CHANGELOG.md) | What shipped in v0.2.0 |
 
 ---
 

@@ -31,7 +31,7 @@ from matplotlib.patches import FancyBboxPatch
 DOCS_DIR = Path(__file__).parent
 OUTPUT   = DOCS_DIR / "Arkon-Documentation.docx"
 
-# Vietnamese-capable font on Windows
+# Body font
 VN_FONT = "Arial"
 
 # ── Color Palette ─────────────────────────────────────────────────────────────
@@ -98,7 +98,7 @@ def make_architecture_diagram():
     ax.set_ylim(0, 9)
     ax.axis("off")
     ax.set_facecolor(hex_to_rgb(C["bg"]))
-    ax.set_title("Kiến trúc hệ thống Arkon", fontsize=16, fontweight="bold",
+    ax.set_title("Arkon system architecture", fontsize=16, fontweight="bold",
                  color=hex_to_rgb(C["primary"]), pad=15, fontfamily=VN_FONT)
 
     # ── External users ──────────────────────────────
@@ -213,17 +213,17 @@ def make_mrp_pipeline():
     ax.set_ylim(0, 7)
     ax.axis("off")
     ax.set_facecolor(hex_to_rgb(C["bg"]))
-    ax.set_title("MRP Pipeline — Quy trình xử lý tài liệu", fontsize=15,
+    ax.set_title("MRP Pipeline — document processing", fontsize=15,
                  fontweight="bold", color=hex_to_rgb(C["primary"]),
                  pad=12, fontfamily=VN_FONT)
 
     phases = [
-        ("1. TRIAGE",  C["accent"],    1.2,  "Phân loại → outline\nchọn pipeline strategy"),
-        ("2. MAP",     C["secondary"], 3.3,  "Chia chunks → LLM\nextract entities / facts"),
-        ("3. REDUCE",  C["primary"],   5.4,  "Gộp → wiki page drafts\ntheo slug"),
-        ("4. REFINE",  C["purple"],    7.5,  "Cải thiện prose\nloại bỏ trùng lặp"),
-        ("5. VERIFY",  C["warning"],   9.6,  "Kiểm tra fact\ncross-reference"),
-        ("6. COMMIT",  C["success"],  11.7,  "Lưu wiki pages\nvào PostgreSQL"),
+        ("1. TRIAGE",  C["accent"],    1.2,  "Classify → outline\npick pipeline strategy"),
+        ("2. MAP",     C["secondary"], 3.3,  "Split chunks → LLM\nextract entities / facts"),
+        ("3. REDUCE",  C["primary"],   5.4,  "Merge → wiki page drafts\nby slug"),
+        ("4. REFINE",  C["purple"],    7.5,  "Improve prose\nremove duplicates"),
+        ("5. VERIFY",  C["warning"],   9.6,  "Check facts\ncross-reference"),
+        ("6. COMMIT",  C["success"],  11.7,  "Save wiki pages\nto PostgreSQL"),
     ]
 
     for name, color, cx, desc in phases:
@@ -253,7 +253,7 @@ def make_mrp_pipeline():
 
     # DB access indicators
     ax.text(7.0, 1.3,
-            "Mỗi phase đọc/ghi PostgreSQL • Redis queue • MinIO (files)",
+            "Each phase reads/writes PostgreSQL • Redis queue • MinIO (files)",
             ha="center", fontsize=9, color=hex_to_rgb(C["gray"]),
             fontfamily=VN_FONT, style="italic",
             bbox=dict(boxstyle="round,pad=0.4", fc=hex_to_rgb(C["light"]),
@@ -280,14 +280,14 @@ def make_upload_flow():
     ax.set_ylim(0, 6.5)
     ax.axis("off")
     ax.set_facecolor(hex_to_rgb(C["bg"]))
-    ax.set_title("Luồng Upload & Xử lý Tài liệu", fontsize=15,
+    ax.set_title("Upload and document processing flow", fontsize=15,
                  fontweight="bold", color=hex_to_rgb(C["primary"]),
                  pad=12, fontfamily=VN_FONT)
 
     steps = [
         (1.4, 5.0, "User\nUpload", C["gray"]),
         (3.5, 5.0, "POST\n/api/sources/upload", C["secondary"]),
-        (6.0, 5.0, "MinIO\n(lưu file)", C["warning"]),
+        (6.0, 5.0, "MinIO\n(store file)", C["warning"]),
         (8.5, 5.0, "Redis Queue\n(enqueue job)", C["danger"]),
         (11.2, 5.0, "Worker\n(arq)", C["accent"]),
     ]
@@ -337,7 +337,7 @@ def make_upload_flow():
             color=hex_to_rgb(C["secondary"]), fontfamily=VN_FONT)
 
     ax.text(6.5, 0.5,
-            "source.pipeline_phase lưu phase cuối hoàn thành → Worker tự resume nếu crash",
+            "source.pipeline_phase stores the last completed phase → worker resumes after a crash",
             ha="center", fontsize=8.5, color=hex_to_rgb(C["gray"]),
             style="italic", fontfamily=VN_FONT,
             bbox=dict(boxstyle="round,pad=0.35", fc=hex_to_rgb(C["light"]),
@@ -355,7 +355,7 @@ def make_rbac_diagram():
     ax.set_ylim(0, 7)
     ax.axis("off")
     ax.set_facecolor(hex_to_rgb(C["bg"]))
-    ax.set_title("Mô hình phân quyền (Dual-Realm RBAC)", fontsize=15,
+    ax.set_title("Permission model (Dual-Realm RBAC)", fontsize=15,
                  fontweight="bold", color=hex_to_rgb(C["primary"]),
                  pad=12, fontfamily=VN_FONT)
 
@@ -398,7 +398,7 @@ def make_rbac_diagram():
         box(ax, px, py, 1.55, 0.7, pl, "", C["accent"], 8)
         arrow(ax, 4.8, 3.7, px, py + 0.35, color=C["accent"], lw=1)
 
-    ax.text(3.0, 1.5, "Phòng ban → quyết định role → quyết định permissions",
+    ax.text(3.0, 1.5, "Department → decides role → decides permissions",
             ha="center", fontsize=8, color=hex_to_rgb(C["gray"]),
             fontfamily=VN_FONT, style="italic")
 
@@ -428,7 +428,7 @@ def make_rbac_diagram():
               color=C["accent"], lw=1)
 
     # Independent note
-    ax.text(6.5, 0.7, "Hai realm hoàn toàn độc lập — quyền workspace không ảnh hưởng global và ngược lại",
+    ax.text(6.5, 0.7, "The two realms are fully independent — workspace rights do not affect global, and vice versa",
             ha="center", fontsize=8.5, color=hex_to_rgb(C["gray"]),
             style="italic", fontfamily=VN_FONT,
             bbox=dict(boxstyle="round,pad=0.35", fc="white",
@@ -446,7 +446,7 @@ def make_db_schema():
     ax.set_ylim(0, 8)
     ax.axis("off")
     ax.set_facecolor(hex_to_rgb(C["bg"]))
-    ax.set_title("Database Schema — Các bảng chính (PostgreSQL + pgvector)", fontsize=14,
+    ax.set_title("Database schema — main tables (PostgreSQL + pgvector)", fontsize=14,
                  fontweight="bold", color=hex_to_rgb(C["primary"]),
                  pad=12, fontfamily=VN_FONT)
 
@@ -576,7 +576,7 @@ def make_db_schema():
 
     # note about pgvector
     ax.text(7.0, 0.35,
-            "wiki_page_embeddings_768 / _1024 / _1536 / _3072 — mỗi dimension-size là một bảng riêng với HNSW index",
+            "wiki_page_embeddings_768 / _1024 / _1536 / _3072 — one table per dimension size, each with an HNSW index",
             ha="center", fontsize=8, color=hex_to_rgb(C["gray"]),
             fontfamily=VN_FONT, style="italic",
             bbox=dict(boxstyle="round,pad=0.35", fc=hex_to_rgb(C["light"]),
@@ -594,7 +594,7 @@ def make_mcp_diagram():
     ax.set_ylim(0, 6)
     ax.axis("off")
     ax.set_facecolor(hex_to_rgb(C["bg"]))
-    ax.set_title("Tích hợp MCP — Claude ↔ Arkon Knowledge Base", fontsize=15,
+    ax.set_title("MCP integration — Claude ↔ Arkon Knowledge Base", fontsize=15,
                  fontweight="bold", color=hex_to_rgb(C["primary"]),
                  pad=12, fontfamily=VN_FONT)
 
@@ -653,7 +653,7 @@ def make_notebooklm_diagram():
     ax.set_ylim(0, 7)
     ax.axis("off")
     ax.set_facecolor(hex_to_rgb(C["bg"]))
-    ax.set_title("Luồng tích hợp NotebookLM", fontsize=15,
+    ax.set_title("NotebookLM integration flow", fontsize=15,
                  fontweight="bold", color=hex_to_rgb(C["primary"]),
                  pad=12, fontfamily=VN_FONT)
 
@@ -793,7 +793,7 @@ def add_cover(doc: Document):
 
     p3 = doc.add_paragraph()
     p3.alignment = WD_ALIGN_PARAGRAPH.CENTER
-    r3 = p3.add_run("Tài liệu Kiến trúc & Hướng dẫn vận hành")
+    r3 = p3.add_run("Architecture and operations guide")
     r3.font.size = Pt(14)
     r3.font.color.rgb = RGBColor(84, 110, 122)
     r3.font.name = VN_FONT
@@ -802,7 +802,7 @@ def add_cover(doc: Document):
 
     p4 = doc.add_paragraph()
     p4.alignment = WD_ALIGN_PARAGRAPH.CENTER
-    r4 = p4.add_run("Phiên bản: 1.0  |  Tháng 5/2026")
+    r4 = p4.add_run("Version: 1.0  |  May 2026")
     r4.font.size = Pt(11)
     r4.font.color.rgb = RGBColor(120, 120, 120)
     r4.font.name = VN_FONT
@@ -1018,47 +1018,47 @@ def build_doc():
 
     # ── Chapter 1: Architecture Overview ──────────────────────────────────────
     print("[2/13] Architecture overview...")
-    doc.add_paragraph("Chương 1 — Kiến trúc Hệ thống", style="Heading 1")
+    doc.add_paragraph("Chapter 1 — System architecture", style="Heading 1")
 
     add_info_box(doc,
-        "Arkon là nền tảng AI Knowledge Base dành cho doanh nghiệp. "
-        "Hệ thống tự động xử lý tài liệu (PDF, DOCX, URL) thành wiki có cấu trúc "
-        "thông qua pipeline MRP (Map-Reduce-Prompt) và cung cấp giao diện tìm kiếm "
-        "ngữ nghĩa, tích hợp Claude qua MCP.", C["light"])
+        "Arkon is an enterprise AI knowledge-base platform. "
+        "It turns documents (PDF, DOCX, URL) into a structured wiki "
+        "through the MRP (Map-Reduce-Prompt) pipeline and provides semantic search "
+        "plus Claude integration via MCP.", C["light"])
     doc.add_paragraph()
 
     print("  -> Generating architecture diagram...")
     insert_image(doc, make_architecture_diagram(), 6.5,
-                 "Hình 1.1 — Kiến trúc tổng thể: 7 services chạy trong Docker Compose")
+                 "Figure 1.1 — Overall architecture: 7 services running in Docker Compose")
 
     doc.add_paragraph()
-    doc.add_paragraph("Các thành phần chính", style="Heading 2")
+    doc.add_paragraph("Main components", style="Heading 2")
 
     components = [
         ("Frontend (Next.js 15 :3119)",
-         "Giao diện web cho người dùng. Dùng Server Components, App Router. "
-         "Giao tiếp với backend qua API calls. Upload file bypass Next.js proxy, "
-         "gửi thẳng đến port 5055 để tránh giới hạn kích thước."),
+         "Web UI for users. Server Components, App Router. "
+         "Talks to the backend over API calls. File upload bypasses the Next.js proxy "
+         "and goes straight to port 5055 to avoid size limits."),
         ("API Server (FastAPI :5055)",
-         "REST API backend. Xử lý authentication (JWT), file upload, wiki CRUD, "
-         "settings, workspace management. Mount FastMCP tại /mcp. "
-         "Chạy Alembic migrations khi khởi động."),
+         "REST API backend. Handles authentication (JWT), file upload, wiki CRUD, "
+         "settings, workspace management. Mounts FastMCP at /mcp. "
+         "Runs Alembic migrations on startup."),
         ("Worker (arq)",
-         "Background task queue. Chạy MRP pipeline (Triage→MAP→REDUCE→REFINE→VERIFY→COMMIT). "
-         "Sử dụng advisory locks để tránh race condition. "
-         "Lưu pipeline_phase sau mỗi phase → tự resume nếu crash."),
+         "Background task queue. Runs the MRP pipeline (Triage→MAP→REDUCE→REFINE→VERIFY→COMMIT). "
+         "Uses advisory locks to avoid races. "
+         "Stores pipeline_phase after each phase → resumes after a crash."),
         ("Worker Skills (arq)",
-         "Xử lý skill packages (.zip) riêng để không block document ingestion. "
-         "Skill là tập lệnh cho phép Claude thực hiện các hành động tùy chỉnh."),
+         "Processes skill packages (.zip) separately so they do not block document ingestion. "
+         "A skill is a package of instructions that lets Claude perform custom actions."),
         ("PostgreSQL + pgvector",
-         "Database chính. 23 bảng ORM. pgvector lưu embeddings đa chiều "
-         "(768d, 1024d, 1536d, 3072d) với HNSW index cho semantic search."),
+         "Primary database. 23 ORM tables. pgvector stores multi-dimension embeddings "
+         "(768d, 1024d, 1536d, 3072d) with an HNSW index for semantic search."),
         ("Redis (arq queue)",
-         "Job queue cho background tasks. Lưu trạng thái job, "
-         "kết quả intermediate của pipeline."),
+         "Job queue for background tasks. Stores job state "
+         "and intermediate pipeline results."),
         ("MinIO (S3-compatible :9002)",
-         "Object storage cho file gốc (PDF, DOCX) và ảnh được extract từ PDF. "
-         "Image proxy tại /api/wiki/images/{uuid} để serve ảnh có authentication."),
+         "Object storage for original files (PDF, DOCX) and images extracted from PDFs. "
+         "Image proxy at /api/wiki/images/{uuid} serves images with authentication."),
     ]
     for name, desc in components:
         p = doc.add_paragraph(style="List Bullet")
@@ -1071,39 +1071,39 @@ def build_doc():
 
     # ── Chapter 2: MRP Pipeline ────────────────────────────────────────────────
     print("[3/13] MRP Pipeline chapter...")
-    doc.add_paragraph("Chương 2 — MRP Pipeline", style="Heading 1")
+    doc.add_paragraph("Chapter 2 — MRP Pipeline", style="Heading 1")
 
     add_info_box(doc,
-        "MRP (Map-Reduce-Prompt) là pipeline 6 phase xử lý tài liệu thành wiki pages. "
-        "Mỗi phase được thực hiện bởi worker, sử dụng LLM provider được cấu hình.", C["light"])
+        "MRP (Map-Reduce-Prompt) is a 6-phase pipeline that turns documents into wiki pages. "
+        "Each phase is run by a worker, using the configured LLM provider.", C["light"])
     doc.add_paragraph()
 
     print("  -> Generating MRP pipeline diagram...")
     insert_image(doc, make_mrp_pipeline(), 6.5,
-                 "Hình 2.1 — MRP Pipeline: 6 phases từ tài liệu thô đến wiki pages")
+                 "Figure 2.1 — MRP Pipeline: 6 phases from raw document to wiki pages")
 
     doc.add_paragraph()
-    doc.add_paragraph("Mô tả các phase", style="Heading 2")
+    doc.add_paragraph("Phase descriptions", style="Heading 2")
 
     phases_desc = [
         ("1. TRIAGE", C["accent"],
-         "LLM phân tích tài liệu, tạo outline, quyết định pipeline strategy "
-         "(standard / large_document / multi_topic). Kết quả: outline_json."),
+         "LLM analyzes the document, builds an outline, and picks a pipeline strategy "
+         "(standard / large_document / multi_topic). Result: outline_json."),
         ("2. MAP", C["secondary"],
-         "Chia tài liệu thành chunks, gửi từng chunk lên LLM để extract entities, "
-         "facts, concepts. Chạy song song (concurrent). Kết quả: danh sách wiki page drafts."),
+         "Split the document into chunks, send each chunk to the LLM to extract entities, "
+         "facts, concepts. Runs concurrently. Result: a list of wiki page drafts."),
         ("3. REDUCE", C["primary"],
-         "Gộp các drafts trùng slug, merge nội dung. Tạo wiki page hoàn chỉnh "
-         "cho từng slug unique. Kết quả: wiki_page objects."),
+         "Merge drafts that share a slug. Build a complete wiki page "
+         "for each unique slug. Result: wiki_page objects."),
         ("4. REFINE", C["purple"],
-         "LLM cải thiện prose, loại bỏ trùng lặp, chuẩn hóa format Markdown. "
-         "Áp dụng knowledge type description để định dạng phù hợp."),
+         "LLM improves the prose, removes duplicates, and normalizes Markdown. "
+         "Applies the knowledge-type description for the right format."),
         ("5. VERIFY", C["warning"],
-         "Kiểm tra cross-reference, fact accuracy. Đảm bảo không có thông tin "
-         "sai lệch hoặc mâu thuẫn giữa các wiki pages."),
+         "Checks cross-references and fact accuracy. Ensures there is no "
+         "wrong or contradictory information across wiki pages."),
         ("6. COMMIT", C["success"],
-         "Upsert wiki pages vào PostgreSQL (dựa trên slug uniqueness). "
-         "Enqueue embedding task cho semantic search. Cập nhật source.status = ready."),
+         "Upsert wiki pages into PostgreSQL (slug uniqueness). "
+         "Enqueue the embedding task for semantic search. Set source.status = ready."),
     ]
 
     for phase_name, color, desc in phases_desc:
@@ -1118,38 +1118,38 @@ def build_doc():
     doc.add_paragraph()
     doc.add_paragraph("Plan Review Gate", style="Heading 3")
     doc.add_paragraph(
-        "Khi MRP_AUTO_APPROVE_PLAN=false, pipeline dừng sau TRIAGE và chờ admin review. "
-        "Admin xem outline_json, approve/reject trước khi MAP bắt đầu. "
-        "Bật MRP_AUTO_APPROVE_PLAN=true để skip bước này."
+        "When MRP_AUTO_APPROVE_PLAN=false, the pipeline stops after TRIAGE and waits for admin review. "
+        "The admin inspects outline_json and approve/rejects before MAP starts. "
+        "Set MRP_AUTO_APPROVE_PLAN=true to skip this step."
     )
 
     doc.add_page_break()
 
     # ── Chapter 3: Upload Flow ─────────────────────────────────────────────────
     print("[4/13] Upload flow chapter...")
-    doc.add_paragraph("Chương 3 — Luồng Upload & Xử lý Tài liệu", style="Heading 1")
+    doc.add_paragraph("Chapter 3 — Upload and document processing flow", style="Heading 1")
     doc.add_paragraph()
 
     print("  -> Generating upload flow diagram...")
     insert_image(doc, make_upload_flow(), 6.5,
-                 "Hình 3.1 — Luồng upload từ user đến wiki pages")
+                 "Figure 3.1 — Upload flow from user to wiki pages")
 
     doc.add_paragraph()
-    doc.add_paragraph("Resume sau crash", style="Heading 2")
+    doc.add_paragraph("Resume after a crash", style="Heading 2")
     doc.add_paragraph(
-        "Trường source.pipeline_phase lưu phase cuối cùng đã hoàn thành. "
-        "Khi worker restart (crash hoặc manual), hệ thống đọc pipeline_phase "
-        "và tiếp tục từ phase tiếp theo — không xử lý lại từ đầu. "
-        "Để reset thủ công: POST /api/sources/{id}/retry."
+        "source.pipeline_phase stores the last completed phase. "
+        "When the worker restarts (crash or manual), the system reads pipeline_phase "
+        "and continues from the next phase — it does not start over. "
+        "To reset by hand: POST /api/sources/{id}/retry."
     )
 
-    doc.add_paragraph("Các loại tài liệu hỗ trợ", style="Heading 2")
+    doc.add_paragraph("Supported document types", style="Heading 2")
     file_types = [
-        ("PDF", "Sử dụng pymupdf — hỗ trợ extract text và images"),
-        ("DOCX", "Sử dụng python-docx + mammoth — hỗ trợ tables, headings"),
-        ("URL", "Crawl và extract content từ web page"),
-        ("YouTube", "Transcript extraction từ video"),
-        ("Plain Text", "Xử lý trực tiếp"),
+        ("PDF", "Uses pymupdf — extracts text and images"),
+        ("DOCX", "Uses python-docx + mammoth — tables, headings"),
+        ("URL", "Crawl and extract content from a web page"),
+        ("YouTube", "Transcript extraction from video"),
+        ("Plain Text", "Processed directly"),
     ]
     for ft, desc in file_types:
         p = doc.add_paragraph(style="List Bullet")
@@ -1161,32 +1161,32 @@ def build_doc():
 
     # ── Chapter 4: RBAC ────────────────────────────────────────────────────────
     print("[5/13] RBAC chapter...")
-    doc.add_paragraph("Chương 4 — Phân quyền (Dual-Realm RBAC)", style="Heading 1")
+    doc.add_paragraph("Chapter 4 — Access control (Dual-Realm RBAC)", style="Heading 1")
     doc.add_paragraph()
 
     print("  -> Generating RBAC diagram...")
     insert_image(doc, make_rbac_diagram(), 6.0,
-                 "Hình 4.1 — Mô hình phân quyền hai realm: Global và Workspace")
+                 "Figure 4.1 — Dual-realm permission model: Global and Workspace")
 
     doc.add_paragraph()
     doc.add_paragraph("Global Realm", style="Heading 2")
     doc.add_paragraph(
-        "Quyền toàn hệ thống dựa trên Department → Role → Permissions. "
-        "Mỗi phòng ban có một role preset với tập permissions cố định. "
-        "Có thể tạo Custom Role để cấu hình permissions chi tiết hơn."
+        "System-wide rights follow Department → Role → Permissions. "
+        "Each department has a preset role with a fixed permission set. "
+        "A Custom Role can be created for finer-grained permissions."
     )
 
     global_perms = [
-        ("doc:read / doc:write",       "Đọc/upload tài liệu"),
-        ("wiki:read / wiki:write:all", "Đọc/chỉnh sửa wiki"),
-        ("settings:read / settings:write", "Xem/thay đổi cài đặt hệ thống"),
-        ("admin:users",                "Quản lý nhân viên"),
-        ("admin:workspaces",           "Quản lý workspaces"),
+        ("doc:read / doc:write",       "Read/upload documents"),
+        ("wiki:read / wiki:write:all", "Read/edit wiki"),
+        ("settings:read / settings:write", "View/change system settings"),
+        ("admin:users",                "Manage employees"),
+        ("admin:workspaces",           "Manage workspaces"),
     ]
     tbl = doc.add_table(rows=len(global_perms)+1, cols=2)
     tbl.style = "Table Grid"
     hdr = tbl.rows[0]
-    for ci, t in enumerate(["Permission", "Mô tả"]):
+    for ci, t in enumerate(["Permission", "Description"]):
         cell = hdr.cells[ci]
         cell.text = t
         cell.paragraphs[0].runs[0].bold = True
@@ -1209,66 +1209,66 @@ def build_doc():
     doc.add_paragraph()
     doc.add_paragraph("Workspace Realm", style="Heading 2")
     doc.add_paragraph(
-        "Workspace là không gian làm việc riêng biệt. "
-        "Members có workspace role (Viewer/Contributor/Editor/Admin) hoàn toàn độc lập với global role. "
-        "System admin luôn có full access mà không cần là member."
+        "A workspace is a separate working space. "
+        "Members have a workspace role (Viewer/Contributor/Editor/Admin) fully independent of the global role. "
+        "A system admin always has full access without being a member."
     )
 
     doc.add_page_break()
 
     # ── Chapter 5: Database Schema ─────────────────────────────────────────────
     print("[6/13] Database chapter...")
-    doc.add_paragraph("Chương 5 — Database Schema", style="Heading 1")
+    doc.add_paragraph("Chapter 5 — Database schema", style="Heading 1")
     doc.add_paragraph()
 
     print("  -> Generating database diagram...")
     insert_image(doc, make_db_schema(), 6.5,
-                 "Hình 5.1 — Các bảng chính trong PostgreSQL")
+                 "Figure 5.1 — Main tables in PostgreSQL")
 
     doc.add_paragraph()
     doc.add_paragraph("pgvector — Semantic Search", style="Heading 2")
     doc.add_paragraph(
-        "Hệ thống dùng pgvector với 4 bảng embedding riêng biệt theo số chiều: "
+        "The system uses pgvector with 4 embedding tables, one per dimension: "
         "wiki_page_embeddings_768, _1024, _1536, _3072. "
-        "Mỗi bảng có HNSW index (migration 015) cho tìm kiếm vector nhanh. "
-        "Đổi embedding model không mất dữ liệu — chỉ cần Re-embed all pages "
-        "để populate bảng mới."
+        "Each table has an HNSW index (migration 015) for fast vector search. "
+        "Changing the embedding model does not lose data — just Re-embed all pages "
+        "to populate the new table."
     )
 
     doc.add_page_break()
 
     # ── Chapter 6: MCP Integration ─────────────────────────────────────────────
     print("[7/13] MCP chapter...")
-    doc.add_paragraph("Chương 6 — MCP Server (Claude Integration)", style="Heading 1")
+    doc.add_paragraph("Chapter 6 — MCP Server (Claude integration)", style="Heading 1")
     doc.add_paragraph()
 
     print("  -> Generating MCP diagram...")
     insert_image(doc, make_mcp_diagram(), 6.2,
-                 "Hình 6.1 — Tích hợp Claude Desktop/Code qua MCP protocol")
+                 "Figure 6.1 — Claude Desktop/Code integration via the MCP protocol")
 
     doc.add_paragraph()
     doc.add_paragraph("14 MCP Tools", style="Heading 2")
 
     mcp_tools = [
-        ("search_wiki",         "Tìm kiếm wiki bằng semantic search"),
-        ("read_wiki_page",      "Đọc nội dung một wiki page theo slug"),
-        ("list_wiki_pages",     "Liệt kê wiki pages với filter"),
-        ("list_sources",        "Liệt kê tài liệu nguồn"),
-        ("get_source",          "Đọc metadata một tài liệu"),
-        ("propose_wiki_edit",   "Đề xuất chỉnh sửa wiki (tạo draft)"),
-        ("edit_wiki_page",      "Chỉnh sửa trực tiếp (Editor+)"),
-        ("get_skill",           "Đọc skill package"),
-        ("list_skills",         "Liệt kê skills"),
-        ("get_wiki_graph",      "Lấy knowledge graph"),
-        ("list_knowledge_types","Liệt kê knowledge types"),
-        ("get_workspace",       "Đọc workspace info"),
-        ("list_workspaces",     "Liệt kê workspaces"),
-        ("get_mcp_context",     "Thông tin token hiện tại"),
+        ("search_wiki",         "Search the wiki with semantic search"),
+        ("read_wiki_page",      "Read a wiki page by slug"),
+        ("list_wiki_pages",     "List wiki pages with filters"),
+        ("list_sources",        "List source documents"),
+        ("get_source",          "Read metadata for one document"),
+        ("propose_wiki_edit",   "Propose a wiki edit (creates a draft)"),
+        ("edit_wiki_page",      "Edit directly (Editor+)"),
+        ("get_skill",           "Read a skill package"),
+        ("list_skills",         "List skills"),
+        ("get_wiki_graph",      "Fetch the knowledge graph"),
+        ("list_knowledge_types","List knowledge types"),
+        ("get_workspace",       "Read workspace info"),
+        ("list_workspaces",     "List workspaces"),
+        ("get_mcp_context",     "Current token information"),
     ]
     tbl2 = doc.add_table(rows=len(mcp_tools)+1, cols=2)
     tbl2.style = "Table Grid"
     h = tbl2.rows[0]
-    for ci, t in enumerate(["Tool", "Mô tả"]):
+    for ci, t in enumerate(["Tool", "Description"]):
         cell = h.cells[ci]
         cell.text = t
         cell.paragraphs[0].runs[0].bold = True
@@ -1292,32 +1292,32 @@ def build_doc():
 
     # ── Chapter 7: NotebookLM Integration ─────────────────────────────────────
     print("[8/13] NotebookLM chapter...")
-    doc.add_paragraph("Chương 7 — Tích hợp NotebookLM (Kế hoạch)", style="Heading 1")
+    doc.add_paragraph("Chapter 7 — NotebookLM integration (plan)", style="Heading 1")
 
     add_info_box(doc,
-        "Tích hợp NotebookLM cho phép người dùng upload tài liệu lên Google NotebookLM, "
-        "tạo study guide/report chi tiết, và tự động đồng bộ vào Arkon wiki. "
-        "Đây là enrichment layer bổ sung bên cạnh MRP pipeline hiện tại.", C["light"])
+        "NotebookLM integration lets users upload documents to Google NotebookLM, "
+        "generate a detailed study guide/report, and sync it back into the Arkon wiki. "
+        "This is an enrichment layer on top of the current MRP pipeline.", C["light"])
     doc.add_paragraph()
 
     print("  -> Generating NotebookLM diagram...")
     insert_image(doc, make_notebooklm_diagram(), 6.5,
-                 "Hình 7.1 — Luồng tích hợp NotebookLM (3 phases)")
+                 "Figure 7.1 — NotebookLM integration flow (3 phases)")
 
     doc.add_paragraph()
-    doc.add_paragraph("3 Phases triển khai", style="Heading 2")
+    doc.add_paragraph("3 rollout phases", style="Heading 2")
 
     nlm_phases = [
         ("Phase 1 — Manual Trigger",
-         "Admin có thể trigger sync thủ công từ Knowledge table dropdown. "
-         "NotebookLM service chạy dưới dạng arq background task. "
-         "Wiki pages được tạo với slug prefix nlm/ riêng biệt."),
-        ("Phase 2 — Auto-sync khi Upload",
-         "Upload dialog có checkbox 'Sync to NotebookLM'. "
-         "Sau khi ingest_file_task hoàn thành, tự động enqueue notebooklm_sync_task."),
+         "An admin can trigger a sync by hand from the Knowledge table dropdown. "
+         "The NotebookLM service runs as an arq background task. "
+         "Wiki pages are created with a distinct nlm/ slug prefix."),
+        ("Phase 2 — Auto-sync on upload",
+         "The upload dialog has a 'Sync to NotebookLM' checkbox. "
+         "After ingest_file_task finishes, notebooklm_sync_task is enqueued automatically."),
         ("Phase 3 — Podcast / Quiz",
-         "Mở rộng sang generate audio podcast, quiz JSON, slide deck PPTX. "
-         "Lưu artifacts vào MinIO, play trong UI."),
+         "Extend to generate an audio podcast, quiz JSON, and PPTX slide deck. "
+         "Store artifacts in MinIO and play them in the UI."),
     ]
     for ph_name, ph_desc in nlm_phases:
         p = doc.add_paragraph(style="List Bullet")
@@ -1327,12 +1327,12 @@ def build_doc():
         p.add_run(ph_desc).font.name = VN_FONT
 
     doc.add_paragraph()
-    doc.add_paragraph("Thành phần mới cần tạo", style="Heading 3")
+    doc.add_paragraph("New components to add", style="Heading 3")
     nlm_components = [
         "app/services/notebooklm_service.py — CLI wrapper subprocess",
         "app/workers/notebooklm_tasks.py — arq background task",
         "app/routers/notebooklm.py — /api/notebooklm/* endpoints",
-        "Migration 020 — thêm 5 cột vào bảng sources",
+        "Migration 020 — add 5 columns to the sources table",
         "Frontend: dropdown action, status badge, Settings panel",
     ]
     for c in nlm_components:
@@ -1344,7 +1344,7 @@ def build_doc():
 
     # ── Chapter 8: Quickstart ──────────────────────────────────────────────────
     print("[9/13] Quickstart chapter...")
-    doc.add_paragraph("Chương 8 — Hướng dẫn Khởi động Nhanh", style="Heading 1")
+    doc.add_paragraph("Chapter 8 — Quick start", style="Heading 1")
 
     qs_path = DOCS_DIR / "QUICKSTART.md"
     if qs_path.exists():
@@ -1354,7 +1354,7 @@ def build_doc():
 
     # ── Chapter 9: Admin Guide ─────────────────────────────────────────────────
     print("[10/13] Admin guide chapter...")
-    doc.add_paragraph("Chương 9 — Hướng dẫn Quản trị", style="Heading 1")
+    doc.add_paragraph("Chapter 9 — Admin guide", style="Heading 1")
 
     ag_path = DOCS_DIR / "ADMIN-GUIDE.md"
     if ag_path.exists():
@@ -1364,7 +1364,7 @@ def build_doc():
 
     # ── Chapter 10: Knowledge Types ────────────────────────────────────────────
     print("[11/13] Knowledge types chapter...")
-    doc.add_paragraph("Chương 10 — Knowledge Types", style="Heading 1")
+    doc.add_paragraph("Chapter 10 — Knowledge types", style="Heading 1")
 
     kt_path = DOCS_DIR / "KNOWLEDGE-TYPES.md"
     if kt_path.exists():
@@ -1374,7 +1374,7 @@ def build_doc():
 
     # ── Chapter 11: Workspaces ─────────────────────────────────────────────────
     print("[12/13] Workspaces chapter...")
-    doc.add_paragraph("Chương 11 — Workspaces", style="Heading 1")
+    doc.add_paragraph("Chapter 11 — Workspaces", style="Heading 1")
 
     ws_path = DOCS_DIR / "WORKSPACES.md"
     if ws_path.exists():
@@ -1384,7 +1384,7 @@ def build_doc():
 
     # ── Chapter 12: Troubleshooting ────────────────────────────────────────────
     print("[13/13] Troubleshooting chapter...")
-    doc.add_paragraph("Chương 12 — Xử lý sự cố", style="Heading 1")
+    doc.add_paragraph("Chapter 12 — Troubleshooting", style="Heading 1")
 
     ts_path = DOCS_DIR / "TROUBLESHOOTING.md"
     if ts_path.exists():
@@ -1394,41 +1394,41 @@ def build_doc():
 
     # ── Chapter 13: API Reference (summary) ────────────────────────────────────
     print("[14] API Reference chapter...")
-    doc.add_paragraph("Chương 13 — API Reference (tóm tắt)", style="Heading 1")
+    doc.add_paragraph("Chapter 13 — API reference (summary)", style="Heading 1")
 
     api_summary = [
         ("Authentication", [
-            ("POST /api/auth/login",          "Đăng nhập → JWT token"),
+            ("POST /api/auth/login",          "Sign in → JWT token"),
             ("POST /api/auth/refresh",         "Refresh token"),
-            ("GET  /api/auth/me",              "Thông tin user hiện tại"),
+            ("GET  /api/auth/me",              "Current user info"),
         ]),
-        ("Sources (Tài liệu)", [
-            ("POST /api/sources/upload",       "Upload file mới"),
-            ("GET  /api/sources",              "Liệt kê tài liệu (filter/pagination)"),
-            ("GET  /api/sources/{id}",         "Chi tiết một tài liệu"),
-            ("POST /api/sources/{id}/retry",   "Retry ingest từ đầu"),
-            ("DELETE /api/sources/{id}",       "Xóa tài liệu"),
+        ("Sources (documents)", [
+            ("POST /api/sources/upload",       "Upload a new file"),
+            ("GET  /api/sources",              "List documents (filter/pagination)"),
+            ("GET  /api/sources/{id}",         "One document's details"),
+            ("POST /api/sources/{id}/retry",   "Retry ingest from the start"),
+            ("DELETE /api/sources/{id}",       "Delete document"),
         ]),
         ("Wiki", [
-            ("GET  /api/wiki/pages",           "Liệt kê wiki pages"),
-            ("GET  /api/wiki/pages/{slug}",    "Đọc wiki page"),
-            ("PUT  /api/wiki/pages/{slug}",    "Cập nhật wiki page (Editor+)"),
+            ("GET  /api/wiki/pages",           "List wiki pages"),
+            ("GET  /api/wiki/pages/{slug}",    "Read a wiki page"),
+            ("PUT  /api/wiki/pages/{slug}",    "Update a wiki page (Editor+)"),
             ("GET  /api/wiki/search",          "Semantic search"),
-            ("GET  /api/wiki/images/{uuid}",   "Proxy ảnh có auth"),
+            ("GET  /api/wiki/images/{uuid}",   "Authenticated image proxy"),
         ]),
         ("Admin", [
-            ("GET  /api/employees",            "Liệt kê nhân viên"),
-            ("POST /api/employees",            "Tạo nhân viên"),
-            ("GET  /api/departments",          "Liệt kê phòng ban"),
-            ("GET  /api/workspaces",           "Liệt kê workspaces"),
-            ("POST /api/workspaces",           "Tạo workspace"),
+            ("GET  /api/employees",            "List employees"),
+            ("POST /api/employees",            "Create an employee"),
+            ("GET  /api/departments",          "List departments"),
+            ("GET  /api/workspaces",           "List workspaces"),
+            ("POST /api/workspaces",           "Create a workspace"),
         ]),
         ("Settings & MCP", [
-            ("GET  /api/settings",             "Đọc cài đặt hệ thống"),
-            ("PUT  /api/settings",             "Cập nhật cài đặt"),
+            ("GET  /api/settings",             "Read system settings"),
+            ("PUT  /api/settings",             "Update settings"),
             ("POST /api/settings/test-llm",    "Test LLM provider"),
-            ("GET  /api/mcp/tokens",           "Liệt kê MCP tokens"),
-            ("POST /api/mcp/tokens",           "Tạo MCP token mới"),
+            ("GET  /api/mcp/tokens",           "List MCP tokens"),
+            ("POST /api/mcp/tokens",           "Create a new MCP token"),
             ("/mcp",                           "FastMCP endpoint (SSE)"),
         ]),
     ]
@@ -1438,7 +1438,7 @@ def build_doc():
         tbl = doc.add_table(rows=len(endpoints)+1, cols=2)
         tbl.style = "Table Grid"
         h = tbl.rows[0]
-        for ci, t in enumerate(["Endpoint", "Mô tả"]):
+        for ci, t in enumerate(["Endpoint", "Description"]):
             cell = h.cells[ci]
             cell.text = t
             cell.paragraphs[0].runs[0].bold = True

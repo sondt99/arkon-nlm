@@ -106,7 +106,7 @@ export function SendToNotebookLMDialog({
               }`}
             >
               <span className="material-symbols-outlined" style={{ fontSize: 22 }}>add_notes</span>
-              <span className="font-medium text-xs">Tạo notebook mới</span>
+              <span className="font-medium text-xs">New notebook</span>
             </button>
             <button
               type="button"
@@ -118,14 +118,14 @@ export function SendToNotebookLMDialog({
               }`}
             >
               <span className="material-symbols-outlined" style={{ fontSize: 22 }}>library_books</span>
-              <span className="font-medium text-xs">Thêm vào notebook có sẵn</span>
+              <span className="font-medium text-xs">Add to existing notebook</span>
             </button>
           </div>
 
           {/* New notebook: title input */}
           {mode === "new" && (
             <div className="flex flex-col gap-1.5 shrink-0">
-              <Label>Tên notebook</Label>
+              <Label>Notebook name</Label>
               <Input
                 value={newTitle}
                 onChange={(e) => setNewTitle(e.target.value)}
@@ -139,7 +139,7 @@ export function SendToNotebookLMDialog({
           {/* Existing: notebook list */}
           {mode === "existing" && (
             <div className="flex flex-col gap-1.5 min-h-0">
-              <Label className="shrink-0">Chọn notebook</Label>
+              <Label className="shrink-0">Choose notebook</Label>
               {loadingNotebooks ? (
                 <div className="flex items-center justify-center py-8">
                   <span className="material-symbols-outlined animate-spin text-muted-foreground text-3xl">
@@ -148,7 +148,7 @@ export function SendToNotebookLMDialog({
                 </div>
               ) : notebooks.length === 0 ? (
                 <div className="text-sm text-muted-foreground text-center py-6 border rounded-lg bg-secondary/20">
-                  Chưa có notebook nào. Hãy tạo notebook mới.
+                  No notebooks yet. Create a new one.
                 </div>
               ) : (
                 <div className="flex flex-col gap-0.5 overflow-y-auto border rounded-lg p-1 bg-background" style={{ maxHeight: 240 }}>
@@ -173,7 +173,7 @@ export function SendToNotebookLMDialog({
                           {nb.created_at && (
                             <>
                               {" · "}
-                              {new Date(nb.created_at).toLocaleDateString("vi-VN", {
+                              {new Date(nb.created_at).toLocaleDateString("en-US", {
                                 day: "numeric",
                                 month: "short",
                                 year: "numeric",
@@ -211,7 +211,7 @@ export function SendToNotebookLMDialog({
                 <span className="material-symbols-outlined animate-spin text-sm">progress_activity</span>
                 Sending…
               </span>
-            ) : mode === "new" ? "Tạo & gửi" : "Thêm vào notebook"}
+            ) : mode === "new" ? "Create & send" : "Add to notebook"}
           </Button>
         </div>
       </DialogContent>

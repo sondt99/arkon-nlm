@@ -123,12 +123,12 @@ export default function SkillsPage() {
 
       api<SkillListResponse>(`/api/skills?${params.toString()}`)
         .then(data => {
-          // IDs được trả về từ API (còn tồn tại trong DB)
+          // IDs returned by the API (still in the DB)
           const returnedIds = new Set(data.items.map(i => i.id));
-          // IDs đang poll nhưng không có trong response → đã bị xóa khỏi DB
+          // IDs we are polling that are missing from the response → deleted from the DB
           const deletedIds = new Set(processingIds.filter(id => !returnedIds.has(id)));
 
-          // Đồng bộ total khi có skill bị xóa khỏi state.
+          // Keep `total` in sync when a skill is removed from state.
           // This used to run *inside* the `setSkills` updater. Updaters have to be pure —
           // StrictMode invokes them twice — so every deletion was subtracted twice and the
           // header count drifted below the real number of skills.
@@ -142,7 +142,7 @@ export default function SkillsPage() {
               : [...prev];
             let hasChanges = deletedIds.size > 0;
 
-            // Cập nhật skill có trạng thái mới (processing → active, etc.)
+            // Update skills whose status changed (processing → active, etc.)
             data.items.forEach(newItem => {
               const idx = updatedItems.findIndex(s => s.id === newItem.id);
               if (idx !== -1 && JSON.stringify(updatedItems[idx]) !== JSON.stringify(newItem)) {

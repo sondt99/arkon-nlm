@@ -43,7 +43,7 @@ export function SourceWikiPagesDialog({
   React.useEffect(() => {
     api<WikiPageItem[]>(`/api/sources/${source.id}/wiki-pages`)
       .then(setPages)
-      .catch((e) => setError(e instanceof Error ? e.message : "Không tải được danh sách"))
+      .catch((e) => setError(e instanceof Error ? e.message : "Failed to load pages"))
       .finally(() => setLoading(false));
   }, [source.id]);
 
@@ -55,7 +55,7 @@ export function SourceWikiPagesDialog({
             <span className="material-symbols-outlined text-primary" style={{ fontSize: 20 }}>
               auto_stories
             </span>
-            Wiki từ tài liệu này
+            Wiki from this document
           </DialogTitle>
           <p className="text-sm text-muted-foreground mt-1 truncate">
             {source.title}
@@ -83,7 +83,7 @@ export function SourceWikiPagesDialog({
                 article
               </span>
               <p className="text-sm text-muted-foreground">
-                Tài liệu này chưa tạo wiki page nào.
+                This document has not created any wiki pages yet.
               </p>
             </div>
           )}
@@ -125,8 +125,8 @@ export function SourceWikiPagesDialog({
                     )}
                     {page.updated_at && (
                       <p className="text-[10px] text-muted-foreground/60 mt-1">
-                        Cập nhật{" "}
-                        {new Date(page.updated_at).toLocaleDateString("vi-VN", {
+                        Updated{" "}
+                        {new Date(page.updated_at).toLocaleDateString("en-US", {
                           day: "numeric",
                           month: "short",
                           year: "numeric",

@@ -687,8 +687,8 @@ function GenerateDialog({
               rows={4}
               placeholder={
                 isCustomReport
-                  ? "Describe exactly what to generate, e.g. Tạo báo cáo chi tiết về quy trình vận hành, liệt kê từng bước và lưu ý quan trọng…"
-                  : "e.g. Tập trung vào nội dung kỹ thuật, cực kỳ chi tiết, không bỏ sót thông tin nào…"
+                  ? "Describe exactly what to generate, e.g. Create a detailed report of the operating procedure, listing each step and the important caveats…"
+                  : "e.g. Focus on the technical content, be extremely detailed, and do not skip any information…"
               }
               className="w-full rounded-md border border-input bg-background px-3 py-2 text-[13px] placeholder:text-muted-foreground focus:outline-none focus:ring-1 focus:ring-ring resize-none"
             />
@@ -1687,8 +1687,8 @@ function ChatTab({ chat, notebookTitle, sourceCount }: { chat: NotebookChat; not
       <div className="flex items-center justify-between gap-3 border-b border-border px-4 py-2.5 sm:px-6 shrink-0">
         <div className="flex min-w-0 items-center gap-2 text-[12px] text-muted-foreground">
           <span className="size-2 shrink-0 rounded-full bg-emerald-500 shadow-[0_0_8px_rgba(16,185,129,.65)]" />
-          <span className="truncate">Tự động dùng {sourceCount} nguồn trong notebook</span>
-          {messages.length > 0 && <span className="hidden sm:inline">· {messages.length} tin nhắn</span>}
+          <span className="truncate">Automatically using {sourceCount} source{sourceCount !== 1 ? "s" : ""} in this notebook</span>
+          {messages.length > 0 && <span className="hidden sm:inline">· {messages.length} message{messages.length !== 1 ? "s" : ""}</span>}
         </div>
         {wikiButton}
       </div>
@@ -1697,8 +1697,8 @@ function ChatTab({ chat, notebookTitle, sourceCount }: { chat: NotebookChat; not
         {messages.length === 0 ? (
           <div className="flex flex-col items-center justify-center h-full text-center py-12">
             <span className="material-symbols-outlined text-[40px] text-muted-foreground/20 mb-3">chat</span>
-            <p className="text-[14px] text-foreground font-medium">Hỏi bất kỳ điều gì về notebook</p>
-            <p className="max-w-md text-[12px] text-muted-foreground mt-1">Arkon tự chọn toàn bộ nguồn đã xử lý. Bạn không cần tích từng nguồn trước khi hỏi.</p>
+            <p className="text-[14px] text-foreground font-medium">Ask anything about this notebook</p>
+            <p className="max-w-md text-[12px] text-muted-foreground mt-1">Arkon uses every processed source automatically. You do not need to pick sources before asking.</p>
           </div>
         ) : (
           messages.map((msg) => (
@@ -1719,11 +1719,11 @@ function ChatTab({ chat, notebookTitle, sourceCount }: { chat: NotebookChat; not
                   : <p className="whitespace-pre-wrap leading-relaxed">{msg.text}</p>}
                 {msg.references && msg.references.length > 0 && (
                   <details className="mt-3 border-t border-border pt-2">
-                    <summary className="cursor-pointer text-[11px] font-medium text-primary">{msg.references.length} nguồn trích dẫn</summary>
+                    <summary className="cursor-pointer text-[11px] font-medium text-primary">{msg.references.length} cited source{msg.references.length !== 1 ? "s" : ""}</summary>
                     <div className="mt-2 space-y-1.5">
                       {msg.references.map((ref, i) => (
                         <p key={`${ref.source_id}-${i}`} className="rounded-md bg-muted/50 px-2 py-1.5 text-[11px] leading-5 text-muted-foreground">
-                          [{ref.citation_number ?? i + 1}] {ref.cited_text || "Nguồn tham chiếu"}
+                          [{ref.citation_number ?? i + 1}] {ref.cited_text || "Cited source"}
                         </p>
                       ))}
                     </div>
@@ -1743,12 +1743,12 @@ function ChatTab({ chat, notebookTitle, sourceCount }: { chat: NotebookChat; not
           <div className="flex gap-3 justify-start">
             <span className="material-symbols-outlined text-[18px] text-primary/60 shrink-0 mt-1">smart_toy</span>
             <div className="flex items-center gap-2 rounded-2xl rounded-bl-sm border border-border bg-card px-4 py-2.5 shadow-sm">
-              <span className="flex gap-1" aria-label="NotebookLM đang trả lời">
+              <span className="flex gap-1" aria-label="NotebookLM is answering">
                 <i className="size-1.5 animate-pulse rounded-full bg-primary [animation-delay:-.3s]" />
                 <i className="size-1.5 animate-pulse rounded-full bg-primary [animation-delay:-.15s]" />
                 <i className="size-1.5 animate-pulse rounded-full bg-primary" />
               </span>
-              <span className="text-[11px] text-muted-foreground">Đang đọc {sourceCount} nguồn…</span>
+              <span className="text-[11px] text-muted-foreground">Reading {sourceCount} source{sourceCount !== 1 ? "s" : ""}…</span>
             </div>
           </div>
         )}

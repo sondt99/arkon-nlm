@@ -2,6 +2,8 @@
 
 Thank you for helping improve Arkon. Bug reports, docs, and code are all useful.
 
+The product, docs, and comments are English. User-uploaded sources and compiled wiki pages keep their original language.
+
 Repository: [github.com/sondt99/arkon-nlm](https://github.com/sondt99/arkon-nlm)
 
 ---

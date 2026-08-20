@@ -745,7 +745,7 @@ async def notebooklm_ingest_artifact_task(ctx: dict, artifact_db_id: str):
 
 async def cleanup_temp_uploads_cron(ctx: dict):
     """
-    Cronjob: Quét và dọn các file rác trong temp_uploads do server crash để lại (cũ hơn 1 giờ).
+    Delete leftover files in temp_uploads older than one hour (crash debris).
     """
     import os
     import time

@@ -2,7 +2,7 @@
 
 How Arkon is put together. For the formal spec (models, APIs, use cases) see [DESIGN_DOCUMENT.md](DESIGN_DOCUMENT.md).
 
-Version 0.1.0 · [github.com/sondt99/arkon-nlm](https://github.com/sondt99/arkon-nlm)
+Version 0.2.0 · [github.com/sondt99/arkon-nlm](https://github.com/sondt99/arkon-nlm)
 
 ---
 

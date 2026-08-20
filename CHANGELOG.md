@@ -11,13 +11,20 @@ Repository: [github.com/sondt99/arkon-nlm](https://github.com/sondt99/arkon-nlm)
 
 ## [Unreleased]
 
+## [0.2.0] — 2026-08-20
+
+Second tagged release. Security and reliability hardening since v0.1.0, English operator surface, and Omniroute as an OpenAI-compatible LLM provider.
+
 ### Added
 
 - Omniroute provider (OpenAI-compatible): API key, base URL, and model, with `OMNIROUTE_*` env bootstrap for the LLM slot (#145).
+- GitHub CI, issue/PR templates, and an opt-in real-Postgres test tier (#125).
 
 ### Changed
 
 - Portal chrome, operator docs, comments, and the generated Word export are English. Functional Vietnamese (compiler few-shots, chat intent regexes, unicode tests, skill-name `À-ỹ`) is unchanged (#140, #141, #142, #143).
+- Schema migrations run in a one-shot `migrate` service and refuse destructive steps unless overridden (#92).
+- Docker images are digest-pinned; the API container no longer starts as root.
 
 ### Fixed
 
@@ -27,8 +34,6 @@ Repository: [github.com/sondt99/arkon-nlm](https://github.com/sondt99/arkon-nlm)
 - `org:employees:manage` can no longer promote anyone to admin, reset passwords, or deactivate the last admin (#6).
 - Skill-contribution approval follows the target skill's departments, not the submitter's claimed `scope_type`. Approving no longer strips department ACLs unless an admin explicitly widens scope (#9).
 - MCP and export tokens now get a real `allowed_knowledge_types` value. Wiki search, page reads, the index, RAG, and export chat all honor it; empty KT arrays fail closed (#11).
-
-
 - Anthropic Settings models now use current IDs (`claude-opus-4-8`, `claude-sonnet-5`, `claude-haiku-4-5`). Sampling params are omitted on models that reject them (#1, #2).
 - Viewers can no longer edit or delete global skills (`can_access_skill` now requires `skill:{action}:own_dept`) (#4).
 - Workspace-private sources are no longer treated as global documents (#5).
@@ -40,6 +45,7 @@ Repository: [github.com/sondt99/arkon-nlm](https://github.com/sondt99/arkon-nlm)
 - Saving provider settings no longer wipes stored API keys (#14).
 - Opening a non-editable skill contribution no longer hard-reloads the tab (#15).
 - The department Access button that called missing `/api/scopes/...` endpoints is removed (#16).
+- Access-control, MCP, worker, and AI-pipeline defects closed since v0.1.0 (see git log `v0.1.0..v0.2.0`).
 
 ## [0.1.0] — 2026-08-18
 
@@ -77,4 +83,5 @@ First tagged release of **arkon-nlm**. This is the product snapshot published at
 - New root [README](README.md), [CONTRIBUTING](CONTRIBUTING.md), and this changelog.
 - All guides under [`docs/`](docs/README.md) rewritten for v0.1.0.
 
+[0.2.0]: https://github.com/sondt99/arkon-nlm/releases/tag/v0.2.0
 [0.1.0]: https://github.com/sondt99/arkon-nlm/releases/tag/v0.1.0

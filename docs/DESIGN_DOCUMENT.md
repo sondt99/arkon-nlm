@@ -10,18 +10,18 @@ This is the formal spec. Operator guides live next to it in `docs/`. When you ch
 
 ## Contents
 
-1. [Overview](#1-overview-tổng-quan-hệ-thống)
-2. [Technical architecture](#2-technical-architecture-kiến-trúc-kỹ-thuật)
-3. [Data model](#3-data-model-mô-hình-dữ-liệu)
-4. [API specification](#4-api-specification-đặc-tả-api)
-5. [Use cases](#5-use-cases-đặc-tả-use-case)
-6. [MRP pipeline](#6-mrp-pipeline-luồng-xử-lý-mrp-pipeline)
-7. [RBAC](#7-rbac-hệ-thống-quyền-hạn)
-8. [MCP](#8-mcp-tích-hợp-mcp)
+1. [Overview](#1-overview)
+2. [Technical architecture](#2-technical-architecture)
+3. [Data model](#3-data-model)
+4. [API specification](#4-api-specification)
+5. [Use cases](#5-use-cases)
+6. [MRP pipeline](#6-mrp-pipeline)
+7. [RBAC](#7-rbac)
+8. [MCP](#8-mcp)
 
 ---
 
-## 1. Overview (Tổng quan hệ thống)
+## 1. Overview
 
 Arkon is a **self-hosted enterprise knowledge hub**. Organizations upload documents. A background compiler (MRP) turns them into an interlinked markdown wiki. People use the web portal; AI clients use MCP. The same permission model applies to both.
 
@@ -64,7 +64,7 @@ Arkon is a **self-hosted enterprise knowledge hub**. Organizations upload docume
 
 ---
 
-## 2. Technical architecture (Kiến trúc kỹ thuật)
+## 2. Technical architecture
 
 ### 2.1 Stack
 
@@ -120,7 +120,7 @@ Embedding vectors go to one of `wiki_page_embeddings_{768,1024,1536,3072}`. Swit
 
 ---
 
-## 3. Data model (Mô hình dữ liệu)
+## 3. Data model
 
 Latest revision: `033_nlm_passthrough_ownership` (`uv run --extra dev alembic heads` → `033`). Source of truth: `app/database/models.py`.
 
@@ -240,7 +240,7 @@ Contacts, by contrast, really were dropped, in migration `009`.
 
 ---
 
-## 4. API specification (Đặc tả API)
+## 4. API specification
 
 Full tables: [API-REFERENCE.md](API-REFERENCE.md). Rules that the tables do not repeat:
 
@@ -348,7 +348,7 @@ Pydantic validator, so it fails as 422 with the validation envelope rather than 
 
 ---
 
-## 5. Use cases (Đặc tả Use Case)
+## 5. Use cases
 
 ### UC-1 First install
 
@@ -388,7 +388,7 @@ Employee opens a contribution, edits files, submits. Reviewer approves → new `
 
 ---
 
-## 6. MRP pipeline (Luồng xử lý MRP Pipeline)
+## 6. MRP pipeline
 
 Implemented in `app/ai/mrp/`. Jobs: `ingest_map_reduce_task` then `ingest_refine_task` (after approval).
 
@@ -474,7 +474,7 @@ stripped, and the question is placed after the fence closes. The optional second
 
 ---
 
-## 7. RBAC (Hệ thống quyền hạn)
+## 7. RBAC
 
 Two realms. Implementation: `app/services/permission_engine.py`, `permissions.py`.
 
@@ -586,7 +586,7 @@ to a notebook re-checks `can_access_document` on that source.
 
 ---
 
-## 8. MCP (Tích hợp MCP)
+## 8. MCP
 
 Server: `create_mcp_server()` mounted at `/mcp`.
 

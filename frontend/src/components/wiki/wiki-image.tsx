@@ -21,7 +21,7 @@ export function WikiImage({
   if (status === "loading") {
     return (
       <span className="block my-4 rounded-lg border border-border bg-surface-variant/40 px-4 py-8 text-center text-xs text-muted-foreground">
-        Đang tải hình ảnh…
+        Loading image…
       </span>
     );
   }
@@ -32,7 +32,7 @@ export function WikiImage({
         <span className="material-symbols-outlined align-middle mr-1" style={{ fontSize: 16 }}>
           lock
         </span>
-        Hình ảnh bị giới hạn quyền truy cập
+        Image access is restricted
         {alt ? <span className="block mt-1 italic">{alt}</span> : null}
       </span>
     );
@@ -44,7 +44,7 @@ export function WikiImage({
         <span className="material-symbols-outlined align-middle mr-1" style={{ fontSize: 16 }}>
           cloud_off
         </span>
-        Không tải được hình ảnh — hãy thử tải lại trang
+        Could not load image — try reloading the page
         {alt ? <span className="block mt-1 italic">{alt}</span> : null}
       </span>
     );
@@ -56,7 +56,7 @@ export function WikiImage({
         <span className="material-symbols-outlined align-middle mr-1" style={{ fontSize: 16 }}>
           broken_image
         </span>
-        Không tìm thấy hình ảnh
+        Image not found
         {alt ? <span className="block mt-1 italic">{alt}</span> : null}
       </span>
     );
@@ -69,7 +69,7 @@ export function WikiImage({
           <button
             type="button"
             className="block my-4 group/wiki-img w-full text-left"
-            aria-label={alt || "Hình ảnh wiki"}
+            aria-label={alt || "Wiki image"}
           />
         }
       >
@@ -108,7 +108,7 @@ export function WikiImage({
               download
               className="text-primary underline underline-offset-2 hover:text-primary/80 shrink-0"
             >
-              Tải xuống
+              Download
             </a>
           </div>
         </div>

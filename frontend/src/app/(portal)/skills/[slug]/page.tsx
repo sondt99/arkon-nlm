@@ -290,7 +290,7 @@ export default function SkillDetailPage() {
     );
   }
 
-  const dateStr = new Date(skill.updated_at).toLocaleString("vi-VN", {
+  const dateStr = new Date(skill.updated_at).toLocaleString("en-US", {
     day: "2-digit",
     month: "2-digit",
     year: "numeric",

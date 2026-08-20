@@ -11,6 +11,10 @@ Repository: [github.com/sondt99/arkon-nlm](https://github.com/sondt99/arkon-nlm)
 
 ## [Unreleased]
 
+### Changed
+
+- Portal chrome, operator docs, comments, and the generated Word export are English. Functional Vietnamese (compiler few-shots, chat intent regexes, unicode tests, skill-name `À-ỹ`) is unchanged (#140, #141, #142, #143).
+
 ### Fixed
 
 - `org:employees:manage` can no longer promote anyone to admin, reset passwords, or deactivate the last admin (#6).

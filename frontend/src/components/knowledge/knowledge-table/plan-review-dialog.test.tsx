@@ -40,7 +40,7 @@ function slugs(): string[] {
     .map((node) => node.textContent ?? "");
 }
 
-const addPage = () => screen.getByRole("button", { name: /Thêm trang mới/ });
+const addPage = () => screen.getByRole("button", { name: /Add page/ });
 
 /** Adding a page opens its editor; close it so the next slug is visible in the list. */
 async function addAndClose(user: ReturnType<typeof userEvent.setup>) {
@@ -48,11 +48,11 @@ async function addAndClose(user: ReturnType<typeof userEvent.setup>) {
   await user.click(screen.getByRole("button", { name: "Cancel" }));
 }
 
-/** Two-stage delete: the row's trash icon arms it, then the row is replaced by a "Xóa" confirm. */
+/** Two-stage delete: the row's trash icon arms it, then the row is replaced by a "Delete" confirm. */
 async function deleteRow(user: ReturnType<typeof userEvent.setup>, slug: string) {
   const row = screen.getByText(slug).closest(".group") as HTMLElement;
   await user.click(within(row).getByTitle("Delete"));
-  await user.click(await screen.findByRole("button", { name: "Xóa" }));
+  await user.click(await screen.findByRole("button", { name: "Delete" }));
 }
 
 describe("plan page slugs (#91)", () => {
@@ -84,7 +84,7 @@ describe("plan page slugs (#91)", () => {
     await waitFor(() => expect(slugs()).toEqual(["new-page-2"]));
     await addAndClose(user);
 
-    await user.click(screen.getByRole("button", { name: /Duyệt|Approve/i }));
+    await user.click(screen.getByRole("button", { name: /Approve/i }));
     await waitFor(() =>
       expect(
         mockApi.mock.calls.some(([path]) => String(path).endsWith("/plan/approve"))

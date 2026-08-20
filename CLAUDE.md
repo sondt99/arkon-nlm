@@ -22,10 +22,10 @@ Key rules from COMMANDS.md:
 **Rule:** Whenever code changes affect system architecture, APIs, data models, or business logic, update `docs/DESIGN_DOCUMENT.md` accordingly in the same task.
 
 **What to update:**
-- New or modified API endpoint → update section 4 (Đặc tả API)
-- New or modified DB model/column → update section 3 (Mô hình dữ liệu)
-- New feature or use case change → update section 5 (Đặc tả Use Case)
-- Pipeline/background task change → update sections 6 and Phụ lục
+- New or modified API endpoint → update section 4 (API specification)
+- New or modified DB model/column → update section 3 (Data model)
+- New feature or use case change → update section 5 (Use cases)
+- Pipeline/background task change → update section 6 and the Appendix
 - Permission/RBAC change → update section 7
 - MCP tool change → update section 8
 

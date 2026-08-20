@@ -125,7 +125,7 @@ export default function KnowledgePage() {
     }
   }, [selectedTypeId, selectedDepartment, search]);
 
-  // Polling cho trạng thái tài liệu.
+  // Poll document status.
   //
   // Depends on a boolean, not on `sources`: the array is what this effect's own callback
   // replaces, so depending on it tore the interval down and recreated it on every single

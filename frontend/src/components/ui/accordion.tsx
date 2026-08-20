@@ -6,8 +6,8 @@ import { ChevronDownIcon } from "lucide-react"
 
 import { cn } from "@/lib/utils"
 
-/** Single-open by default (base-ui's `multiple` defaults to false) — matches
- * "chỉ mở section đang thao tác" (only the section being worked on stays open). */
+/** Single-open by default (base-ui's `multiple` defaults to false) —
+ * only the section being worked on stays open. */
 function Accordion({ ...props }: AccordionPrimitive.Root.Props) {
   return <AccordionPrimitive.Root data-slot="accordion" {...props} />
 }

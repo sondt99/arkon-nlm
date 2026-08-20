@@ -156,7 +156,7 @@ describe("derived loading and failure state (#91)", () => {
 
   it("clears loading and reports the failure when the resolve call rejects", async () => {
     // `loading` used to be stored and cleared by hand, and this is the path that forgot to:
-    // a rejected resolve left every image spinning on "Đang tải hình ảnh…" forever.
+    // a rejected resolve left every image spinning on "Loading image…" forever.
     mockApi.mockRejectedValue(new Error("network down"));
 
     const { result } = renderHook(() => useImageResolver(["a"]));

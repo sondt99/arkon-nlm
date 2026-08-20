@@ -1,107 +1,108 @@
 # Arkon — Docker Commands
 
-Tất cả lệnh Docker cho project này. Chạy từ **thư mục gốc của repo** và dùng đường dẫn tương đối —
-không hardcode đường dẫn tuyệt đối (phiên bản trước của file này pin `E:\AI-CLAUDE\arkon`, và mọi
-lệnh trong đó đã hỏng khi repo được chuyển đi).
+All Docker commands for this project. Run them from the **repo root** and use relative
+paths — do not hardcode an absolute path (an earlier version of this file pinned
+`E:\AI-CLAUDE\arkon`, and every command in it broke when the repo moved).
 
-> **Luôn truyền `--env-file .env.docker`.** Các service `postgres` / `redis` / `minio` resolve
-> `${POSTGRES_PASSWORD}`, `${REDIS_PASSWORD}`, `${MINIO_SECRET_KEY}`, `${NGINX_PORT}` … qua Compose
-> variable substitution, và cơ chế này **chỉ** đọc shell environment hoặc file được chỉ định bởi
-> `--env-file`. Khai báo `env_file: [.env.docker]` trên các backend service **không** cung cấp giá
-> trị cho substitution — nó chỉ inject biến vào process bên trong container đó.
+> **Always pass `--env-file .env.docker`.** The `postgres` / `redis` / `minio` services resolve
+> `${POSTGRES_PASSWORD}`, `${REDIS_PASSWORD}`, `${MINIO_SECRET_KEY}`, `${NGINX_PORT}` … via Compose
+> variable substitution, and that mechanism **only** reads the shell environment or a file given
+> with `--env-file`. Declaring `env_file: [.env.docker]` on the backend services does **not**
+> feed substitution — it only injects variables into that container's own process.
 >
-> Nếu thiếu `--env-file`, Compose âm thầm dùng placeholder password trong `docker-compose.yml`
-> (`change-me-postgres-password`, `change-me-redis-password`, …) cho postgres/redis/minio, trong khi
-> api/worker vẫn dùng password thật từ `.env.docker`. Kết quả: auth thất bại và worker crash-loop
-> dưới `restart: always`. Đã kiểm chứng bằng `docker compose config`.
+> Without `--env-file`, Compose silently uses the placeholder passwords in `docker-compose.yml`
+> (`change-me-postgres-password`, `change-me-redis-password`, …) for postgres/redis/minio, while
+> the api/worker still use the real passwords from `.env.docker`. Result: auth fails and the
+> workers crash-loop under `restart: always`. Verified with `docker compose config`.
 >
-> Kiểm tra nhanh: `docker compose --env-file .env.docker config | grep -i password` phải hiện giá trị
-> thật, không phải `change-me-*`.
+> Quick check: `docker compose --env-file .env.docker config | grep -i password` must show the
+> real values, not `change-me-*`.
 
 ---
 
-## Khởi động / Build
+## Start / Build
 
-> **Deploy vẫn là một lệnh.** `api` có `depends_on: migrate` với
-> `condition: service_completed_successfully`, nên `up -d` tự chạy migration trước rồi mới
-> khởi động API — không thể bị bỏ sót. Điểm khác so với trước là migration chạy trong một
-> service one-shot riêng (`restart: "no"`), không còn nằm trong entrypoint của mọi container.
+> **Deploy is still one command.** `api` has `depends_on: migrate` with
+> `condition: service_completed_successfully`, so `up -d` runs the migration first and only
+> then starts the API — it cannot be skipped. The difference from before is that the migration
+> runs in its own one-shot service (`restart: "no"`), not in every backend container's
+> entrypoint.
 >
-> **Và nó fail-closed.** Nếu migration bị từ chối vì có bước phá dữ liệu, `migrate` exit 1,
-> `api` **không bao giờ start**, và schema giữ nguyên. Đã kiểm chứng: database ở revision
-> `013`, chạy `up -d api` → `migrate exit=1`, `api state=created`, schema vẫn `013`. API
-> không bao giờ chạy trên schema cũ.
+> **And it fail-closes.** If a migration is rejected because it would destroy data, `migrate`
+> exits 1, `api` **never starts**, and the schema is unchanged. Verified: database at revision
+> `013`, `up -d api` → `migrate exit=1`, `api state=created`, schema still `013`. The API never
+> runs on the old schema.
 
 ```bash
-# Build và khởi động toàn bộ stack (migration chạy tự động, trước api)
+# Build and start the whole stack (migration runs automatically, before api)
 docker compose --env-file .env.docker up -d --build
 
-# Chỉ chạy migration, không khởi động gì khác — dùng khi cần override hoặc kiểm tra trước
+# Run only the migration, start nothing else — use to override or inspect first
 docker compose --env-file .env.docker run --rm migrate
 
-# Build và restart một service cụ thể (thường dùng nhất)
+# Build and restart one service (most common)
 docker compose --env-file .env.docker up -d --build api
 docker compose --env-file .env.docker up -d --build frontend
 docker compose --env-file .env.docker up -d --build worker
 docker compose --env-file .env.docker up -d --build worker_skills
 
-# Build nhiều service cùng lúc
+# Build several services at once
 docker compose --env-file .env.docker up -d --build api frontend
 docker compose --env-file .env.docker up -d --build api worker worker_skills
 
-# Khởi động lại không build (dùng image cũ)
+# Restart without building (reuse the existing image)
 docker compose --env-file .env.docker up -d
 ```
 
-Lần đầu trên máy mới, cần tạo network và file config trước:
+First time on a new machine, create the network and config file first:
 
 ```bash
-docker network create arkon_default    # một lần cho mỗi máy
-cp .env.docker.example .env.docker     # rồi sửa — xem "Quick start" trong README.md
+docker network create arkon_default    # once per machine
+cp .env.docker.example .env.docker     # then edit — see "Quick start" in README.md
 ```
 
 ---
 
-## Dừng / Xóa
+## Stop / Remove
 
 ```bash
-# Dừng tất cả container (giữ lại volumes)
+# Stop every container (keep volumes)
 docker compose --env-file .env.docker down
 
-# Dừng và xóa volumes (reset DB, Redis, MinIO — KHÔNG THỂ HOÀN TÁC)
+# Stop and remove volumes (reset DB, Redis, MinIO — CANNOT BE UNDONE)
 docker compose --env-file .env.docker down -v
 
-# Dừng một service cụ thể
+# Stop one service
 docker compose --env-file .env.docker stop api
 docker compose --env-file .env.docker stop frontend
 
-# Restart một service (không build lại)
+# Restart one service (no rebuild)
 docker compose --env-file .env.docker restart api
 docker compose --env-file .env.docker restart worker
 ```
 
-> **`restart` giờ đã an toàn.** Trước đây `entrypoint.sh` chạy `alembic upgrade head` mỗi lần
-> container backend start — kể cả khi chỉ `restart` — nên `restart worker` cũng chạy migration lên
-> database production, và `api` / `worker` / `worker_skills` đua nhau migrate cùng một database lúc
-> boot mà không có lock. Một migration lỗi cộng `set -e` cộng `restart: always` là crash-loop không
-> có circuit breaker.
+> **`restart` is now safe.** Previously `entrypoint.sh` ran `alembic upgrade head` on every
+> backend container start — including a plain `restart` — so `restart worker` also migrated
+> the production database, and `api` / `worker` / `worker_skills` raced to migrate the same
+> database at boot with no lock. A failed migration plus `set -e` plus `restart: always` is a
+> crash-loop with no circuit breaker.
 >
-> Bây giờ chỉ service `migrate` chạy migration, và nó có `restart: "no"` — lỗi thì dừng một lần rồi
-> nằm im, không loop. `entrypoint.sh` chỉ còn làm việc hạ quyền (chạy như `appuser`, không phải
+> Now only the `migrate` service runs migrations, and it has `restart: "no"` — a failure stops
+> once and stays down, no loop. `entrypoint.sh` only drops privileges (runs as `appuser`, not
 > root).
 
 ---
 
-## Xem trạng thái
+## Status
 
 ```bash
-# Xem tất cả container và trạng thái
+# All containers and their state
 docker compose --env-file .env.docker ps
 
-# Xem các service được định nghĩa
+# Services defined in the compose file
 docker compose --env-file .env.docker config --services
 
-# Xem config sau khi substitution (dùng để verify .env.docker đã được đọc)
+# Config after substitution (use this to verify .env.docker was read)
 docker compose --env-file .env.docker config
 ```
 
@@ -110,7 +111,7 @@ docker compose --env-file .env.docker config
 ## Logs
 
 ```bash
-# Tail log realtime
+# Tail logs in real time
 docker compose --env-file .env.docker logs -f api
 docker compose --env-file .env.docker logs -f frontend
 docker compose --env-file .env.docker logs -f worker
@@ -119,33 +120,33 @@ docker compose --env-file .env.docker logs -f nginx
 docker compose --env-file .env.docker logs -f postgres
 docker compose --env-file .env.docker logs -f redis
 
-# Log N dòng cuối (không tail)
+# Last N lines (no tail)
 docker compose --env-file .env.docker logs --tail=100 api
 
-# Log tất cả service cùng lúc
+# Logs from every service at once
 docker compose --env-file .env.docker logs -f
 ```
 
 ---
 
-## Exec vào container
+## Exec into a container
 
 ```bash
-# Mở shell tương tác
+# Interactive shell
 docker exec -it arkon_api bash
 docker exec -it arkon_frontend sh
 docker exec -it arkon_postgres psql -U arkon -d arkon
 
-# Chạy lệnh một lần
+# One-shot command
 docker exec arkon_api python -c "from app.routers.chat import router; print('OK')"
 ```
 
-> `arkon_api` chạy với `read_only: true`. Lệnh nào cần ghi file trong container sẽ fail, trừ khi ghi
-> vào một trong các `tmpfs` mount đã cấu hình.
+> `arkon_api` runs with `read_only: true`. A command that needs to write a file inside the
+> container will fail unless it writes to one of the configured `tmpfs` mounts.
 
-**Không chạy pytest trong container.** Thư mục `tests/` không được copy vào image (`Dockerfile`
-chỉ copy `app/`, `alembic/`, `alembic.ini`, `skills/`) và `pytest` không được cài (`pip install .`
-không bao gồm extra `dev`). Chạy test trên host:
+**Do not run pytest inside the container.** The `tests/` directory is not copied into the image
+(`Dockerfile` only copies `app/`, `alembic/`, `alembic.ini`, `skills/`) and `pytest` is not
+installed (`pip install .` does not include the `dev` extra). Run tests on the host:
 
 ```bash
 uv run --extra dev pytest tests/ -q
@@ -156,87 +157,90 @@ uv run --extra dev pytest tests/ -q
 ## Alembic (DB migrations)
 
 ```bash
-# `up -d` đã tự chạy migration. Lệnh dưới đây chỉ cần khi muốn chạy riêng — ví dụ để xem
-# pre-flight nói gì, hoặc để dùng ALLOW_DESTRUCTIVE_MIGRATIONS. KHÔNG exec vào arkon_api.
+# `up -d` already ran the migration. The commands below are only for running it separately —
+# e.g. to see what pre-flight says, or to use ALLOW_DESTRUCTIVE_MIGRATIONS. Do NOT exec into
+# arkon_api.
 docker compose --env-file .env.docker run --rm migrate
 
-# Chỉ kiểm tra, không ghi gì
+# Check only, write nothing
 docker compose --env-file .env.docker run --rm migrate ./migrate.sh --check
 
-# Xem migration hiện tại
+# Current migration
 docker exec arkon_api alembic current
 
-# Xem lịch sử migration
+# Migration history
 docker exec arkon_api alembic history
 
-# Tạo migration mới
-docker exec arkon_api alembic revision --autogenerate -m "ten_migration"
+# Create a new migration
+docker exec arkon_api alembic revision --autogenerate -m "migration_name"
 ```
 
-> **Bắt buộc đọc file sinh ra trước khi commit.** `alembic/env.py` giờ đã có `include_object`
-> filter, nên autogenerate không còn đề xuất `drop_index` cho các index tạo bằng raw SQL — đó chính
-> là cách migration `018` đã xóa 4 index (unique index trên `wiki_pages.slug` và 3 GIN index) mà
-> không ai để ý. Nhưng filter chỉ chặn được thứ nó biết: index/bảng nào bạn tạo mà không khai báo
-> trong `models.py` vẫn sẽ bị đề xuất xóa ở lần autogenerate sau.
+> **Read the generated file before you commit.** `alembic/env.py` now has an `include_object`
+> filter, so autogenerate no longer proposes `drop_index` for indexes created with raw SQL —
+> that is how migration `018` deleted 4 indexes (the unique index on `wiki_pages.slug` and 3
+> GIN indexes) unnoticed. The filter only blocks what it knows about: an index or table you
+> create without declaring it in `models.py` will still be proposed for deletion on the next
+> autogenerate.
 >
-> **Migration xóa cột hoặc bảng sẽ bị từ chối.** `migrate.sh` quét trước phần `upgrade()` của các
-> revision chưa áp dụng, và nếu thấy `drop_table` / `drop_column` / `DROP` / `TRUNCATE` /
-> `DELETE FROM` thì dừng lại, in ra đúng file và số dòng, và không ghi gì cả. Database mới (chưa có
-> `alembic_version`) được miễn — không có dữ liệu nào để mất. Muốn chạy thật thì backup trước rồi:
+> **A migration that drops a column or table is refused.** `migrate.sh` scans the `upgrade()`
+> of unapplied revisions, and if it sees `drop_table` / `drop_column` / `DROP` / `TRUNCATE` /
+> `DELETE FROM` it stops, prints the exact file and line, and writes nothing. A fresh database
+> (no `alembic_version` yet) is exempt — there is no data to lose. To actually run it, back
+> up first, then:
 >
 > ```bash
 > docker exec arkon_postgres pg_dump -U arkon -d arkon -Fc > arkon-$(date +%F).dump
 > ALLOW_DESTRUCTIVE_MIGRATIONS=1 docker compose --env-file .env.docker run --rm migrate
 > ```
 >
-> Xem `alembic/README.md` để biết quy tắc khi cần xóa một cột đang có dữ liệu.
+> See `alembic/README.md` for the rules when you need to drop a column that already has data.
 
 ---
 
-## Danh sách container
+## Container list
 
-| Container | Service | Vai trò |
-|-----------|---------|---------|
-| `arkon_api` | `api` | FastAPI backend :5055 (không publish ra host) |
-| `arkon_frontend` | `frontend` | Next.js :3000 (không publish; truy cập qua nginx) |
+| Container | Service | Role |
+|-----------|---------|------|
+| `arkon_api` | `api` | FastAPI backend :5055 (not published to the host) |
+| `arkon_frontend` | `frontend` | Next.js :3000 (not published; reached via nginx) |
 | `arkon_worker` | `worker` | arq worker — document ingestion |
 | `arkon_worker_skills` | `worker_skills` | arq worker — AI skills |
 | `arkon_postgres` | `postgres` | PostgreSQL + pgvector |
 | `arkon_redis` | `redis` | Redis (arq job queue) |
 | `arkon_minio` | `minio` | MinIO object storage |
-| `arkon_nginx` | `nginx` | Reverse proxy — port duy nhất được publish |
+| `arkon_nginx` | `nginx` | Reverse proxy — the only published port |
 
 ---
 
-## URL truy cập
+## Access URLs
 
-| Dịch vụ | URL |
+| Service | URL |
 |---------|-----|
-| App (qua nginx) | `http://localhost:3119` |
-| API | `http://arkon_api:5055` trong Compose network — **không publish ra host**; dùng `docker exec` hoặc đi qua nginx |
-| MinIO console | port 9001 trong network, không publish mặc định |
+| App (via nginx) | `http://localhost:3119` |
+| API | `http://arkon_api:5055` inside the Compose network — **not published to the host**; use `docker exec` or go through nginx |
+| MinIO console | port 9001 inside the network, not published by default |
 
-nginx bind vào `127.0.0.1:${NGINX_PORT:-3119}:80`, nên chỉ truy cập được từ chính máy host.
+nginx binds to `127.0.0.1:${NGINX_PORT:-3119}:80`, so it is only reachable from the host machine.
 
 ---
 
-## Workflow thường dùng
+## Common workflows
 
 ```bash
-# Sau khi sửa backend Python
+# After changing backend Python
 docker compose --env-file .env.docker up -d --build api
 
-# Sau khi sửa frontend TypeScript/TSX
+# After changing frontend TypeScript/TSX
 docker compose --env-file .env.docker up -d --build frontend
 
-# Sau khi sửa worker (app/worker.py)
+# After changing the worker (app/worker.py)
 docker compose --env-file .env.docker up -d --build worker worker_skills
 
-# Sau khi thêm migration DB — entrypoint tự chạy upgrade khi api start,
-# lệnh dưới chỉ cần khi muốn chạy thủ công
+# After adding a DB migration — entrypoint runs upgrade when api starts;
+# the command below is only needed for a manual run
 docker compose --env-file .env.docker up -d --build api
 docker exec arkon_api alembic upgrade head
 
-# Full rebuild (sau khi thay đổi dependencies hoặc Dockerfile)
+# Full rebuild (after changing dependencies or a Dockerfile)
 docker compose --env-file .env.docker up -d --build
 ```

@@ -285,7 +285,7 @@ function PlanPageRow({
         )}
         {(page.candidates?.length ?? 0) > 0 && page.action === "CREATE" && (
           <p className="mt-1.5 text-[10px] text-amber-600 dark:text-amber-300">
-            {page.candidates!.length} trang cũ gần giống — Edit để chọn nếu đây là cùng một concept.
+            {page.candidates!.length} similar existing page{page.candidates!.length !== 1 ? "s" : ""} — Edit to pick one if this is the same concept.
           </p>
         )}
       </div>
@@ -432,7 +432,7 @@ export function PlanReviewDialog({
             Review Compilation Plan
           </DialogTitle>
           <p className="text-sm text-muted-foreground mt-1">
-            {source.title} — chỉnh sửa plan nếu cần, sau đó Approve để bắt đầu viết wiki.
+            {source.title} — edit the plan if needed, then Approve to start writing the wiki.
           </p>
         </DialogHeader>
 
@@ -457,11 +457,11 @@ export function PlanReviewDialog({
               <div className="flex items-center gap-4 text-sm text-muted-foreground flex-wrap">
                 <span className="flex items-center gap-1.5">
                   <span className="w-2 h-2 rounded-full bg-green-500" />
-                  {creates.length} trang tạo mới
+                  {creates.length} page{creates.length !== 1 ? "s" : ""} to create
                 </span>
                 <span className="flex items-center gap-1.5">
                   <span className="w-2 h-2 rounded-full bg-yellow-500" />
-                  {updates.length} trang cập nhật
+                  {updates.length} page{updates.length !== 1 ? "s" : ""} to update
                 </span>
                 {planMeta.strategy && (
                   <span className="flex items-center gap-1.5">
@@ -474,7 +474,7 @@ export function PlanReviewDialog({
               {/* Planner notes */}
               {planMeta.compilation_notes && (
                 <div className="text-xs text-muted-foreground bg-secondary/40 rounded-lg px-3 py-2 border border-border">
-                  <span className="font-medium text-foreground">Ghi chú: </span>
+                  <span className="font-medium text-foreground">Notes: </span>
                   {planMeta.compilation_notes}
                 </div>
               )}
@@ -495,7 +495,7 @@ export function PlanReviewDialog({
                       className="flex items-center justify-between gap-3 p-3 rounded-lg border border-destructive/40 bg-destructive/5"
                     >
                       <span className="text-sm text-destructive">
-                        Xóa trang <strong>{page.title}</strong>?
+                        Delete page <strong>{page.title}</strong>?
                       </span>
                       <div className="flex items-center gap-2 shrink-0">
                         <Button
@@ -503,14 +503,14 @@ export function PlanReviewDialog({
                           size="sm"
                           onClick={() => setDeleteConfirmIdx(null)}
                         >
-                          Hủy
+                          Cancel
                         </Button>
                         <Button
                           variant="destructive"
                           size="sm"
                           onClick={() => handleDelete(idx)}
                         >
-                          Xóa
+                          Delete
                         </Button>
                       </div>
                     </div>
@@ -538,7 +538,7 @@ export function PlanReviewDialog({
                 className="flex items-center gap-2 px-3 py-2 rounded-lg border border-dashed border-border text-sm text-muted-foreground hover:text-foreground hover:border-primary/50 hover:bg-secondary/40 transition-colors"
               >
                 <span className="material-symbols-outlined" style={{ fontSize: 16 }}>add</span>
-                Thêm trang mới
+                Add page
               </button>
             </div>
           )}
@@ -549,14 +549,14 @@ export function PlanReviewDialog({
           <textarea
             value={reviewNote}
             onChange={(e) => setReviewNote(e.target.value)}
-            placeholder="Ghi chú review (tùy chọn)"
+            placeholder="Review note (optional)"
             className="w-full text-sm rounded-lg border border-border bg-background px-3 py-2 resize-none h-14 focus:outline-none focus:ring-2 focus:ring-primary/30 focus:border-primary/50"
           />
         </div>
 
         <div className="flex items-center justify-between gap-2 mt-3 pt-3 border-t border-border shrink-0">
           <Button variant="ghost" onClick={onClose} disabled={submitting !== null}>
-            Đóng
+            Close
           </Button>
 
           <div className="flex items-center gap-2">
@@ -568,7 +568,7 @@ export function PlanReviewDialog({
                 className="text-destructive border-destructive/30 hover:bg-destructive/10"
               >
                 <span className="material-symbols-outlined" style={{ fontSize: 16 }}>close</span>
-                Từ chối
+                Reject
               </Button>
             ) : (
               <Button
@@ -583,7 +583,7 @@ export function PlanReviewDialog({
                 ) : (
                   <span className="material-symbols-outlined" style={{ fontSize: 16 }}>close</span>
                 )}
-                Xác nhận từ chối
+                Confirm reject
               </Button>
             )}
             <Button

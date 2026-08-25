@@ -204,7 +204,17 @@ jobs:
   images:
     needs: changes
     # Runs when it can actually tell you something: nightly, on demand, or when a file that
-    # feeds an image changed. It stays OFF the pull-request path and off unrelated pushes.
+    # feeds an image changed — on a pull request as much as on a push. It stays off pushes
+    # and PRs that touch nothing an image is built from, which is still the large majority.
+    #
+    # The pull-request path was excluded until #155, to save the ~6.5 minutes three image
+    # builds cost. That bill came due on #151 and #152: both were pure image changes (an
+    # nginx base digest, a redis compose pin), and both merged with all four jobs reporting
+    # "skipping". `Docker images build` is not one of the three required checks, and the
+    # three that are — backend, frontend, migrations — skip themselves via `if:` on an
+    # image-only diff, which GitHub counts as satisfying the requirement. So the two PRs
+    # where this job was the only thing that could speak merged on no signal at all. It had
+    # never run on a pull request even once: 0 of the previous 40 PR runs.
     #
     # Not deleted — it is the only job that builds an image, and it caught the Dockerfile
     # installing the exported lockfile without `--no-deps`, where pip re-resolved and
@@ -212,7 +222,7 @@ jobs:
     if: >-
       github.event_name == 'schedule' ||
       github.event_name == 'workflow_dispatch' ||
-      (github.event_name == 'push' && needs.changes.outputs.images == 'true')
+      needs.changes.outputs.images == 'true'
     name: Docker images build
     runs-on: ubuntu-latest
     steps:
@@ -250,6 +260,42 @@ jobs:
           push: false
           cache-from: type=gha
           cache-to: type=gha,mode=max
+
+      # docker-compose.yml already set `images=true` in the change detector, but no step in
+      # this job could act on it: postgres, redis and minio are `image:` pins, not
+      # Dockerfiles, so the three build steps above never reach them. #152 bumped the redis
+      # digest and was verified by nothing — not on the PR, and not on the merge push
+      # either. A pin that does not resolve (a typo, or a tag withdrawn from the registry)
+      # would first surface as a failed `docker compose up` on the deploy host, with the
+      # ingress already down.
+      - name: Compose file parses and every pinned image resolves
+        run: |
+          set -euo pipefail
+
+          # `config` insists .env.docker exists, because every service declares
+          # `env_file: [.env.docker]`. The committed example supplies placeholders, which is
+          # all a parse needs — and it is removed again immediately, since a leftover
+          # placeholder file is the exact footgun COMMANDS.md warns about.
+          cp .env.docker.example .env.docker
+          trap 'rm -f .env.docker' EXIT
+          docker compose --env-file .env.docker config -q
+
+          # arkon-backend / arkon-frontend / arkon-nginx are built by the `build:` stanza
+          # beside them and have no registry to pin against. Every OTHER image is
+          # third-party and must carry a digest, or dependabot.yml's whole premise — that
+          # bumps arrive as reviewable PRs rather than as silent drift — is void.
+          UNPINNED=$(grep -nE '^[[:space:]]+image: ' docker-compose.yml \
+                       | grep -v '@sha256:' | grep -v 'image: arkon-' || true)
+          if [ -n "$UNPINNED" ]; then
+            echo "::error::Third-party compose image is not digest-pinned:"
+            echo "$UNPINNED"
+            exit 1
+          fi
+
+          grep -oE '[^ ]+@sha256:[0-9a-f]{64}' docker-compose.yml | sort -u | while read -r ref; do
+            echo "resolving $ref"
+            docker manifest inspect "$ref" > /dev/null
+          done
 
   migrations:
     needs: changes

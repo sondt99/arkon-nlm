@@ -8,8 +8,9 @@ version: 2
 #
 # Ecosystems deliberately NOT enabled: pip and npm. Backend dependencies are locked in
 # uv.lock with explicit security floors in pyproject.toml, and the frontend in
-# package-lock.json; opening those to weekly automated PRs on a repo with a 4-job required
-# CI suite would produce more noise than it retires. Revisit per-ecosystem, not wholesale.
+# package-lock.json; opening those to weekly automated PRs on a repo whose CI suite is four
+# jobs (three of them required) would produce more noise than it retires. Revisit
+# per-ecosystem, not wholesale.
 updates:
   # Backend image + the uv stage it copies from.
   - package-ecosystem: docker
@@ -102,7 +103,16 @@ updates:
   # GitHub Actions majors ARE left to Dependabot, unlike the runtime images above. A
   # workflow change cannot be verified locally — only by running it on a real runner — and
   # the blast radius of a bad action version is a red CI run, not a production platform
-  # change. Branch protection means these still cannot merge without all four jobs passing.
+  # change.
+  #
+  # This comment used to end "Branch protection means these still cannot merge without all
+  # four jobs passing." That was never true and is worth stating plainly, because #151 and
+  # #152 merged on the strength of it. Three checks are required — backend, frontend,
+  # migrations — and `Docker images build` is not among them. Worse, a required job that
+  # skips itself via `if:` reports "skipped", which GitHub counts as satisfying the
+  # requirement; that is deliberate (see ci.yml's note on `paths:` vs `if:`), and it means
+  # an image-only diff can satisfy all three by running none of them. What actually gates a
+  # bump now is that the images job runs on pull requests too, as of #155.
   - package-ecosystem: github-actions
     directory: /
     schedule:

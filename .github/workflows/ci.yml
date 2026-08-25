@@ -135,7 +135,7 @@ jobs:
       # `next build` reported "No build cache found" on every run and rebuilt from scratch.
       # Keyed on the lockfile plus the commit so a rebuild starts from the nearest ancestor
       # rather than nothing.
-      - uses: actions/cache@v4
+      - uses: actions/cache@v6
         with:
           path: frontend/.next/cache
           key: next-${{ hashFiles('frontend/package-lock.json') }}-${{ github.sha }}

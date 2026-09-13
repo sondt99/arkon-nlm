@@ -648,6 +648,30 @@ class _WikiRecorder:
         return self
 
 
+class _StubEmbedding:
+    """Minimal embedding provider for the COMMIT happy path.
+
+    COMMIT treats a missing provider as a DEGRADED run (see the test below), so a test
+    asserting the clean outcome has to supply one rather than pass None for convenience.
+    """
+    def __init__(self):
+        self.calls = 0
+
+    async def embed(self, _text):
+        self.calls += 1
+        return [0.0] * 8
+
+
+def _stub_embedding_storage(monkeypatch):
+    """Neutralise the vector write; FakeDB has no pgvector."""
+    import app.services.embedding_storage as es
+
+    async def _noop(*_a, **_k):
+        return None
+
+    monkeypatch.setattr(es, "upsert_page_embedding", _noop)
+
+
 @pytest.mark.asyncio
 async def test_commit_marks_the_source_ready_and_clears_the_error(fake_db, monkeypatch):
     """The definition of "silent success" — what every test above asserts must NOT happen.
@@ -662,11 +686,14 @@ async def test_commit_marks_the_source_ready_and_clears_the_error(fake_db, monke
     src = fake_db.seed(Source, _source(error_message="a previous attempt failed"))
     plan = _plan(src.id, status="approved")
     wiki = _WikiRecorder().install(monkeypatch)
+    _stub_embedding_storage(monkeypatch)
+    embedder = _StubEmbedding()
 
     async with fake_db.factory() as session:
         result = await pipeline.run_commit_phase(
             session=session, source=src, page_results=[_page_write_result()], plan=plan,
-            embedding_provider=None, embedding_spec=None, kt_slug="hr", tracker=_Tracker(),
+            embedding_provider=embedder, embedding_spec=uuid.uuid4(), kt_slug="hr",
+            tracker=_Tracker(),
         )
 
     assert result == {"pages_created": 1, "pages_updated": 0}
@@ -679,6 +706,43 @@ async def test_commit_marks_the_source_ready_and_clears_the_error(fake_db, monke
     assert wiki.index_rebuilds == 1
     assert wiki.logs and "+1 created" in wiki.logs[0]
     assert fake_db.commits == 1
+    assert embedder.calls == 1
+
+
+@pytest.mark.asyncio
+async def test_commit_without_an_embedding_provider_does_not_report_a_clean_run(
+    fake_db, monkeypatch
+):
+    """A source with no vectors is invisible to search; it must not look healthy.
+
+    `_get_embedding_spec` failing was caught by a bare `except Exception: pass`, so the
+    provider stayed None, the per-page guard skipped embedding for EVERY page, and COMMIT
+    still set ready/100 and cleared error_message. The pages were real and the document
+    answered nothing in semantic search, RAG or any later conflict check — with the only
+    trace a WARNING in the worker log.
+
+    The pages are still worth committing, so `ready` stays. What changes is that the
+    source stops claiming the run was clean.
+    """
+    from app.database.models import Source
+
+    src = fake_db.seed(Source, _source(error_message=None))
+    plan = _plan(src.id, status="approved")
+    _WikiRecorder().install(monkeypatch)
+
+    async with fake_db.factory() as session:
+        await pipeline.run_commit_phase(
+            session=session, source=src, page_results=[_page_write_result()], plan=plan,
+            embedding_provider=None, embedding_spec=None, kt_slug="hr", tracker=_Tracker(),
+        )
+
+    assert src.status == "ready", "the pages committed; ready is correct"
+    assert src.progress == 100
+    assert src.error_message is not None, (
+        "a run that produced no embeddings reported itself as fully successful"
+    )
+    assert "embedding" in src.error_message.lower()
+    assert "semantic search" in src.error_message.lower()
 
 
 @pytest.mark.asyncio

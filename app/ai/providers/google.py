@@ -21,10 +21,22 @@ from app.ai.agent_protocol import (
 )
 from app.ai.providers.base import (
     EmbeddingProvider,
+    LLMGeneration,
     LLMProvider,
     ProviderConfig,
     VisionProvider,
 )
+
+# Matches anthropic_provider._CLIENT_TIMEOUT_SECONDS. genai.Client was built with no
+# http_options at all, which means NO client-side timeout: a stalled connection hung the
+# coroutine indefinitely. That is survivable for LLM calls, which every caller wraps in
+# asyncio.wait_for, but EMBEDDING calls are unwrapped — worker.py:890, pipeline.py:296,
+# verifier.py:138 and chat.py:605 all await embed() directly — so one stuck request
+# parked an arq job or an HTTP handler forever.
+#
+# HttpOptions.timeout is in MILLISECONDS (the SDK's own field description), unlike every
+# other timeout in this codebase.
+_CLIENT_TIMEOUT_MS = 90_000
 
 
 class GoogleEmbedding(EmbeddingProvider):
@@ -38,7 +50,11 @@ class GoogleEmbedding(EmbeddingProvider):
     def client(self):
         if self._client is None:
             from google import genai
-            self._client = genai.Client(api_key=self.config.api_key)
+            from google.genai import types as _types
+            self._client = genai.Client(
+                api_key=self.config.api_key,
+                http_options=_types.HttpOptions(timeout=_CLIENT_TIMEOUT_MS),
+            )
         return self._client
 
     async def embed(self, text: str) -> list[float]:
@@ -127,7 +143,11 @@ class GoogleLLM(LLMProvider):
     def client(self):
         if self._client is None:
             from google import genai
-            self._client = genai.Client(api_key=self.config.api_key)
+            from google.genai import types as _types
+            self._client = genai.Client(
+                api_key=self.config.api_key,
+                http_options=_types.HttpOptions(timeout=_CLIENT_TIMEOUT_MS),
+            )
         return self._client
 
     async def generate(
@@ -151,7 +171,86 @@ class GoogleLLM(LLMProvider):
                 top_p=top_p,
             ),
         )
-        return response.text or ""
+        return self._generation_from(response).text
+
+    async def generate_detailed(
+        self,
+        prompt: str,
+        system: Optional[str] = None,
+        max_tokens: Optional[int] = None,
+        temperature: float = 0.7,
+        top_p: Optional[float] = None,
+    ) -> LLMGeneration:
+        """generate() plus the stop reason, so MRP merge can reject a truncated body.
+
+        Without this override GoogleLLM inherited the base implementation, which reports
+        `stop_reason=None`. `LLMGeneration.truncated` is `stop_reason == "max_tokens"`, so
+        it was permanently False on Gemini and `merger.py`'s truncation guard could never
+        fire — the base method's own docstring warns that None means "cannot rule out
+        truncation", and that guard read it as "not truncated". A merge cut off at
+        max_output_tokens then only had to clear the char-ratio shrink check, which it
+        does easily for Vietnamese text where a token is closer to 2 characters than 4.
+        """
+        from google.genai import types
+
+        response = await self.client.aio.models.generate_content(
+            model=self.config.model_id,
+            contents=prompt,
+            config=types.GenerateContentConfig(
+                system_instruction=system,
+                max_output_tokens=max_tokens,
+                temperature=temperature,
+                top_p=top_p,
+            ),
+        )
+        return self._generation_from(response)
+
+    @staticmethod
+    def _generation_from(response) -> LLMGeneration:
+        """Map a Gemini response onto the provider-neutral LLMGeneration.
+
+        `response.text` is None when there are no candidates or no parts — which is what a
+        SAFETY or RECITATION block looks like. Returning `response.text or ""` turned that
+        into an empty SUCCESS, and callers read an empty string as a real answer:
+        reducer.py records "no entities merged" and verifier.py records "no conflict", so
+        the KB commits as though verification passed. The block is now visible in
+        stop_reason and logged.
+        """
+        finish = None
+        candidates = getattr(response, "candidates", None) or []
+        if candidates:
+            raw = getattr(candidates[0], "finish_reason", None)
+            finish = getattr(raw, "name", None) or (str(raw) if raw is not None else None)
+
+        reason_map = {
+            "STOP": "end_turn",
+            "MAX_TOKENS": "max_tokens",
+            "SAFETY": "refusal",
+            "RECITATION": "refusal",
+            "PROHIBITED_CONTENT": "refusal",
+            "BLOCKLIST": "refusal",
+            "SPII": "refusal",
+        }
+        stop_reason = reason_map.get((finish or "").upper(), None)
+
+        text = getattr(response, "text", None)
+        if text is None:
+            logger.warning(
+                f"Gemini returned no text (finish_reason={finish!r}). Treating as an empty "
+                "generation; callers reading this as a successful empty answer will record "
+                "a false negative."
+            )
+            text = ""
+
+        usage = None
+        meta = getattr(response, "usage_metadata", None)
+        if meta is not None:
+            usage = {
+                "input_tokens": getattr(meta, "prompt_token_count", None),
+                "output_tokens": getattr(meta, "candidates_token_count", None),
+            }
+
+        return LLMGeneration(text=text, stop_reason=stop_reason, usage=usage)
 
     async def generate_with_tools(
         self,
@@ -242,7 +341,11 @@ class GoogleVision(VisionProvider):
     def client(self):
         if self._client is None:
             from google import genai
-            self._client = genai.Client(api_key=self.config.api_key)
+            from google.genai import types as _types
+            self._client = genai.Client(
+                api_key=self.config.api_key,
+                http_options=_types.HttpOptions(timeout=_CLIENT_TIMEOUT_MS),
+            )
         return self._client
 
     async def analyze_image(

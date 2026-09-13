@@ -244,13 +244,31 @@ async def run_commit_phase(
     if plan is not None:
         plan.status = "done"
 
+    embeddings_missing = embedding_provider is None or embedding_spec is None
+
     src = await session.get(Source, source.id)
     if src:
         src.pipeline_phase = "commit"
         src.status = "ready"
         src.progress = 100
         src.progress_message = "Done"
-        src.error_message = None
+        # `error_message = None` unconditionally is what made a degraded run look clean.
+        # The pages committed, so "ready" is honest; "no problems" is not. A source with
+        # no vectors answers nothing in semantic search, and previously the only trace was
+        # a WARNING line in the worker log.
+        if embeddings_missing:
+            src.progress_message = "Done (no embeddings)"
+            src.error_message = (
+                "Pages were committed without embeddings because no embedding provider "
+                "was available. This source will not appear in semantic search or RAG "
+                "results until embeddings are regenerated."
+            )
+            logger.error(
+                f"MRP COMMIT finished for source={source.id} with NO embeddings: "
+                f"{pages_created} created, {pages_updated} updated, none searchable."
+            )
+        else:
+            src.error_message = None
 
     await session.commit()
 
@@ -469,8 +487,21 @@ async def run_refine_pipeline(
     embedding_spec = None
     try:
         embedding_provider, embedding_spec = await _get_embedding_spec(registry)
-    except Exception:
-        pass
+    except Exception as spec_exc:
+        # Was `except Exception: pass`. The pipeline then ran to completion with
+        # embedding_provider=None, the per-page guard in run_commit_phase skipped embedding
+        # for EVERY page, and the source was still marked ready/100 with error_message
+        # cleared. The document committed fine and was invisible to semantic search, RAG
+        # and every later conflict check, with nothing anywhere saying so.
+        #
+        # Still not fatal — the pages are real content and worth committing — but it is
+        # recorded, and run_commit_phase reports it on the source instead of claiming a
+        # clean run.
+        logger.error(
+            f"MRP REFINE could not resolve an embedding spec for source={source_id}: "
+            f"{spec_exc}. Pages will commit WITHOUT vectors and will not be reachable "
+            "by semantic search until a re-embed is run."
+        )
 
     page_results: list[PageWriteResult] = []
 

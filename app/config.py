@@ -305,7 +305,14 @@ class Settings(BaseSettings):
         # Each credential is checked independently. The previous `and` over one exact
         # pair meant the values this repo actually ships in .env.docker.example
         # (minioadmin / change-me-minio-secret-key) passed validation cleanly.
-        weak_minio_access = {"minioadmin"}
+        #
+        # Both sets must list the placeholder .env.docker.example actually ships. The
+        # access set was missing `change-me-minio-access-key` while the secret set carried
+        # its counterpart, so the file's own claim — "Both MinIO credentials are rejected
+        # at startup if left at a known default" — was false for one of the two. An
+        # operator fixes what the app rejects and stops, shipping the placeholder as
+        # MINIO_ROOT_USER.
+        weak_minio_access = {"minioadmin", "change-me-minio-access-key"}
         weak_minio_secret = {"minioadmin123", "change-me-minio-secret-key"}
         if self.minio_access_key in weak_minio_access:
             raise ValueError(

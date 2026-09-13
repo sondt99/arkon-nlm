@@ -44,7 +44,16 @@ jobs:
           fi
           FILES=$(git diff --name-only "$BASE" HEAD)
           echo "changed files:"; echo "$FILES" | sed 's/^/  /'
-          m() { echo "$FILES" | grep -qE "$1"; }
+          # Herestring, not a pipe. `echo "$FILES" | grep -q` looks equivalent but is not:
+          # grep -q exits on the first match and closes the pipe, echo takes SIGPIPE, and
+          # `set -o pipefail` reports that 141 as the function's status — i.e. "no match"
+          # for a pattern that DID match. It only bites once $FILES exceeds the pipe buffer,
+          # so every small PR behaved correctly while a ~1,000-file diff (a vendored tree, a
+          # bulk rename, a generated-file drop) silently reported every filter false. With
+          # `|| true` keeping this job green, all four suites then skipped — and GitHub
+          # counts a skipped required check as satisfied, so such a PR could merge having
+          # run nothing. A herestring has no reader to close early.
+          m() { grep -qE "$1" <<<"$FILES"; }
           # The workflow itself and the lockfile affect every suite.
           COMMON='^(\.github/workflows/|pyproject\.toml|uv\.lock)'
           m "$COMMON" && { for k in backend frontend migrations images; do echo "$k=true" >> "$GITHUB_OUTPUT"; done; exit 0; }

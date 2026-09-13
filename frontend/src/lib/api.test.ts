@@ -334,3 +334,63 @@ describe("token helpers", () => {
     expect(localStorage.getItem("arkon_token")).toBeNull();
   });
 });
+
+// --------------------------------------------------------------------------- //
+// The de-dupe guard must not survive a page the redirect never leaves
+// --------------------------------------------------------------------------- //
+
+describe("onUnauthorized de-dupe guard", () => {
+  it("does not latch on /login, where no navigation clears it", async () => {
+    // A 401 on the login route is an ordinary failed sign-in, not an expired session.
+    // The guard used to be set before the redirect check, and only a page load clears it
+    // — so on /login it latched with nothing to unlatch it.
+    const assign = stubLocation("/login");
+    setToken("tok-123");
+    global.fetch = respondWith(jsonResponse(401, { detail: "Bad credentials" }));
+
+    await expect(api("/api/auth/login", { method: "POST" })).rejects.toBeInstanceOf(
+      ApiError,
+    );
+    expect(assign).not.toHaveBeenCalled();
+
+    // Now the user signs in successfully — a client-side transition, so module state
+    // survives — and their session later expires on a real page.
+    const assignAfter = stubLocation("/wiki");
+    setToken("tok-456");
+    global.fetch = respondWith(jsonResponse(401, { detail: "Token expired" }));
+
+    await expect(api("/api/wiki/pages")).rejects.toBeInstanceOf(ApiError);
+
+    expect(assignAfter).toHaveBeenCalledTimes(1);
+    expect(assignAfter.mock.calls[0][0]).toContain("/login?next=");
+    expect(localStorage.getItem("arkon_token")).toBeNull();
+  });
+
+  it("still collapses parallel 401s into a single redirect", async () => {
+    // The reason the guard exists: several in-flight requests each get a 401, and without
+    // it each one starts its own navigation, cancelling the others mid-flight.
+    const assign = stubLocation("/wiki");
+    setToken("tok-123");
+    global.fetch = respondWith(jsonResponse(401, { detail: "Token expired" }));
+
+    await Promise.allSettled([
+      api("/api/wiki/pages"),
+      api("/api/wiki/stats"),
+      api("/api/wiki/tree"),
+    ]);
+
+    expect(assign).toHaveBeenCalledTimes(1);
+  });
+
+  it("preserves where the user was so login can send them back", async () => {
+    const assign = stubLocation("/wiki/graph", "?focus=abc");
+    setToken("tok-123");
+    global.fetch = respondWith(jsonResponse(401, { detail: "Token expired" }));
+
+    await expect(api("/api/wiki/graph")).rejects.toBeInstanceOf(ApiError);
+
+    expect(assign).toHaveBeenCalledWith(
+      `/login?next=${encodeURIComponent("/wiki/graph?focus=abc")}`,
+    );
+  });
+});

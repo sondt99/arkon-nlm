@@ -28,6 +28,24 @@ export function WikiDraftBanner({ drafts, currentContentMd, onApproved, onReject
 
   const total = drafts.length;
 
+  /**
+   * Move to another draft, discarding everything that belonged to the previous one.
+   *
+   * The pager used to call `setIdx` directly and reset none of `rejecting`, `rejectNote`,
+   * `error` or `tab`. Every handler reads `drafts[idx]` at call time, so: arm Reject on
+   * draft A, type the reason, page to B to check something, press Confirm — and the
+   * request went to B carrying A's reviewer note. That destroys another contributor's
+   * submission under a note written about someone else's work, and the rejection is
+   * recorded as legitimate.
+   */
+  const goTo = (next: number) => {
+    setIdx(Math.min(Math.max(0, next), total - 1));
+    setRejecting(false);
+    setRejectNote("");
+    setError(null);
+    setTab("proposed");
+  };
+
   const handleApprove = async () => {
     setBusy(true);
     setError(null);
@@ -37,7 +55,7 @@ export function WikiDraftBanner({ drafts, currentContentMd, onApproved, onReject
         body: {},
       });
       onApproved(draft.id);
-      setIdx((i) => Math.max(0, i - 1));
+      goTo(idx - 1);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Approve failed");
     } finally {
@@ -55,9 +73,7 @@ export function WikiDraftBanner({ drafts, currentContentMd, onApproved, onReject
         body: { reviewer_note: rejectNote },
       });
       onRejected(draft.id);
-      setRejecting(false);
-      setRejectNote("");
-      setIdx((i) => Math.max(0, i - 1));
+      goTo(idx - 1);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Reject failed");
     } finally {
@@ -98,7 +114,7 @@ export function WikiDraftBanner({ drafts, currentContentMd, onApproved, onReject
           <div className="flex items-center gap-1 shrink-0">
             <button
               type="button"
-              onClick={() => setIdx((i) => Math.max(0, i - 1))}
+              onClick={() => goTo(idx - 1)}
               disabled={idx === 0}
               className="w-6 h-6 flex items-center justify-center rounded hover:bg-amber-200/60 dark:hover:bg-amber-800/40 disabled:opacity-30 transition-colors"
             >
@@ -107,7 +123,7 @@ export function WikiDraftBanner({ drafts, currentContentMd, onApproved, onReject
             <span className="text-xs text-amber-700 dark:text-amber-400 tabular-nums">{idx + 1}/{total}</span>
             <button
               type="button"
-              onClick={() => setIdx((i) => Math.min(total - 1, i + 1))}
+              onClick={() => goTo(idx + 1)}
               disabled={idx === total - 1}
               className="w-6 h-6 flex items-center justify-center rounded hover:bg-amber-200/60 dark:hover:bg-amber-800/40 disabled:opacity-30 transition-colors"
             >

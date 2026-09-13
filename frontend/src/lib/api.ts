@@ -54,20 +54,34 @@ export function onUnauthorized() {
   if (unauthorizedHandled) return;
   if (typeof window === "undefined") return;
 
-  unauthorizedHandled = true;
   clearToken();
 
   // Let anything interested (AuthProvider, banners) react before we navigate.
   window.dispatchEvent(new CustomEvent("arkon:unauthorized"));
 
+  // Latch ONLY when we are about to navigate.
+  //
+  // The flag was set before this check, and the only thing that clears it is the page
+  // load the redirect causes. On /login there is no redirect — so a failed login (a 401
+  // from /api/auth/login, on the /login route) latched it with no reload to clear it.
+  // After the user then signed in successfully, which is a client-side transition, every
+  // subsequent 401 returned at the guard above: no clearToken, no redirect, no event.
+  // Session expiry stopped being handled at all, leaving the user on a page of silently
+  // failing requests.
+  //
+  // There is also nothing to de-duplicate here: the guard exists so that several parallel
+  // 401s do not each start a navigation and cancel one another.
+  if (window.location.pathname.startsWith("/login")) {
+    return;
+  }
+
+  unauthorizedHandled = true;
+
   // Preserve where the user was so login can send them back.
   const next = encodeURIComponent(
     window.location.pathname + window.location.search
   );
-  const target = `/login?next=${next}`;
-  if (!window.location.pathname.startsWith("/login")) {
-    window.location.assign(target);
-  }
+  window.location.assign(`/login?next=${next}`);
 }
 
 /** Test hook — lets a suite assert the de-dupe without reloading the page. */

@@ -81,14 +81,17 @@ jobs:
 
       # `pip install -e ".[dev]"` resolved FRESH and ignored uv.lock, so CI tested a
       # different dependency graph than the image ships — Dockerfile installs from the
-      # lockfile via `uv export --frozen`. It also silently ignored `[tool.uv]
+      # lockfile via `uv export --locked`. It also silently ignored `[tool.uv]
       # override-dependencies`, which is how the pillow security upgrade passed locally
       # under uv and then failed here with ResolutionImpossible.
       #
-      # `--frozen` fails if uv.lock is stale against pyproject.toml, so a dependency change
-      # committed without relocking is now a CI failure instead of a drift nobody sees.
+      # `--locked`, not `--frozen`, is the flag that asserts uv.lock is in sync with
+      # pyproject.toml. `--frozen` only means "do not re-lock", so it installs a stale
+      # lockfile without complaint — which is how the v0.2.0 bump in #150 landed without
+      # relocking and rode green CI for months, until a Dependabot PR (#160) regenerated
+      # the lock and the drift finally surfaced in its diff.
       - name: Install
-        run: uv sync --frozen --extra dev
+        run: uv sync --locked --extra dev
 
       # `pip install -e` put ruff/pytest/alembic on PATH; `uv sync` puts them in .venv/bin.
       # Exporting it here keeps every later step a bare command, as documented in
@@ -335,14 +338,17 @@ jobs:
 
       # `pip install -e ".[dev]"` resolved FRESH and ignored uv.lock, so CI tested a
       # different dependency graph than the image ships — Dockerfile installs from the
-      # lockfile via `uv export --frozen`. It also silently ignored `[tool.uv]
+      # lockfile via `uv export --locked`. It also silently ignored `[tool.uv]
       # override-dependencies`, which is how the pillow security upgrade passed locally
       # under uv and then failed here with ResolutionImpossible.
       #
-      # `--frozen` fails if uv.lock is stale against pyproject.toml, so a dependency change
-      # committed without relocking is now a CI failure instead of a drift nobody sees.
+      # `--locked`, not `--frozen`, is the flag that asserts uv.lock is in sync with
+      # pyproject.toml. `--frozen` only means "do not re-lock", so it installs a stale
+      # lockfile without complaint — which is how the v0.2.0 bump in #150 landed without
+      # relocking and rode green CI for months, until a Dependabot PR (#160) regenerated
+      # the lock and the drift finally surfaced in its diff.
       - name: Install
-        run: uv sync --frozen --extra dev
+        run: uv sync --locked --extra dev
 
       # `pip install -e` put ruff/pytest/alembic on PATH; `uv sync` puts them in .venv/bin.
       # Exporting it here keeps every later step a bare command, as documented in

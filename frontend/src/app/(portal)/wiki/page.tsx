@@ -37,9 +37,11 @@ export default function WikiIndexPage() {
   const [indexOpen, setIndexOpen] = React.useState(false);
   const [indexMd, setIndexMd] = React.useState<string | null>(null);
   const [indexLoading, setIndexLoading] = React.useState(false);
+  const [shellError, setShellError] = React.useState<string | null>(null);
 
   const loadShell = React.useCallback(() => {
     setLoading(true);
+    setShellError(null);
     Promise.all([
       api<WikiStats>("/api/wiki/stats"),
       api<WikiTreeItem[]>("/api/wiki/tree"),
@@ -48,7 +50,18 @@ export default function WikiIndexPage() {
         setStats(s);
         setTreePages(Array.isArray(tree) ? tree : []);
       })
-      .catch(() => {})
+      // `.catch(() => {})` left stats null, which made totalPages 0, which made isEmpty
+      // true — so a 500 on /api/wiki/stats told every user "Wiki is empty. Upload and
+      // compile documents to start building your knowledge wiki." about a populated
+      // enterprise knowledge base, with no error and no retry. Promise.all rejects on the
+      // FIRST failure, so either endpoint being down produced that.
+      .catch((err: unknown) => {
+        setShellError(
+          err instanceof Error ? err.message : "Failed to load the wiki",
+        );
+        setStats(null);
+        setTreePages([]);
+      })
       .finally(() => setLoading(false));
   }, []);
 
@@ -96,7 +109,11 @@ export default function WikiIndexPage() {
         setIndexLoading(true);
         api<{ content_md: string }>("/api/wiki/index")
           .then((idx) => setIndexMd(idx.content_md || ""))
-          .catch(() => setIndexMd(""))
+          // Leave it null on failure. Setting "" reported "No compiled index available
+          // yet" — a factual claim about the wiki — and because the refetch guard below
+          // is `indexMd === null`, one transient error made that permanent for the rest
+          // of the session.
+          .catch(() => setIndexMd(null))
           .finally(() => setIndexLoading(false));
       }
       return next;
@@ -111,7 +128,8 @@ export default function WikiIndexPage() {
   const totalPages = stats?.total ?? 0;
   const typeCounts = stats?.by_type ?? {};
   const lastUpdated = stats?.last_updated ?? null;
-  const isEmpty = !loading && totalPages === 0;
+  // Only "loaded successfully and there is genuinely nothing" counts as empty.
+  const isEmpty = !loading && !shellError && totalPages === 0;
 
   const gridPageCount = Math.max(1, Math.ceil(gridTotal / GRID_PAGE_SIZE));
 
@@ -146,7 +164,18 @@ export default function WikiIndexPage() {
 
         {/* Content */}
         <div className="flex-1 overflow-y-auto px-8 py-6">
-          {isEmpty ? (
+          {shellError ? (
+            <EmptyState
+              icon="error"
+              title="Couldn't load the wiki"
+              description={shellError}
+              action={
+                <Button variant="outline" onClick={reloadAll}>
+                  Try again
+                </Button>
+              }
+            />
+          ) : isEmpty ? (
             <EmptyState
               icon="auto_stories"
               title="Wiki is empty"

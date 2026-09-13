@@ -83,6 +83,20 @@ def _rbac_visibility_clause(
     return None
 
 
+async def wiki_visibility_for(db, user):
+    """`(allowed_kt_slugs, allowed_source_ids)` for an Employee on a REST surface.
+
+    One definition of wiki visibility, shared by every surface that reads pages — MCP
+    resolves it from a token, chat and the REST wiki routers resolve it from the session
+    user, and all three must agree. It lived privately in `app/routers/chat.py`, which is
+    why the REST wiki routers never applied it at all.
+    """
+    from app.services.mcp_auth_service import MCPAuthService
+
+    identity = await MCPAuthService(db)._resolve_scope(user)
+    return identity.wiki_visibility()
+
+
 def page_is_visible(
     page: WikiPage,
     allowed_kt_slugs: Optional[list[str]] = None,

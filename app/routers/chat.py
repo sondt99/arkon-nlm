@@ -31,9 +31,8 @@ from app.ai.providers.base import (
 from app.ai.registry import ProviderRegistry
 from app.database import get_db
 from app.database.models import ChatConversation, ChatMessage, Employee
-from app.services import chat_service
+from app.services import chat_service, wiki_service
 from app.services.auth_service import get_current_user
-from app.services.mcp_auth_service import MCPAuthService
 from app.services.permission_engine import (
     _get_user_permissions,
     can_access_workspace,
@@ -63,8 +62,13 @@ async def _validated_chat_scope(
 
 
 async def _wiki_visibility_for(db: AsyncSession, user: Employee):
-    identity = await MCPAuthService(db)._resolve_scope(user)
-    return identity.wiki_visibility()
+    """Thin alias for the shared definition in wiki_service.
+
+    This used to be the only implementation, and it was private to this module — which is
+    how app/routers/wiki.py came to read pages with no document-visibility filter at all
+    while chat filtered correctly. Same rule, one home, three callers.
+    """
+    return await wiki_service.wiki_visibility_for(db, user)
 
 
 async def assert_conversation_scope(db: AsyncSession, user: Employee, conv: ChatConversation) -> None:
@@ -568,7 +572,6 @@ async def conversation_to_wiki(
     slug = f"{base_slug}-{uuid.uuid4().hex[:6]}"
 
     # Create WikiPage
-    from app.services import wiki_service
     try:
         page = await wiki_service.apply_create(
             session=db,

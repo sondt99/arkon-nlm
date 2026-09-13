@@ -17,7 +17,7 @@ from typing import Optional
 from fastapi import APIRouter, Depends, HTTPException, Query, Response
 from loguru import logger
 from pydantic import BaseModel, Field, field_validator
-from sqlalchemy import func, or_, select
+from sqlalchemy import and_, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.ai.registry import ProviderRegistry
@@ -141,7 +141,7 @@ async def _restrict_graph_to_visible(db: AsyncSession, user: Employee, graph: di
     keyed on slugs that are only unique per (slug, scope_type, scope_id). Filtering the
     walk's output keeps the CTE unchanged while making the response scope-correct.
     """
-    scope_filter = _build_wiki_scope_filter(user)
+    scope_filter = await _build_wiki_scope_filter(db, user)
     if scope_filter is None:
         return graph  # admin or wiki:read:all — nothing to hide
 
@@ -163,11 +163,25 @@ async def _restrict_graph_to_visible(db: AsyncSession, user: Employee, graph: di
     }
 
 
-def _build_wiki_scope_filter(user: Employee):
-    """Build SQLAlchemy filter for wiki pages based on user permissions.
+async def _build_wiki_scope_filter(db: AsyncSession, user: Employee):
+    """Build the SQLAlchemy filter for wiki pages this user may read.
 
-    Returns None if user can see everything (admin / wiki:read:all).
-    Returns a filter clause otherwise.
+    Two independent axes, ANDed:
+
+      1. SCOPE — global pages, plus project pages in workspaces the user belongs to.
+      2. RBAC  — pages whose source_ids / knowledge_type_slugs fall inside the user's
+                 document visibility, via `wiki_service._rbac_visibility_clause`.
+
+    Axis 2 was missing entirely. This function filtered on scope alone, so
+    `wiki:read:own_dept` — which every employee holds by default — returned every global
+    page regardless of which department's sources compiled it, and `/wiki/pages/{slug}`
+    served the full content_md. The machinery was already there and already applied by MCP
+    (`app/mcp/tools.py`), the Export API and chat; only these routers skipped it, so the
+    REST surface was strictly more permissive than the MCP surface over the same rows.
+
+    Returns None when the user can see everything (admin, or wiki:read:all with no
+    document restriction), matching the previous contract so call sites are unchanged
+    apart from the await.
     """
     if user.role == "admin":
         return None  # No filter
@@ -180,16 +194,31 @@ def _build_wiki_scope_filter(user: Employee):
 
     if scope_level == "own_dept":
         # Show: global wiki + project-scoped wiki where user is a member
-        return or_(
+        scope_clause = or_(
             WikiPage.scope_type == "global",
             WikiPage.scope_id.in_(
                 select(ProjectMember.project_id)
                 .where(ProjectMember.employee_id == user.id)
             ),
         )
+        return await _and_rbac(db, user, scope_clause)
 
     # No wiki:read permission at all — should have been caught by require_permission
     return WikiPage.id == None  # noqa: E711 — empty result
+
+
+async def _and_rbac(db: AsyncSession, user: Employee, scope_clause):
+    """AND the document-visibility clause onto a scope clause.
+
+    Kept separate so the scope rule stays readable and the RBAC rule has exactly one
+    definition — `wiki_service._rbac_visibility_clause`, the same one MCP and the Export
+    API call.
+    """
+    kt_slugs, source_ids = await wiki_service.wiki_visibility_for(db, user)
+    rbac_clause = wiki_service._rbac_visibility_clause(kt_slugs, source_ids)
+    if rbac_clause is None:
+        return scope_clause
+    return and_(scope_clause, rbac_clause)
 
 
 @router.get("/wiki/pages", response_model=list[WikiPageSummary])
@@ -210,7 +239,7 @@ async def list_wiki_pages(
     """
     filters = [WikiPage.slug.notin_([wiki_service.INDEX_SLUG, wiki_service.LOG_SLUG])]
 
-    scope_filter = _build_wiki_scope_filter(user)
+    scope_filter = await _build_wiki_scope_filter(db, user)
     if scope_filter is not None:
         filters.append(scope_filter)
     if page_type:
@@ -250,7 +279,7 @@ async def get_wiki_stats(
     queries instead of pulling every page just to count them client-side.
     """
     filters = [WikiPage.slug.notin_([wiki_service.INDEX_SLUG, wiki_service.LOG_SLUG])]
-    scope_filter = _build_wiki_scope_filter(user)
+    scope_filter = await _build_wiki_scope_filter(db, user)
     if scope_filter is not None:
         filters.append(scope_filter)
 
@@ -294,7 +323,7 @@ async def list_wiki_tree(
     lightweight while the page grid paginates server-side via `/wiki/pages`.
     """
     filters = [WikiPage.slug.notin_([wiki_service.INDEX_SLUG, wiki_service.LOG_SLUG])]
-    scope_filter = _build_wiki_scope_filter(user)
+    scope_filter = await _build_wiki_scope_filter(db, user)
     if scope_filter is not None:
         filters.append(scope_filter)
 
@@ -344,7 +373,7 @@ async def search_wiki_pages(
     if not q.strip():
         raise HTTPException(422, "q cannot be empty")
 
-    scope_clause = _build_wiki_scope_filter(user)
+    scope_clause = await _build_wiki_scope_filter(db, user)
 
     try:
         registry = ProviderRegistry(db)
@@ -667,7 +696,7 @@ async def get_wiki_graph(
     base_filter = WikiPage.slug.notin_([wiki_service.INDEX_SLUG, wiki_service.LOG_SLUG])
 
     # Apply scope filter
-    scope_filter = _build_wiki_scope_filter(user)
+    scope_filter = await _build_wiki_scope_filter(db, user)
 
     # Total count
     count_stmt = select(sqlfunc.count()).select_from(WikiPage).where(base_filter)

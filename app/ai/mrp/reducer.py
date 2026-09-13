@@ -105,6 +105,60 @@ def _cosine(a: list[float], b: list[float]) -> float:
     return dot / (na * nb)
 
 
+def _unit(v: list[float]) -> Optional[list[float]]:
+    """Pre-scale a vector to length 1, or None if it has no direction.
+
+    The pairwise loop below called `_cosine` per pair, which recomputed both norms every
+    time — 3x the arithmetic of a plain dot product, on the hottest loop in REDUCE.
+    Normalising once up front is O(n*d) and makes each comparison a single dot.
+    """
+    norm = sum(x * x for x in v) ** 0.5
+    if norm == 0:
+        return None
+    return [x / norm for x in v]
+
+
+def _similar_entity_pairs(
+    entities: list[dict], vectors: list[list[float]]
+) -> tuple[list[tuple[int, int]], list[tuple[int, int]]]:
+    """Pure-CPU pairwise comparison. Runs in a worker thread — see the caller.
+
+    This is O(n^2) over 1536-dimension vectors in pure Python, and it used to run directly
+    on the event loop with no await anywhere inside it. Measured at ~155 us/pair: 1,000
+    entities is ~77 s of fully blocked loop, 5,000 is roughly half an hour. arq's
+    health_check_interval is 30 s, so the worker stopped heartbeating and looked dead, and
+    the other `worker_max_jobs` in-flight jobs stalled behind it. The same class of bug was
+    already fixed once for image extraction (worker.py:116-118).
+
+    Entity count scales with document size, so nothing here is bounded by configuration.
+    """
+    n = len(entities)
+    units = [_unit(v) for v in vectors]
+    types = [e["type"] for e in entities]
+
+    auto: list[tuple[int, int]] = []
+    ambiguous: list[tuple[int, int]] = []
+
+    for i in range(n):
+        ui = units[i]
+        if ui is None:
+            continue
+        ti = types[i]
+        for j in range(i + 1, n):
+            if ti != types[j]:
+                continue
+            uj = units[j]
+            if uj is None:
+                continue
+            sim = sum(x * y for x, y in zip(ui, uj))
+            if sim >= MERGE_THRESHOLD:
+                auto.append((i, j))
+            elif sim >= AMBIGUOUS_LOW:
+                ambiguous.append((i, j))
+
+    return auto, ambiguous
+
+
 # ---------------------------------------------------------------------------
 # Step 2.1 — Collect entities and concepts from chunk extracts
 # ---------------------------------------------------------------------------
@@ -263,18 +317,17 @@ async def embedding_dedup_entities(
             i = merged_into[i]
         return i
 
-    auto_merge_pairs: list[tuple[int, int]] = []
-    ambiguous_pairs: list[tuple[int, int]] = []
-
-    for i in range(n):
-        for j in range(i + 1, n):
-            if entities[i]["type"] != entities[j]["type"]:
-                continue
-            sim = _cosine(vectors[i], vectors[j])
-            if sim >= MERGE_THRESHOLD:
-                auto_merge_pairs.append((i, j))
-            elif sim >= AMBIGUOUS_LOW:
-                ambiguous_pairs.append((i, j))
+    # Off the event loop. The comparison is pure CPU with no IO to interleave, so the
+    # loop gained nothing by hosting it and lost its ability to run anything else —
+    # including arq's heartbeat, which made a busy worker look dead.
+    if n >= 800:
+        logger.warning(
+            f"MRP REDUCE comparing {n} entities pairwise ({n * (n - 1) // 2:,} pairs). "
+            "This is O(n^2) and runs in a worker thread; expect it to take a while."
+        )
+    auto_merge_pairs, ambiguous_pairs = await asyncio.to_thread(
+        _similar_entity_pairs, entities, vectors
+    )
 
     # Apply auto-merges
     for i, j in auto_merge_pairs:

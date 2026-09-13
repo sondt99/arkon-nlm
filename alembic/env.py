@@ -34,19 +34,14 @@ target_metadata = Base.metadata
 # the unique index on wiki_pages.slug plus three GIN indexes — none of which any
 # later migration restored.
 #
-# Listed explicitly so the set is greppable. The include_object hook below also
-# protects any *other* reflected-only index, so adding a raw-SQL index does not
-# require remembering to update this list.
-RAW_SQL_INDEXES = {
-    # created in 006_wiki_pivot.py
-    "ix_wiki_pages_fulltext",
-    "ix_wiki_pages_kt_slugs",
-    "ix_wiki_pages_source_ids",
-    # created in 010_workspace_wiki_scope.py, restored in 028
-    "uq_wiki_pages_slug_scope",
-    # created per-dimension in 015_multi_dim_embeddings.py (HNSW + model)
-    # names are ix_wiki_page_embeddings_<dim>_{hnsw,model}
-}
+# The inventory and its check live in app/database/raw_sql_indexes.py so the CI step and
+# the tests can import them; `alembic/env.py` is not importable (the installed `alembic`
+# package shadows the name).
+from app.database.raw_sql_indexes import (  # noqa: E402
+    RAW_SQL_INDEX_PREFIXES,  # noqa: F401
+    RAW_SQL_INDEXES,  # noqa: F401
+    missing_raw_sql_indexes,  # noqa: F401
+)
 
 # Tables with no ORM model that still exist in every migrated database. Excluded so
 # autogenerate does not propose dropping them as a side effect; removing them should
@@ -58,6 +53,10 @@ def include_object(object_, name, type_, reflected, compare_to):
     """Keep autogenerate from dropping objects it cannot see in the models."""
     # A reflected index with no metadata counterpart exists in the database but not
     # in the models. Never propose dropping it.
+    #
+    # The cost of this rule is that autogenerate is blind to those indexes in both
+    # directions — it is why the drift gate cannot detect one being dropped, and why
+    # assert_raw_sql_indexes_exist exists.
     if type_ == "index" and reflected and compare_to is None:
         return False
     if type_ == "table" and reflected and name in ORPHANED_LEGACY_TABLES:

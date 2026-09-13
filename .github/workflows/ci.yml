@@ -381,6 +381,38 @@ jobs:
           alembic downgrade -2
           alembic upgrade head
 
+      # The drift gate below CANNOT see these. `alembic/env.py`'s include_object excludes
+      # every reflected index with no metadata counterpart, in both directions — so an
+      # index created by raw SQL (all four on wiki_pages, every HNSW vector index, the
+      # sources indexes from 034) can be dropped and autogenerate proposes nothing.
+      # Dropping `uq_wiki_pages_slug_scope`, the only uniqueness guarantee on
+      # wiki_pages.slug, and re-running the drift probe passes cleanly.
+      #
+      # 41 of the 110 live indexes sit in that blind spot, which is exactly the class of
+      # regression migration 018 shipped. A positive existence check is the only thing
+      # that catches it, so it runs before the gate that cannot.
+      - name: Raw-SQL indexes still exist at head
+        env:
+          DATABASE_URL: postgresql+asyncpg://arkon:ci_test_password@localhost:5432/arkon
+        run: |
+          PGPASSWORD=ci_test_password psql -h localhost -U arkon -d arkon -At \
+            -c "SELECT indexname FROM pg_indexes WHERE schemaname = current_schema();" \
+            > /tmp/indexes.txt
+          python - <<'PYEOF'
+          from app.database.raw_sql_indexes import missing_raw_sql_indexes
+
+          present = {line.strip() for line in open("/tmp/indexes.txt") if line.strip()}
+          missing = missing_raw_sql_indexes(present)
+          if missing:
+              raise SystemExit(
+                  "::error::Raw-SQL indexes missing from a database at head: "
+                  + ", ".join(missing)
+                  + " — these are invisible to autogenerate, so the drift gate below "
+                  "will pass regardless."
+              )
+          print(f"all {len(present)} indexes present, including every raw-SQL one")
+          PYEOF
+
       # Autogenerate against a database at head must propose no *structural* change.
       # This is the gate that would have caught migration 018 dropping four live indexes
       # (including the only uniqueness guarantee on wiki_pages.slug) because they were

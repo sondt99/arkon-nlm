@@ -54,12 +54,31 @@ Use `https://arkon.ladybug.net/mcp` instead of `localhost:3119` when connecting 
 
 Get a token from an Arkon admin.
 
-> ⚠️ **Do not rely on token scoping — it is not implemented.** These docs used to state that tokens
-> are scoped to specific knowledge types. They are not: `ResolvedIdentity.allowed_knowledge_types` is
-> read in eight places and never assigned, so it is always `None`, which every call site treats as
-> *unrestricted*. A token currently grants read access to the whole wiki regardless of what the
-> issuing admin intended. Tracked in issue #11; the MCP wiki tools also skip the `wiki:read`
-> permission entirely (#35). Treat any token as full-wiki-read until both are fixed.
+> **Token scoping is implemented. Two earlier warnings here were out of date; a narrower one
+> replaces them.**
+>
+> What this block used to say — that `ResolvedIdentity.allowed_knowledge_types` "is read in eight
+> places and never assigned", that a token "grants read access to the whole wiki", and that the wiki
+> tools "skip the `wiki:read` permission entirely" — is no longer true of the code:
+>
+> - **#11 closed.** `allowed_knowledge_types` is assigned on all four `_resolve_scope` return paths,
+>   and `[]` is honoured fail-closed (an empty list matches nothing, and is distinct from `None`).
+> - **#35 closed for the tools.** All four wiki tools call `_require_wiki_read`. The `arkon://wiki-index`
+>   *resource* still does not, and is safe today only because `_resolve_scope` happens never to
+>   produce that combination — worth closing deliberately rather than relying on.
+> - **#43 closed, with a caveat.** All four KB-mutating tools write an audit entry. MCP records the
+>   page *slug* where REST records the page *UUID*, so an audit query keyed on a page id still misses
+>   MCP writes.
+>
+> ⚠️ **What is worth knowing instead:** MCP and REST used to enforce different things, so neither
+> surface was a superset of the other. An MCP token's document scope could be *wider* than the
+> portal's — a knowledge-type grant derived from one department-visible document matched every
+> document of that type — while the REST wiki API applied no document-visibility filter at all.
+> Both now resolve visibility through the same helpers (`apply_scope_filter` for documents,
+> `wiki_service.wiki_visibility_for` for the wiki), and the call sites are pinned by AST tests in
+> `tests/test_mcp_guards_are_called.py` — the guards were correct before too; nothing asserted they
+> were called. If you add a tool or a page-reading endpoint, those tests are what will tell you it
+> is unscoped.
 
 ## Skills
 
@@ -74,9 +93,10 @@ Skills live in `skills/`. Claude Code picks them up automatically when working i
 ## Key Principles
 
 - **Wiki first, sources second.** `search_wiki` → `read_wiki_page` → source drill-down only for precise citations.
-- **RBAC is enforced server-side, but incompletely.** "Access denied" means contact an admin. The
-  converse does not hold: access being *granted* does not mean you were authorized — see the token
-  scoping warning above, and the open access-control issues.
+- **RBAC is enforced server-side, but the two surfaces differ.** "Access denied" means contact an
+  admin. The converse does not hold: access being *granted* through MCP does not mean the portal
+  would have granted it, and vice versa — see the warning above.
 - **Always confirm before writing.** `propose_wiki_edit` and `edit_wiki_page` modify the live KB — get user approval first.
-- **MCP writes are not audited.** The four KB-mutating tools write no audit-log entry (#43), so a
-  write made through MCP is currently unattributable. Be correspondingly careful.
+- **MCP writes are audited, but keyed differently.** The four KB-mutating tools do write audit-log
+  entries (#43 is closed). They record the page slug where the REST path records the page UUID, so
+  an audit query keyed on a page id will not find them.

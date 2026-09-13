@@ -19,13 +19,15 @@ RUN pip install --upgrade pip --no-cache-dir
 
 # Install dependencies in a separate layer so they're cached on code-only changes.
 #
-# uv sync --frozen installs the exact graph recorded in uv.lock and FAILS if the lockfile
-# is out of date with pyproject.toml. Previously this was `pip install .` against
-# pyproject alone, and since all 30 runtime deps are open-ended >= floors, two builds a
-# week apart produced different closures from identical source — with no way to reproduce
-# the last-known-good image. The security floors pinned in pyproject.toml
-# (cryptography>=50.0 for PYSEC-2026-3552, aiohttp>=3.14.3, pyasn1>=0.6.4) were enforced
-# at the bottom only; nothing above them was.
+# uv export --locked writes the exact graph recorded in uv.lock and FAILS if the lockfile
+# is out of date with pyproject.toml. This used to pass `--frozen`, which only skips
+# re-locking and does NOT check, so a stale lock shipped into the image silently.
+#
+# Before that it was `pip install .` against pyproject alone, and since all 30 runtime
+# deps are open-ended >= floors, two builds a week apart produced different closures from
+# identical source — with no way to reproduce the last-known-good image. The security
+# floors pinned in pyproject.toml (cryptography>=50.0 for PYSEC-2026-3552,
+# aiohttp>=3.14.3, pyasn1>=0.6.4) were enforced at the bottom only; nothing above them was.
 COPY --from=ghcr.io/astral-sh/uv:0.9.21@sha256:15f68a476b768083505fe1dbfcc998344d0135f0ca1b8465c4760b323904f05a /uv /usr/local/bin/uv
 COPY pyproject.toml uv.lock ./
 #
@@ -37,8 +39,8 @@ COPY pyproject.toml uv.lock ./
 # pillow 12.3.0.
 #
 # An exported lockfile is already a complete, fully-pinned graph. Re-resolving it is the
-# thing `--frozen` exists to prevent.
-RUN uv export --frozen --no-dev --no-emit-project -o /tmp/requirements.txt \
+# thing `--no-deps` exists to prevent.
+RUN uv export --locked --no-dev --no-emit-project -o /tmp/requirements.txt \
     && pip install --no-cache-dir --no-deps -r /tmp/requirements.txt
 
 # --- Runtime stage: no build tools ---

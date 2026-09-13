@@ -37,7 +37,7 @@ docker run -d --name arkon-minio \
   -e MINIO_ROOT_USER=minioadmin \
   -e MINIO_ROOT_PASSWORD=minioadmin123 \
   -p 9000:9000 -p 9001:9001 \
-  minio/minio server /data --console-address ":9001"
+  quay.io/minio/minio server /data --console-address ":9001"
 ```
 
 These factory MinIO credentials match `.env.local.example`. The API allows them only if `ARKON_ALLOW_DEFAULT_SECRET=1`.

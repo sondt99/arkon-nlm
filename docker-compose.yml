@@ -113,7 +113,14 @@ services:
 
   minio:
     # Already pinned to an immutable RELEASE tag; the digest makes it verifiable as well.
-    image: minio/minio:RELEASE.2025-04-22T22-12-26Z@sha256:a1ea29fa28355559ef137d71fc570e508a214ec84ff8083e39bc5428980b015e
+    #
+    # Pulled from quay.io, not Docker Hub. `minio/minio` on Docker Hub stopped serving
+    # anonymous pulls between 2026-09-08 and 2026-09-13, so `docker manifest inspect`
+    # began returning "UNAUTHORIZED: authentication required" and the CI step that
+    # resolves every pinned compose image went red on main — with nothing in this repo
+    # having changed. quay.io is MinIO's other official registry and serves the SAME
+    # digest for this release, so the bytes that run are identical; only the host moved.
+    image: quay.io/minio/minio:RELEASE.2025-04-22T22-12-26Z@sha256:a1ea29fa28355559ef137d71fc570e508a214ec84ff8083e39bc5428980b015e
     container_name: arkon_minio
     env_file: [.env.docker]
     restart: always

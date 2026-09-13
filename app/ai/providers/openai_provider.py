@@ -30,6 +30,17 @@ from app.ai.providers.base import (
     VisionProvider,
 )
 
+# Matches anthropic_provider._CLIENT_TIMEOUT_SECONDS. AsyncOpenAI was constructed with no
+# `timeout`, leaving the SDK default of 600 s — ten minutes on a call every caller expects
+# to bound. Embedding calls are not wrapped in asyncio.wait_for (worker.py:890,
+# pipeline.py:296, verifier.py:138, chat.py:605), so a stalled request held an arq job or
+# an HTTP handler for the full ten minutes.
+#
+# max_retries is raised from the SDK default of 2 to 3 for parity with the Anthropic
+# client, so a 429 gets the same number of attempts whichever provider is configured.
+_CLIENT_TIMEOUT_SECONDS = 90.0
+_CLIENT_MAX_RETRIES = 3
+
 
 class OpenAIEmbedding(EmbeddingProvider):
     """OpenAI embedding provider."""
@@ -44,6 +55,8 @@ class OpenAIEmbedding(EmbeddingProvider):
             import openai
             self._client = openai.AsyncOpenAI(
                 api_key=self.config.api_key,
+                timeout=_CLIENT_TIMEOUT_SECONDS,
+                max_retries=_CLIENT_MAX_RETRIES,
                 base_url=self.config.base_url,  # None = default OpenAI
             )
         return self._client
@@ -107,6 +120,8 @@ class OpenAILLM(LLMProvider):
             import openai
             self._client = openai.AsyncOpenAI(
                 api_key=self.config.api_key,
+                timeout=_CLIENT_TIMEOUT_SECONDS,
+                max_retries=_CLIENT_MAX_RETRIES,
                 base_url=self.config.base_url,
             )
         return self._client
@@ -260,6 +275,8 @@ class OpenAIVision(VisionProvider):
             import openai
             self._client = openai.AsyncOpenAI(
                 api_key=self.config.api_key,
+                timeout=_CLIENT_TIMEOUT_SECONDS,
+                max_retries=_CLIENT_MAX_RETRIES,
                 base_url=self.config.base_url,
             )
         return self._client

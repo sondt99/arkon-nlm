@@ -5,7 +5,7 @@
 # The digest below is exactly what `nginx:alpine` resolves to now, so this pin changes
 # nothing that is running — it only stops the next silent move. Bumps come as reviewable
 # Dependabot PRs (.github/dependabot.yml).
-FROM nginx:1.31-alpine@sha256:db35bfc6b2951e7f8a72db5db120288c127ffaeeb4a6d4b95a26fead017d5913
+FROM nginx:1.31-alpine@sha256:72ba65eb42c10344912a84ff42408db7d34f2feb642204570ab8fc5ffd29f1d3
 
 # Bake the reverse-proxy config into the image instead of bind-mounting it from
 # the host, so nginx has no dependency on the E: drive mount (which Docker

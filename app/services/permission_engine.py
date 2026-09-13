@@ -133,17 +133,34 @@ async def can_access_document(
     source_dept_ids = {row[0] for row in dept_result.all()}
 
     if not source_dept_ids:
-        # No departments = Global doc
-        return True
+        # No departments = Global doc: readable by anyone holding doc:read:own_dept.
+        #
+        # Not writable by them, though. This returned True for EVERY action, so
+        # `doc:delete:own_dept` passed on the company-wide HR handbook and
+        # `delete_source_completely` wiped its MinIO objects and derived wiki pages. The
+        # create path already says so — sources.py:137-141 requires doc:*:all to reach
+        # department-less scope — and the write path contradicted it.
+        return action == "read"
 
     return user.department_id in source_dept_ids
 
 
 def build_document_filter(user: Employee, action: str = "read"):
     """Build SQLAlchemy filter clauses for listing documents based on user permissions.
-    
+
     Returns: (needs_filter: bool, filter_clauses: list)
     If needs_filter is False, show all documents.
+
+    NOTE — this has no production callers; `list_sources` implements its own inline filter.
+    It is kept only because `tests/test_permission_engine_pairing.py` uses it to hold
+    `can_access_document` honest, and it carries two sharp edges for anyone who wires it up:
+
+      1. `(True, None)` means "deny everything", NOT "no filter". A caller that reads only
+         the first element and then filters by nothing inverts a deny into an allow.
+      2. The returned department list does not encode the global-object rule. A source with
+         no departments is readable under `doc:read:own_dept` but NOT writable — see
+         `can_access_document`. A caller must apply that rule itself; this tuple cannot
+         express it, which is precisely why the pairing test passes `action` through.
     """
     if user.role == "admin":
         return False, []
@@ -193,10 +210,17 @@ async def can_access_skill(
     if f"skill:{action}:own_dept" not in permissions:
         return False
 
-    # Skill visible if it's Global (no depts) OR user's dept is in skill's depts
+    # Skill visible if it's Global (no depts) OR user's dept is in skill's depts.
+    #
+    # "No departments" answers READ for everyone — that is what makes a skill global. It
+    # must not answer DELETE the same way: this branch ignored `action` entirely, so
+    # `skill:delete:own_dept` passed on any org-wide skill and a department contributor
+    # could delete one (`DELETE /api/skills/{slug}`), with `_assert_not_system` the only
+    # remaining barrier. Mutating something that belongs to no department is exactly the
+    # case `:all` exists for, and an `:all` holder has already returned True above.
     skill_dept_ids = {sd.department_id for sd in skill.departments}
     if not skill_dept_ids:
-        return True
+        return action == "read"
 
     return user.department_id in skill_dept_ids
 
@@ -290,9 +314,20 @@ def _get_user_permissions(user: Employee) -> set[str]:
         return set(ALL_PERMISSIONS)
 
     if not user.custom_role:
-        # Fallback — should rarely hit since auth_service auto-attaches Employee role
-        from app.services.permissions import EMPLOYEE_DEFAULT_PERMISSIONS
-        return set(EMPLOYEE_DEFAULT_PERMISSIONS)
+        # Deny, not a default grant.
+        #
+        # This returned EMPLOYEE_DEFAULT_PERMISSIONS, which made "no role" mean "the
+        # standard role" — a fallback GRANT in the one function whose job is to decide
+        # what someone may do. On REST the mistake was invisible because
+        # `get_current_user` re-attaches the system Employee role before this runs. The
+        # MCP and export paths have no such re-attach, so an admin stripping a departing
+        # contractor's role to cut their access left their existing token holding
+        # doc:read:own_dept, wiki:read:own_dept and wiki:WRITE:own_dept.
+        #
+        # An account with no role now resolves to no permissions, and the REST default
+        # keeps coming from the role auth_service attaches — explicitly, where it can be
+        # seen and audited.
+        return set()
 
     stored = user.custom_role.permissions or []
 

@@ -68,12 +68,60 @@ def test_admin_identity_is_unrestricted():
     assert "WHERE" not in _compiled(out).upper()
 
 
-def test_knowledge_type_subset_restricts_to_those_slugs():
+def test_knowledge_types_do_not_constrain_a_DOCUMENT_query():
+    """This asserted the opposite, and the opposite was a privilege escalation.
+
+    `allowed_knowledge_types` is a WIKI axis: a WikiPage carries a `knowledge_type_slugs`
+    ARRAY because one page aggregates several sources. A Source has exactly one
+    knowledge_type_id, so ORing that list into a Source query granted every document of a
+    type the caller had seen one document of — and knowledge types are a small global
+    taxonomy, so in practice that is the whole corpus.
+
+    Documents follow doc:*, the wiki follows wiki:*. `wiki_visibility()` still carries the
+    slugs (see the tests below); the Source filter must not.
+    """
     ident = _identity(allowed_knowledge_types=["sales", "legal"], allowed_source_ids=None)
     sql = _compiled(apply_scope_filter(select(Source.id), ident))
-    assert "WHERE" in sql.upper()
-    assert "'sales'" in sql and "'legal'" in sql
-    assert "knowledge_type_id" in sql
+    assert "knowledge_type_id" not in sql, (
+        "a knowledge-type grant is back in the document filter — one department-visible "
+        "document of a type now opens every document of that type company-wide"
+    )
+    assert "'sales'" not in sql and "'legal'" not in sql
+
+
+def test_a_department_scope_cannot_be_widened_by_a_shared_knowledge_type():
+    """The escalation, stated as the shape of the emitted SQL.
+
+    An `own_dept` caller carries the ids their department can see AND the slugs of those
+    sources' types. Only the ids may reach the filter; if the slugs do too, the OR matches
+    another department's source that merely shares a type.
+    """
+    ident = _identity(
+        allowed_source_ids=["11111111-1111-1111-1111-111111111111"],
+        allowed_knowledge_types=["policy"],
+    )
+    sql = _compiled(apply_scope_filter(select(Source.id), ident))
+    assert "11111111-1111-1111-1111-111111111111" in sql
+    assert "'policy'" not in sql
+    assert "knowledge_type_id" not in sql
+
+
+def test_a_non_admin_with_read_all_still_cannot_see_a_foreign_workspace():
+    """doc:read:all is not workspace membership.
+
+    permission_engine.can_access_document returns early on scope_type == "project" before
+    any doc:* grant is consulted. The shipped "Knowledge Admin" preset is a NON-admin with
+    doc:read:all + wiki:read:all, which previously resolved to an unfiltered query.
+    """
+    ident = _identity(allowed_source_ids=None, allowed_knowledge_types=None)
+    sql = _compiled(apply_scope_filter(select(Source.id), ident))
+    assert "WHERE" in sql.upper(), "a non-admin must never produce an unfiltered Source query"
+    assert "scope_type" in sql
+
+
+def test_admin_alone_gets_an_unfiltered_query():
+    sql = _compiled(apply_scope_filter(select(Source.id), _identity(is_admin=True)))
+    assert "WHERE" not in sql.upper()
 
 
 def test_empty_scope_yields_no_rows():

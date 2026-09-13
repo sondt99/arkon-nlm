@@ -13,7 +13,13 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from app.database import get_db
-from app.database.models import Department, Employee, Role
+from app.database.models import (
+    Department,
+    Employee,
+    Role,
+    SkillDepartment,
+    SourceDepartment,
+)
 from app.services.audit_service import log_audit
 from app.services.auth_service import (
     get_current_user,
@@ -188,6 +194,49 @@ async def delete_department(
             409,
             f"Reassign or remove {employee_count} employee(s) before deleting this department",
         )
+
+    # Blocking on employees alone silently PUBLISHED the department's documents.
+    #
+    # Department.source_departments is cascade="all, delete-orphan" (and the FK is ON
+    # DELETE CASCADE), so `db.delete(dept)` drops every link row. can_access_document then
+    # reads a source with no departments as a *global* document. The result: a reorg that
+    # moves Legal's staff to Corporate and then tidies up the now-empty department makes
+    # every Legal-only file readable by everyone holding doc:read:own_dept — with nothing
+    # in the audit log recording an access change, because as far as the system is
+    # concerned none happened.
+    #
+    # Refuse while anything is still classified under it. Re-tagging those sources is a
+    # deliberate act with its own audit trail; inferring it from a delete is not.
+    source_count = (
+        await db.execute(
+            select(func.count())
+            .select_from(SourceDepartment)
+            .where(SourceDepartment.department_id == dept.id)
+        )
+    ).scalar_one()
+    if source_count:
+        raise HTTPException(
+            409,
+            f"{source_count} document(s) are still classified under this department. "
+            "Re-tag or delete them first — deleting the department would make them "
+            "readable organization-wide.",
+        )
+
+    skill_count = (
+        await db.execute(
+            select(func.count())
+            .select_from(SkillDepartment)
+            .where(SkillDepartment.department_id == dept.id)
+        )
+    ).scalar_one()
+    if skill_count:
+        raise HTTPException(
+            409,
+            f"{skill_count} skill(s) are still scoped to this department. "
+            "Re-scope or delete them first — deleting the department would make them "
+            "readable organization-wide.",
+        )
+
     await log_audit(db, _user, "delete", "department", str(dept.id), reason=dept.name)
     await db.delete(dept)
     return {"deleted": True}
@@ -272,6 +321,13 @@ async def create_employee(
 
     if not body.password:
         raise HTTPException(400, "Password is required")
+    # Same guard the update path applies (see update_employee). Without it,
+    # `org:employees:manage` was a privilege escalation rather than an HR permission: the
+    # holder could not move THEMSELVES into Finance — ensure_can_assign_department refuses
+    # self-reassignment — but could create a new Finance employee with a password of their
+    # choosing and simply log in as it. Choosing the department and choosing the password
+    # are only safe apart.
+    ensure_can_set_password(_user)
     ensure_password_strength(body.password)
     if body.role == "admin":
         ensure_can_assign_role(_user, "admin")

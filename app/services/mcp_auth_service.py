@@ -372,13 +372,30 @@ class MCPAuthService:
 
 def apply_scope_filter(query, identity: ResolvedIdentity):
     """
-    Apply knowledge scope filters to a SQLAlchemy query on the Source table.
+    Apply the caller's DOCUMENT scope to a SQLAlchemy query on the Source table.
 
-    Sources are accessible when any of these conditions is true:
-      1. No scope restrictions defined (open access)
-      2. Source ID is in allowed_source_ids (explicit grant)
-      3. Source knowledge_type is in allowed_knowledge_types (type-based grant)
-      4. Source is in one of the employee's active projects (project grant)
+    Sources are accessible when:
+      1. the source id is in allowed_source_ids (None = every source, per doc:read:all), or
+      2. the source belongs to one of the employee's active projects,
+    and in either case it is not another team's workspace-private file.
+
+    `allowed_knowledge_types` is deliberately NOT consulted here. It is a WIKI axis —
+    `_resolve_scope` fills it from `wiki_level`, and a WikiPage carries a
+    `knowledge_type_slugs` array precisely because one page aggregates several sources.
+    A Source has exactly one knowledge_type_id, so ORing that list in as an independent
+    document grant was wrong in both directions:
+
+      - Over-granting, the serious one. For an `own_dept` caller the list held the KT slugs
+        of sources their department could already see, and the OR then matched EVERY source
+        sharing any of those types. Knowledge types are a small global taxonomy, so one
+        department-visible "policy" document opened every "policy" document in the company,
+        workspace-private ones included. `permission_engine.can_access_document` — the REST
+        path over the same rows — has no knowledge-type branch at all, so MCP granted
+        strictly more than the portal it fronts.
+      - Under-granting. A `doc:read:all` holder whose wiki scope was narrower had their
+        DOCUMENT reads silently clipped to the wiki's knowledge types, which REST allows.
+
+    Documents follow doc:*, the wiki follows wiki:*. Crossing them was the defect.
 
     Usage:
         stmt = select(Source).where(Source.status == "ready")
@@ -386,31 +403,29 @@ def apply_scope_filter(query, identity: ResolvedIdentity):
     """
     project_uuids = [uuid.UUID(s) for s in identity.project_source_ids]
 
-    if identity.allowed_source_ids is None and identity.allowed_knowledge_types is None:
-        # Open access
+    if identity.is_admin:
         return query
 
-    conditions = []
-
-    if identity.allowed_source_ids is not None:
-        conditions.append(Source.id.in_([uuid.UUID(s) for s in identity.allowed_source_ids]))
-
-    if identity.allowed_knowledge_types is not None:
-        from sqlalchemy import select as sa_select
-
-        from app.database.models import KnowledgeType
-        kt_subq = sa_select(KnowledgeType.id).where(
-            KnowledgeType.slug.in_(identity.allowed_knowledge_types)
-        )
-        conditions.append(Source.knowledge_type_id.in_(kt_subq))
-
+    # Workspace-private sources are membership-only for EVERY non-admin, including a
+    # holder of doc:read:all. can_access_document returns early on scope_type == "project"
+    # before any doc:* grant is consulted ("A global doc:* grant does not open another
+    # team's project files"); this is that rule, expressed as a filter. Without it, the
+    # shipped "Knowledge Admin" preset — doc:read:all + wiki:read:all, a non-admin —
+    # resolved to an unfiltered query and read every workspace in the installation.
+    workspace_ok = [Source.scope_type != "project", Source.scope_id.is_(None)]
     if project_uuids:
-        conditions.append(Source.id.in_(project_uuids))
+        workspace_ok.append(Source.id.in_(project_uuids))
+    not_foreign_workspace = or_(*workspace_ok)
 
-    if conditions:
-        query = query.where(or_(*conditions))
+    if identity.allowed_source_ids is None:
+        # doc:read:all — every source except other teams' workspace-private files.
+        return query.where(not_foreign_workspace)
 
-    return query
+    grants = [Source.id.in_([uuid.UUID(s) for s in identity.allowed_source_ids])]
+    if project_uuids:
+        grants.append(Source.id.in_(project_uuids))
+
+    return query.where(and_(or_(*grants), not_foreign_workspace))
 
 
 # ---------------------------------------------------------------------------

@@ -125,8 +125,13 @@ async def _can_read_source(identity, session: AsyncSession, source_id) -> bool:
     """
     if identity.is_admin:
         return True
-    if identity.allowed_source_ids is None and identity.allowed_knowledge_types is None:
-        return True
+
+    # No short-circuit for "unrestricted" here. The previous
+    #   `if allowed_source_ids is None and allowed_knowledge_types is None: return True`
+    # answered yes without ever looking at the row, so a non-admin holding doc:read:all —
+    # the shipped "Knowledge Admin" preset — was waved through to any workspace-private
+    # source they were not a member of. apply_scope_filter carries that rule now, so the
+    # question goes to the database in every non-admin case.
 
     from sqlalchemy import select
 

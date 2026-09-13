@@ -36,7 +36,7 @@ def _user(*perms: str, role: str = "employee", dept=DEPT_A):
     )
 
 
-def _filter_allows(filter_result, obj_dept_ids: set) -> bool:
+def _filter_allows(filter_result, obj_dept_ids: set, action: str = "read") -> bool:
     """Interpret a build_*_filter result as a per-object visibility predicate.
 
     The tuple has three meaningful shapes:
@@ -50,6 +50,12 @@ def _filter_allows(filter_result, obj_dept_ids: set) -> bool:
     that regresses to that reading shows up as a pairing failure.
     """
     needs_filter, clauses = filter_result
+    # A department-less (global) object is readable under an `:own_dept` grant but not
+    # writable — mutating something that belongs to no department is what `:all` is for.
+    # The tuple cannot carry that distinction, so it is applied here, mirroring
+    # can_access_document / can_access_skill.
+    if needs_filter and clauses and not obj_dept_ids and action != "read":
+        return False
     if not needs_filter:
         return True
     if clauses is None:
@@ -144,3 +150,41 @@ def test_no_permission_filter_is_not_mistaken_for_unfiltered():
 
     # The two must never be confusable by the first element alone.
     assert build_document_filter(nobody, "read")[0] != build_document_filter(admin, "read")[0]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("action", ["edit", "delete"])
+async def test_a_global_object_is_readable_but_not_writable_under_own_dept(action):
+    """The gap this file existed to catch, and didn't.
+
+    `can_access_document` and `can_access_skill` both ended their `:own_dept` branch with
+
+        if not dept_ids:
+            return True        # "no departments = Global"
+
+    ignoring `action` entirely. So `doc:delete:own_dept` passed on the company-wide HR
+    handbook — zero source_departments rows — and `delete_source_completely` removed its
+    MinIO objects and derived wiki pages. `sources.py:137-141` already documents that
+    reaching department-less scope requires `doc:*:all`; only the write path disagreed.
+
+    The existing destructive-action tests used a subject holding NO edit/delete grant, so
+    they never reached this branch.
+    """
+    mutator = _user(f"doc:{action}:own_dept", f"skill:{action}:own_dept")
+    source = SimpleNamespace(id=uuid4(), scope_type="global", scope_id=None)
+    skill = SimpleNamespace(id=uuid4(), departments=[])
+
+    # Global object, no departments.
+    assert await can_access_document(
+        _db_returning_departments(set()), mutator, source, action
+    ) is False
+    assert await can_access_skill(AsyncMock(), mutator, skill, action) is False
+    assert _filter_allows(build_document_filter(mutator, action), set(), action) is False
+    assert _filter_allows(build_skill_filter(mutator, action), set(), action) is False
+
+    # Reading the same object is still allowed — that is what makes it global.
+    reader = _user("doc:read:own_dept", "skill:read:own_dept")
+    assert await can_access_document(
+        _db_returning_departments(set()), reader, source, "read"
+    ) is True
+    assert await can_access_skill(AsyncMock(), reader, skill, "read") is True
